@@ -1,0 +1,55 @@
+# OUI
+https://github.com/zhaojh329/oui
+
+https://github.com/kiddin9/openwrt-bypass
+https://github.com/kiddin9/aria2
+https://github.com/kiddin9/luci-app-baidupcs-web
+https://github.com/kiddin9/qBittorrent-Enhanced-Edition
+https://github.com/kiddin9/autoshare
+https://github.com/kiddin9/openwrt-openvpn
+https://github.com/kiddin9/luci-app-xlnetacc
+
+https://github.com/Lienol/openwrt-package
+https://github.com/BoringCat/luci-app-mentohust
+https://github.com/KyleRicardo/MentoHUST-OpenWrt-ipk
+https://github.com/rufengsuixing/luci-app-usb3disable
+https://github.com/silime/luci-app-xunlei
+https://github.com/BCYDTZ/luci-app-UUGameAcc
+https://github.com/jerrykuku/luci-app-vssr
+https://github.com/peter-tank/luci-app-dnscrypt-proxy2
+https://github.com/NateLol/luci-app-oled
+https://github.com/hubbylei/luci-app-clash
+https://github.com/sensec/luci-app-udp2raw
+https://github.com/LGA1150/openwrt-sysuh3c
+https://github.com/kenzok78/udp2raw
+https://github.com/kiddin9/luci-app-wizard
+https://github.com/UnblockNeteaseMusic/luci-app-unblockneteasemusic
+https://github.com/kenzok78/openwrt-minisign
+https://github.com/kenzok78/luci-app-argonne-config
+https://github.com/DevOpenWRT-Router/luci-app-cpulimit
+# 锐捷认证相关
+https://github.com/BoringCat/luci-app-minieap
+https://github.com/ysc3839/luci-proto-minieap
+# 广告过滤
+https://github.com/project-lede/luci-app-godproxy
+# 闪讯拨号
+https://github.com/CCnut/feed-netkeeper
+https://github.com/doushang/luci-app-shortcutmenu/trunk/luci-app-shortcutmenu
+https://github.com/Lienol/openwrt-package/branches/other/lean/luci-app-autoreboot
+https://github.com/openwrt/packages/trunk/net/shadowsocks-libev
+https://github.com/immortalwrt/luci/trunk/applications/luci-app-aliddns
+https://github.com/immortalwrt/packages/trunk/admin/bpytop
+https://github.com/immortalwrt/packages/trunk/libs/jpcre2
+https://github.com/immortalwrt/packages/trunk/libs/wxbase
+https://github.com/immortalwrt/packages/trunk/libs/libcron
+https://github.com/immortalwrt/packages/trunk/libs/rapidjson
+https://github.com/immortalwrt/packages/trunk/libs/quickjspp
+https://github.com/immortalwrt/packages/trunk/libs/toml11
+https://github.com/kiddin9/openwrt-packages/trunk/UnblockNeteaseMusic
+https://github.com/kiddin9/openwrt-packages/trunk/qtbase
+https://github.com/kiddin9/openwrt-packages/trunk/qttools
+https://github.com/kiddin9/openwrt-packages/trunk/rblibtorrent
+https://github.com/kiddin9/openwrt-packages/trunk/luci-app-advancedsetting
+https://github.com/openwrt/luci/trunk/protocols/luci-proto-modemmanager
+# 定位
+https://github.com/Kodo-kakaku/luci-app-gpoint

@@ -1,0 +1,110 @@
+name: Trigger Update
+
+on:
+  push:
+    paths:
+      - '.github\workflows\autoupdate.yml'
+      - 'update.sh'
+  watch:
+    types: started
+  repository_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  main_branches:
+    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    runs-on: ubuntu-latest
+
+    name: Update Main Branch
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [main]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install git subversion git-core wget
+          sudo timedatectl set-timezone "$TZ"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Clone packages
+        run: |
+          cd $GITHUB_WORKSPACE
+          chmod +x .github/diy/update.sh
+          git clone -b ${{matrix.target}} https://github.com/hyy-666/openwrt-packages.git ${{matrix.target}}
+          cd ${{matrix.target}}
+          git rm -r --cache * >/dev/null 2>&1 &
+          # 删除除diy目录以外的文件夹
+          # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
+          rm -rf ./* >/dev/null 2>&1
+          $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
+          $GITHUB_WORKSPACE/.github/diy/Modify.sh
+
+      - name: Upload
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          [ -e $GITHUB_WORKSPACE/LICENSE ] && cp $GITHUB_WORKSPACE/LICENSE $GITHUB_WORKSPACE/${{matrix.target}}
+          [ -e $GITHUB_WORKSPACE/README.md ] && cp $GITHUB_WORKSPACE/README.md $GITHUB_WORKSPACE/${{matrix.target}}
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          git add .
+          git commit -m "update$(TZ='Asia/Shanghai' date +-%m.%d)"
+          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}
+
+  qt6_branches:
+    if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id
+    runs-on: ubuntu-20.04
+
+    name: Update QT6 Branch
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [qt6]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install git subversion git-core wget
+          sudo timedatectl set-timezone "$TZ"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Clone packages
+        run: |
+          cd $GITHUB_WORKSPACE
+          chmod +x .github/diy/update.sh
+          git clone -b ${{matrix.target}} https://github.com/hyy-666/openwrt-packages.git ${{matrix.target}}
+          cd ${{matrix.target}}
+          git rm -r --cache * >/dev/null 2>&1 &
+          # 删除除diy目录以外的文件夹
+          # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
+          rm -rf ./* >/dev/null 2>&1
+          $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
+          $GITHUB_WORKSPACE/.github/diy/Modify.sh
+
+      - name: Upload
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          [ -e $GITHUB_WORKSPACE/LICENSE ] && cp $GITHUB_WORKSPACE/LICENSE $GITHUB_WORKSPACE/${{matrix.target}}
+          [ -e $GITHUB_WORKSPACE/README.md ] && cp $GITHUB_WORKSPACE/README.md $GITHUB_WORKSPACE/${{matrix.target}}
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          git add .
+          git commit -m "update$(TZ='Asia/Shanghai' date +-%m.%d)"
+          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}

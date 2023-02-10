@@ -1,0 +1,148 @@
+name: Schedule Update
+
+on:
+  schedule:
+    - cron: 0 19 * * *
+  repository_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  sync_main_branches:
+    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    runs-on: ubuntu-latest
+
+    name: Update Main Branch
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [main]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install git subversion git-core wget
+          sudo timedatectl set-timezone "$TZ"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Clone packages
+        run: |
+          cd $GITHUB_WORKSPACE
+          chmod +x .github/diy/update.sh
+          git clone -b ${{matrix.target}} https://github.com/hyy-666/openwrt-packages.git ${{matrix.target}}
+          cd ${{matrix.target}}
+          git rm -r --cache * >/dev/null 2>&1 &
+          # 删除除diy目录以外的文件夹
+          # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
+          rm -rf ./* >/dev/null 2>&1
+          $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
+          # TODO:applying patches
+          # find ".github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          bash .github/diy/create_acl_for_luci.sh -a >/dev/null 2>&1 || true
+          bash .github/diy/convert_translation.sh -a >/dev/null 2>&1 || true
+
+      - name: Upload
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          [ -e $GITHUB_WORKSPACE/LICENSE ] && cp $GITHUB_WORKSPACE/LICENSE $GITHUB_WORKSPACE/${{matrix.target}}
+          [ -e $GITHUB_WORKSPACE/README.md ] && cp $GITHUB_WORKSPACE/README.md $GITHUB_WORKSPACE/${{matrix.target}}
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          git add .
+          git commit -m "update$(TZ='Asia/Shanghai' date +-%m.%d)"
+          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}
+
+      - name: Delete workflow runs
+        uses: GitRML/delete-workflow-runs@main
+        with:
+          retain_days: 1
+          keep_minimum_runs: 0
+
+  sync_qt6_branches:
+    if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id
+    runs-on: ubuntu-latest
+
+    name: Update QT6 Branch
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [qt6]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install git subversion git-core wget
+          sudo timedatectl set-timezone "$TZ"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: Clone packages
+        run: |
+          cd $GITHUB_WORKSPACE
+          chmod +x .github/diy/update.sh
+          git clone -b ${{matrix.target}} https://github.com/hyy-666/openwrt-packages.git ${{matrix.target}}
+          cd ${{matrix.target}}
+          git rm -r --cache * >/dev/null 2>&1 &
+          # 删除除diy目录以外的文件夹
+          # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
+          rm -rf ./* >/dev/null 2>&1
+          $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
+          $GITHUB_WORKSPACE/.github/diy/Modify.sh
+
+      - name: Upload
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          [ -e $GITHUB_WORKSPACE/LICENSE ] && cp $GITHUB_WORKSPACE/LICENSE $GITHUB_WORKSPACE/${{matrix.target}}
+          [ -e $GITHUB_WORKSPACE/README.md ] && cp $GITHUB_WORKSPACE/README.md $GITHUB_WORKSPACE/${{matrix.target}}
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          git add .
+          git commit -m "update$(TZ='Asia/Shanghai' date +-%m.%d)"
+          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}
+
+  # TODO:lede源码同步
+  # sync_lean:
+  #   runs-on: ubuntu-latest
+  #   name: Sync Lean code
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       target: [my-diy]
+
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@main
+
+  #     - name: Initialization environment
+  #       env:
+  #         DEBIAN_FRONTEND: noninteractive
+  #       run: |
+  #         sudo -E apt-get -qq update
+  #         sudo -E apt-get -qq install git subversion git-core wget
+  #         sudo timedatectl set-timezone "$TZ"
+  #         git config --global user.email "github-actions[bot]@users.noreply.github.com"
+  #         git config --global user.name "github-actions[bot]"
+
+  #     - name: Sync code
+  #       run: |
+  #         cd $GITHUB_WORKSPACE
+  #         git clone -b ${{matrix.target}} https://github.com/hyy-666/lede.git ${{matrix.target}}
+  #         cd ${{matrix.target}}
+  #         git fetch upstream
+  #         git checkout ${{matrix.target}}
+  #         git merge upstream/master
+  #         git push
