@@ -3,8 +3,8 @@ name: Trigger Update
 on:
   push:
     paths:
-      - '.github\workflows\autoupdate.yml'
-      - 'update.sh'
+      - '.github/workflows/*.yml'
+      - '.github/diy/Update.sh'
   watch:
     types: started
   repository_dispatch:
