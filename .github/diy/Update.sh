@@ -108,7 +108,7 @@ svn co https://github.com/linkease/istore-ui/trunk/app-store-ui
 svn co https://github.com/linkease/nas-packages/trunk/network/services && mvdir services
 svn co https://github.com/linkease/nas-packages/trunk/multimedia && mvdir multimedia
 # lucky             大吉多种功能结合体
-git clone --depth 1 https://github.com/sirpdboy/luci-app-lucky mvdir luci-app-lucky
+git clone --depth 1 https://github.com/sirpdboy/luci-app-lucky && mvdir luci-app-lucky
 # log 美化显示log
 git clone --depth 1 https://github.com/hyy-666/luci-app-log
 
@@ -178,7 +178,7 @@ svn co https://github.com/fw876/helloworld/trunk/luci-app-ssr-plus
 # subconverter      订阅转换
 git clone --depth 1 https://github.com/WYC-2020/openwrt-subconverter && mvdir openwrt-subconverter
 # sundaqiang        sundaqiang编写的软件合集(luci-app-nginx-manager,luci-app-supervisord,luci-app-wolplus)
-git clone --depth 1 https://github.com/sundaqiang/openwrt-packages && mv -n openwrt-packages/luci-app-[nginx-manager,supervisord,wolplus] ./
+git clone --depth 1 https://github.com/sundaqiang/openwrt-packages && mv -n openwrt-packages/luci-app-{nginx-manager,supervisord,wolplus} ./
 rm -rf openwrt-packages
 # syncthing         文件同步
 svn co https://github.com/immortalwrt/luci/branches/openwrt-18.06-k5.4/applications/luci-app-syncthing
