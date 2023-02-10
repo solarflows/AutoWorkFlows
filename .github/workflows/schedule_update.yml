@@ -36,7 +36,7 @@ jobs:
       - name: Clone packages
         run: |
           cd $GITHUB_WORKSPACE
-          chmod +x .github/diy/update.sh
+          chmod +x .github/diy/Update.sh
           git clone -b ${{matrix.target}} https://github.com/hyy-666/openwrt-packages.git ${{matrix.target}}
           cd ${{matrix.target}}
           git rm -r --cache * >/dev/null 2>&1 &
@@ -93,7 +93,7 @@ jobs:
       - name: Clone packages
         run: |
           cd $GITHUB_WORKSPACE
-          chmod +x .github/diy/update.sh
+          chmod +x .github/diy/Update.sh
           git clone -b ${{matrix.target}} https://github.com/hyy-666/openwrt-packages.git ${{matrix.target}}
           cd ${{matrix.target}}
           git rm -r --cache * >/dev/null 2>&1 &
@@ -101,7 +101,10 @@ jobs:
           # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
           rm -rf ./* >/dev/null 2>&1
           $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
-          $GITHUB_WORKSPACE/.github/diy/Modify.sh
+          # TODO:applying patches
+          # find ".github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          bash .github/diy/create_acl_for_luci.sh -a >/dev/null 2>&1 || true
+          bash .github/diy/convert_translation.sh -a >/dev/null 2>&1 || true
 
       - name: Upload
         env:
