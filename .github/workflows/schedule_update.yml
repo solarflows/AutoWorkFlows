@@ -50,11 +50,11 @@ jobs:
 
       - name: Modify Code
         run: |
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
           bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
           # 应用补丁
-          cd $GITHUB_WORKSPACE/${{matrix.target}}
           find "$GITHUB_WORKSPACE/.github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: Upload
@@ -110,11 +110,11 @@ jobs:
 
       - name: Modify Code
         run: |
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
           bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
           # 应用补丁
-          cd $GITHUB_WORKSPACE/${{matrix.target}}
           find "$GITHUB_WORKSPACE/.github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: Upload
