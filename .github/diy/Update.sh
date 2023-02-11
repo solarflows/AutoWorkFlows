@@ -108,7 +108,7 @@ svn co https://github.com/linkease/istore-ui/trunk/app-store-ui
 svn co https://github.com/linkease/nas-packages/trunk/network/services && mvdir services
 svn co https://github.com/linkease/nas-packages/trunk/multimedia && mvdir multimedia
 # lucky             大吉多种功能结合体
-git clone --depth 1 https://github.com/sirpdboy/luci-app-lucky && mvdir luci-app-lucky
+git clone --depth 1 https://github.com/sirpdboy/luci-app-lucky lucky1 && mvdir lucky1
 # log 美化显示log
 git clone --depth 1 https://github.com/hyy-666/luci-app-log
 
