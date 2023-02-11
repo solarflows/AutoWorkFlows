@@ -151,7 +151,8 @@ git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall -b packages pa
 git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall -b luci openwrt-passwall && mvdir openwrt-passwall
 git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall2 && mvdir openwrt-passwall2
 # pingcontrol       网络重连
-svn co https://github.com/kenzok8/jell/trunk/luci-app-pingcontrol
+svn co https://github.com/koshev-msk/modemfeed/trunk/luci/applications/luci-app-pingcontrol
+svn co https://github.com/koshev-msk/modemfeed/trunk/packages/net/pingcontrol
 # pikpak-webdav     海外迅雷网盘
 svn co https://github.com/ykxVK8yL5L/pikpak-webdav/tree/main/openwrt && mvdir openwrt
 # poweroff          关机插件
