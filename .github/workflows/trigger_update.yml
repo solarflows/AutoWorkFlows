@@ -3,7 +3,7 @@ name: Trigger Update
 on:
   push:
     paths:
-      - '.github/workflows/*.yml'
+      - '.github/workflows/trigger_update.yml'
       - '.github/diy/Update.sh'
   watch:
     types: started
