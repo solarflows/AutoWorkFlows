@@ -1,0 +1,13 @@
+diff --git a/luci-app-syncthing/Makefile b/luci-app-syncthing/Makefile
+index e32818c3..c29b1df6 100644
+--- a/luci-app-syncthing/Makefile
++++ b/luci-app-syncthing/Makefile
+@@ -5,7 +5,7 @@ LUCI_DEPENDS:=+syncthing
+ LUCI_PKGARCH:=all
+ PKG_RELEASE:=$(COMMITCOUNT)
+ 
+-include ../../luci.mk
++include $(TOPDIR)/feeds/luci/luci.mk
+ 
+ # call BuildPackage - OpenWrt buildroot signature
+ 
