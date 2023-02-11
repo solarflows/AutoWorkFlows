@@ -53,3 +53,5 @@ https://github.com/kiddin9/openwrt-packages/trunk/luci-app-advancedsetting
 https://github.com/openwrt/luci/trunk/protocols/luci-proto-modemmanager
 # 定位
 https://github.com/Kodo-kakaku/luci-app-gpoint
+# # mbedtls           修复mbedtls Armv8ce 支持
+# svn co https://github.com/immortalwrt/immortalwrt/trunk/package/libs/mbedtls

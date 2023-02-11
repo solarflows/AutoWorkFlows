@@ -113,8 +113,6 @@ git clone --depth 1 https://github.com/sirpdboy/luci-app-lucky && mvdir luci-app
 git clone --depth 1 https://github.com/hyy-666/luci-app-log
 
 # M
-# mbedtls           修复mbedtls Armv8ce 支持
-svn co https://github.com/immortalwrt/immortalwrt/trunk/package/libs/mbedtls
 # MosDNS            插件化可定制的DNS转发器
 svn co https://github.com/QiuSimons/openwrt-mos/trunk/luci-app-mosdns
 svn co https://github.com/QiuSimons/openwrt-mos/trunk/mosdns
@@ -175,6 +173,8 @@ svn co https://github.com/KFERMercer/OpenWrt/trunk/package/kferm/luci-app-smarti
 git clone --depth 1 https://github.com/4IceG/luci-app-sms-tool smstool && mvdir smstool
 # ssr-plus          科学上网
 svn co https://github.com/fw876/helloworld/trunk/luci-app-ssr-plus
+svn co https://github.com/fw876/helloworld/trunk/lua-neturl
+svn co https://github.com/fw876/helloworld/trunk/redsocks2
 # subconverter      订阅转换
 git clone --depth 1 https://github.com/WYC-2020/openwrt-subconverter && mvdir openwrt-subconverter
 # sundaqiang        sundaqiang编写的软件合集(luci-app-nginx-manager,luci-app-supervisord,luci-app-wolplus)
