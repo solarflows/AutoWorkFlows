@@ -1,0 +1,12 @@
+diff --git a/luci-app-tasks/Makefile b/luci-app-tasks/Makefile
+index e115c2e2..2efc5302 100644
+--- a/luci-app-tasks/Makefile
++++ b/luci-app-tasks/Makefile
+@@ -13,6 +13,6 @@ PKG_VERSION:=1.0.0
+ PKG_RELEASE:=
+ PKG_MAINTAINER:=jjm2473 <jjm2473@gmail.com>
+
+-include ../luci-alias.mk
++include $(TOPDIR)/feeds/luci/luci.mk
+
+ # call BuildPackage - OpenWrt buildroot signature

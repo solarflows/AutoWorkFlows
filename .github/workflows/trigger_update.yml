@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/trigger_update.yml'
       - '.github/diy/Update.sh'
+      - '.github/diy/patches/*.patch'
   watch:
     types: started
   repository_dispatch:
@@ -48,11 +49,15 @@ jobs:
           # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
           rm -rf ./* >/dev/null 2>&1
           bash $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
-          # TODO:applying patches
-          # find ".github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+
+      - name: Modify Code
+        run: |
           bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
+          # 应用补丁
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          find "$GITHUB_WORKSPACE/.github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: Upload
         env:
@@ -98,11 +103,15 @@ jobs:
           # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
           rm -rf ./* >/dev/null 2>&1
           bash $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
-          # TODO:applying patches
-          # find ".github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+
+      - name: Modify Code
+        run: |
           bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
+          # 应用补丁
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          find "$GITHUB_WORKSPACE/.github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: Upload
         env:
