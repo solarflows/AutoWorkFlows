@@ -43,7 +43,7 @@ git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
 # 阿里网盘Webdav挂载
 svn co https://github.com/messense/aliyundrive-webdav/trunk/openwrt aliyundrive && mvdir aliyundrive
 # AdguardHome广告过滤
-svn co https://github.com/kenzok8/jell/trunk/luci-app-adguardhome
+svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/luci-app-adguardhome
 svn co https://github.com/kenzok8/jell/trunk/adguardhome
 # advanced          配置文件级别的设置修改插件
 git clone --depth 1 https://github.com/sirpdboy/luci-app-advanced
@@ -125,6 +125,9 @@ git clone --depth 1 https://github.com/ximiTech/luci-app-msd_lite
 git clone --depth 1 https://github.com/ximiTech/msd_lite
 
 # N
+# natter            帮助 Full cone NAT (NAT 1) 用户打开公网 TCP 端口。
+svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/luci-app-natter
+svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/natter
 # nezha             开源、轻量的服务器和网站监控、运维工具
 git clone --depth 1 https://github.com/Erope/openwrt_nezha && mvdir openwrt_nezha
 # netspeedtest      网络测速
@@ -193,6 +196,9 @@ svn co https://github.com/Tencent-Cloud-Plugins/tencentcloud-openwrt-plugin-ddns
 git clone --depth 1 https://github.com/KFERMercer/luci-app-tcpdump
 
 # W
+# webd              轻量级(self-hosted)自建网盘软件
+svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/luci-app-webd
+svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/webd
 # wifidog           WIFIDOG的luci管理界面WIFI认证
 git clone --depth 1 https://github.com/walkingsky/luci-wifidog luci-app-wifidog
 
