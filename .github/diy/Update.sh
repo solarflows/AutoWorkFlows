@@ -88,6 +88,9 @@ git clone --depth 1 https://github.com/immortalwrt/openwrt-filebrowser && mvdir 
 # H
 # homebridge        米家的智能家居到Apple HomeKit的桥接
 git clone --depth 1 https://github.com/shanglanxin/luci-app-homebridge
+# HomeProxy         Tianling Shen主导的FQ
+git clone --depth 1 https://github.com/immortalwrt/homeproxy
+
 
 # I
 # ikoolproxy        广告过滤
