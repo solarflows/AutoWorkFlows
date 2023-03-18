@@ -25,8 +25,8 @@ git clone --depth 1 https://github.com/apollo-ng/luci-theme-darkmatter
 git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon -b 18.06
 git clone --depth 1 https://github.com/thinktip/luci-theme-neobird
 git clone --depth 1 https://github.com/lynxnexy/luci-theme-tano
-svn co https://github.com/Carseason/openwrt-themedog/trunk/luci/luci-themedog luci-theme-dog
-svn co https://github.com/koshev-msk/modemfeed/trunk/luci/themes && mvdir themes
+# svn co https://github.com/Carseason/openwrt-themedog/trunk/luci/luci-themedog luci-theme-dog
+# svn co https://github.com/koshev-msk/modemfeed/trunk/luci/themes && mvdir themes
 # git clone --depth 1 https://github.com/kiddin9/luci-theme-edge
 # git clone --depth 1 https://github.com/kenzok78/luci-theme-argonne
 # svn co https://github.com/liuran001/openwrt-theme/trunk/luci-theme-argon-lr
@@ -156,9 +156,9 @@ svn co https://github.com/vernesong/OpenClash/trunk/luci-app-openclash
 git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall -b packages packages && mvdir packages
 git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall -b luci openwrt-passwall && mvdir openwrt-passwall
 git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall2 && mvdir openwrt-passwall2
-# pingcontrol       网络重连
-svn co https://github.com/koshev-msk/modemfeed/trunk/luci/applications/luci-app-pingcontrol
-svn co https://github.com/koshev-msk/modemfeed/trunk/packages/net/pingcontrol
+# # pingcontrol       网络重连
+# svn co https://github.com/koshev-msk/modemfeed/trunk/luci/applications/luci-app-pingcontrol
+# svn co https://github.com/koshev-msk/modemfeed/trunk/packages/net/pingcontrol
 # pikpak-webdav     海外迅雷网盘
 svn co https://github.com/ykxVK8yL5L/pikpak-webdav/tree/main/openwrt && mvdir openwrt
 # poweroff          关机插件
