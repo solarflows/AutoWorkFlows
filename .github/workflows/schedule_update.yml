@@ -123,7 +123,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           git add .
-          git commit -m "schedule update$(TZ='Asia/Shanghai' date +-%m.%d)"
+          git commit -m "schedule update$(TZ='Asia/Shanghai' date +%m.%d)"
           git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}
 
   # TODO:Sync lean code
