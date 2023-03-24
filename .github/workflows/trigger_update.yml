@@ -3,7 +3,7 @@ name: Trigger Update
 on:
   push:
     paths:
-      - '.github/workflows/trigger_update.yml'
+      - '.github/workflows/*.yml'
       - '.github/diy/Update.sh'
       - '.github/diy/patches/*.patch'
   watch:
@@ -119,5 +119,5 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           git add .
-          git commit -m "trigger update $(TZ='Asia/Shanghai' date -d now)"
+          git commit -m "trigger update-$(TZ='Asia/Shanghai' date -d now)"
           git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}

@@ -3,9 +3,9 @@ name: Schedule Update
 on:
   schedule:
     - cron: 0 19 * * *
-  push:
-    paths:
-      - '.github/workflows/schedule_update.yml'
+  # push:
+  #   paths:
+  #     - '.github/workflows/schedule_update.yml'
   repository_dispatch:
 
 env:
@@ -63,7 +63,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           git add .
-          git commit -m "schedule update $(TZ='Asia/Shanghai' date +-%m.%d)"
+          git commit -m "schedule update-$(TZ='Asia/Shanghai' date +%m.%d)"
           git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}
 
       - name: Delete workflow runs
