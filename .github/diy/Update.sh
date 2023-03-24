@@ -153,8 +153,8 @@ svn co https://github.com/vernesong/OpenClash/trunk/luci-app-openclash
 
 # P
 # PassWall1&2       科学上网
-git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall -b packages packages && mvdir packages
-git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall -b luci openwrt-passwall && mvdir openwrt-passwall
+git clone --depth 1 https://github.com/hyy-666/openwrt-passwall -b packages packages && mvdir packages
+git clone --depth 1 https://github.com/hyy-666/openwrt-passwall -b luci openwrt-passwall && mvdir openwrt-passwall
 git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall2 && mvdir openwrt-passwall2
 # # pingcontrol       网络重连
 # svn co https://github.com/koshev-msk/modemfeed/trunk/luci/applications/luci-app-pingcontrol
