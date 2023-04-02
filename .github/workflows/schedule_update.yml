@@ -3,9 +3,6 @@ name: Schedule Update
 on:
   schedule:
     - cron: 0 19 * * *
-  # push:
-  #   paths:
-  #     - '.github/workflows/schedule_update.yml'
   repository_dispatch:
 
 env:
@@ -16,17 +13,17 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     runs-on: ubuntu-latest
 
-    name: Update Main Branch
+    name: 更新 Main 分支
     strategy:
       fail-fast: false
       matrix:
         target: [main]
 
     steps:
-      - name: Checkout
+      - name: 签出代码
         uses: actions/checkout@main
 
-      - name: Initialization environment
+      - name: 初始化环境
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -36,7 +33,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
-      - name: Clone packages
+      - name: 克隆代码
         run: |
           cd $GITHUB_WORKSPACE
           chmod +x .github/diy/*.sh
@@ -48,16 +45,16 @@ jobs:
           rm -rf ./* >/dev/null 2>&1
           bash $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
 
-      - name: Modify Code
+      - name: 修改代码
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
           # 应用补丁
-          find "$GITHUB_WORKSPACE/.github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
-      - name: Upload
+      - name: 提交代码
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -76,17 +73,17 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id
     runs-on: ubuntu-latest
 
-    name: Update QT6 Branch
+    name: 更新 QT6 分支
     strategy:
       fail-fast: false
       matrix:
         target: [qt6]
 
     steps:
-      - name: Checkout
+      - name: 签出代码
         uses: actions/checkout@main
 
-      - name: Initialization environment
+      - name: 初始化环境
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -96,7 +93,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
-      - name: Clone packages
+      - name: 克隆代码
         run: |
           cd $GITHUB_WORKSPACE
           chmod +x .github/diy/*.sh
@@ -108,16 +105,16 @@ jobs:
           rm -rf ./* >/dev/null 2>&1
           bash $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
 
-      - name: Modify Code
+      - name: 修改代码
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
           # 应用补丁
-          find "$GITHUB_WORKSPACE/.github/diy/patches" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
-      - name: Upload
+      - name: 提交代码
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
