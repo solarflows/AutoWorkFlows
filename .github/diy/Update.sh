@@ -104,6 +104,8 @@ svn co https://github.com/openwrt/packages/trunk/utils/irqbalance
 svn co https://github.com/QiuSimons/OpenWrt-Add/trunk/luci-app-irqbalance
 
 # L
+# libtorrent-rasterbar
+svn co https://github.com/immortalwrt/packages/trunk/libs/libtorrent-rasterbar
 # linkease          易有云官方软件(易有云ddnsto,linkshare)
 svn co https://github.com/linkease/istore/trunk/luci && mvdir luci
 svn co https://github.com/linkease/nas-packages-luci/trunk/luci && mvdir luci
