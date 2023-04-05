@@ -6,8 +6,6 @@ on:
       - '.github/workflows/trigger_sync_lean.yml'
       - '.github/workflows/schedule_sync_lean.yml'
       - '.github/diy/patches/luci_lean/*.patch'
-  watch:
-    types: started
 
 env:
   TZ: Asia/Shanghai
