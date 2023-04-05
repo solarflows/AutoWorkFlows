@@ -11,6 +11,45 @@ env:
   TZ: Asia/Shanghai
 
 jobs:
+  sync_lede:
+    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    runs-on: ubuntu-latest
+
+    name: 同步 lede
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [lede]
+        target: [master]
+        upstream: ['https://github.com/coolsnowwolf']
+
+    steps:
+      - name: 初始化环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install git subversion git-core wget
+          sudo timedatectl set-timezone "$TZ"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: 克隆代码
+        run: |
+          cd $GITHUB_WORKSPACE
+          git clone -b ${{matrix.target}} https://github.com/hyy-666/${{matrix.repo}}.git ${{matrix.repo}}
+
+      - name: 合并上游更改
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          cd $GITHUB_WORKSPACE/${{matrix.repo}}
+          git remote add upstream ${{matrix.upstream}}/${{matrix.repo}}
+          git fetch upstream
+          git checkout ${{matrix.target}}
+          git merge upstream/${{matrix.target}}
+          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/${{matrix.repo}}.git"
+
   sync_luci:
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     runs-on: ubuntu-latest
