@@ -84,7 +84,7 @@ git clone --depth 1 https://github.com/ntlf9t/luci-app-easymesh
 # F
 # filebrowser       文件管理器
 svn co https://github.com/immortalwrt/packages/trunk/utils/filebrowser
-svn co https://github.com/immortalwrt/luci/trunk/applications/luci-app-filebrowser
+svn co https://github.com/immortalwrt/luci/branches/openwrt-18.06-k5.4/applications/luci-app-filebrowser
 
 # H
 # homebridge        米家的智能家居到Apple HomeKit的桥接
