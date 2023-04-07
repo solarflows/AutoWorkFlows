@@ -11,3 +11,15 @@ index 650e23b1..27b51f30 100644
  
  define Package/filebrowser
    SECTION:=utils
+diff --git a/luci-app-filebrowser/Makefile b/luci-app-filebrowser/Makefile
+index 735d7598..3abe46bb 100644
+--- a/luci-app-filebrowser/Makefile
++++ b/luci-app-filebrowser/Makefile
+@@ -17,6 +17,6 @@ PKG_RELEASE:=118071b
+ 
+ PKG_LICENSE:=GPLv3
+ 
+-include ../../luci.mk
++include $(TOPDIR)/feeds/luci/luci.mk
+ 
+ # call BuildPackage - OpenWrt buildroot signature
