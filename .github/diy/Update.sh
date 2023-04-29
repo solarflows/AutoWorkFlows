@@ -136,6 +136,8 @@ svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/luci-app-natter
 svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/natter
 # nezha             开源、轻量的服务器和网站监控、运维工具
 git clone --depth 1 https://github.com/Erope/openwrt_nezha && mvdir openwrt_nezha
+# netdata
+git clone --depth 1 https://github.com/sirpdboy/luci-app-netdata
 # netspeedtest      网络测速
 git clone --depth 1 https://github.com/sirpdboy/netspeedtest && mvdir netspeedtest
 # nft-qos           基于nftables的qos工具(静态、动态双模式)
