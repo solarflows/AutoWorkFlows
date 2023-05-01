@@ -37,6 +37,11 @@ git clone --depth 1 https://github.com/lynxnexy/luci-theme-tano
 # svn co https://github.com/kenzok8/litte/trunk/luci-theme-tomato
 git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
 
+# Printing System
+git clone --depth 1 https://github.com/hyy-666/openwrt-printing-packages
+mv ./openwrt-printing-packages/*/* ./
+rm -rf ./openwrt-printing-packages
+
 # Applications
 
 # A
@@ -51,6 +56,8 @@ git clone --depth 1 https://github.com/sirpdboy/luci-app-advanced
 git clone --depth 1 https://github.com/rufengsuixing/luci-app-autoipsetadder
 # autotimeset       设置OpenWRT按时执行某个操作
 git clone --depth 1 https://github.com/sirpdboy/luci-app-autotimeset
+# autorebootschedule增强版自动重启
+svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-autorebootschedule
 # autorepeater      OpenWRT自动中继网络
 git clone --depth 1 https://github.com/peter-tank/luci-app-autorepeater
 # amule             电驴 from lean
@@ -63,13 +70,23 @@ svn co https://github.com/coolsnowwolf/packages/trunk/net/antileech
 git clone --depth 1 https://github.com/NateLol/luci-app-beardropper
 
 # C
-# cdnspeedtest      CloudFlare CDN 测速
+# cdnspeedtest                  CloudFlare CDN 测速
 svn co https://github.com/immortalwrt/packages/trunk/net/cdnspeedtest
 svn co https://github.com/mingxiaoyu/luci-app-cloudflarespeedtest/trunk/applications/luci-app-cloudflarespeedtest
-# control-weburl    网址访问控制
-git clone --depth 1 https://github.com/gdck/luci-app-control-weburl
-# control-speedlimit联网控制
+# control-guest-wifi            访客wifi
+svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-control-guest-wifi
+# control-speedlimit            联网速度控制
 svn co https://github.com/sirpdboy/sirpdboy-package/trunk/luci-app-control-speedlimit
+# control-verysync              增强版VerySync
+svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-control-verysync
+# control-weburl                网址访问控制
+svn co https://github.com/zxlhhyccc/bf-package-master/tunk/zxlhhyccc/luci-app-control-weburl
+# cowb-timecontrol              联网时间控制
+svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-cowb-timecontrol
+# cowb-userrestriction          用户限制
+svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-cowb-userrestriction
+# cowb-wirelessaccesscontrol    无线访问控制
+svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-cowb-wirelessaccesscontrol
 
 # D
 # dnsfilter         基于dnsmasq的去广告程序
@@ -213,6 +230,9 @@ git clone --depth 1 https://github.com/walkingsky/luci-wifidog luci-app-wifidog
 # X
 # xmurp-ua          在 OpenWrt 上修改 HTTP 流量的 UA
 git clone --depth 1 https://github.com/CHN-beta/xmurp-ua
+
+# proto             batman-adv-compat proto
+svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-proto-batman-adv-compat
 
 rm -rf ./*/.git
 rm -f ./*/.gitattributes
