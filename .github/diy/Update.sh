@@ -37,11 +37,6 @@ git clone --depth 1 https://github.com/lynxnexy/luci-theme-tano
 # svn co https://github.com/kenzok8/litte/trunk/luci-theme-tomato
 git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
 
-# Printing System
-git clone --depth 1 https://github.com/hyy-666/openwrt-printing-packages
-mv ./openwrt-printing-packages/*/* ./
-rm -rf ./openwrt-printing-packages
-
 # Applications
 
 # A
