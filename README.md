@@ -1,3 +1,3 @@
 # Auto WorkFlows
 
-## copy from kenzok8/AutoSync
+## Workflows to auto merge packages into my repo.
