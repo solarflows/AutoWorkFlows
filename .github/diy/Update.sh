@@ -199,6 +199,7 @@ git clone --depth 1 https://github.com/4IceG/luci-app-sms-tool smstool && mvdir 
 svn co https://github.com/fw876/helloworld/trunk/luci-app-ssr-plus
 svn co https://github.com/fw876/helloworld/trunk/lua-neturl
 svn co https://github.com/fw876/helloworld/trunk/redsocks2
+svn co https://github.com/fw876/helloworld/trunk/tuic-client
 # subconverter      订阅转换
 git clone --depth 1 https://github.com/WYC-2020/openwrt-subconverter && mvdir openwrt-subconverter
 # sundaqiang        sundaqiang编写的软件合集(luci-app-nginx-manager,luci-app-supervisord,luci-app-wolplus)
