@@ -35,7 +35,7 @@ git clone --depth 1 https://github.com/lynxnexy/luci-theme-tano
 # svn co https://github.com/kenzok8/litte/trunk/luci-theme-atmaterial_new
 # svn co https://github.com/kenzok8/litte/trunk/luci-theme-mcat
 # svn co https://github.com/kenzok8/litte/trunk/luci-theme-tomato
-git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config
+git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config -b 18.06
 
 # Applications
 
