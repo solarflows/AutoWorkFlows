@@ -1,6 +1,8 @@
 #!/bin/bash
+
+
 function git_sparse_clone() {
-    branch="$1" rurl="$2" localdir="$3" && shift 3
+    rurl="$1" branch="$2" localdir="temp_sparse_clone_dir" && shift 2
     git clone -b $branch --depth 1 --filter=blob:none --sparse $rurl $localdir
     cd $localdir
     git sparse-checkout init --cone
@@ -170,9 +172,9 @@ svn co https://github.com/vernesong/OpenClash/trunk/luci-app-openclash
 
 # P
 # PassWall1&2       科学上网
-git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall -b packages packages && mvdir packages
-git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall -b luci-smartdns-new-version openwrt-passwall && mvdir openwrt-passwall
-git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall2 && mvdir openwrt-passwall2
+git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall-packages && mvdir openwrt-passwall-packages
+git_sparse_clone https://github.com/xiaorouji/openwrt-passwall luci-smartdns-dev luci-app-passwall
+git_sparse_clone https://github.com/xiaorouji/openwrt-passwall2 main luci-app-passwall2
 # # pingcontrol       网络重连
 # svn co https://github.com/koshev-msk/modemfeed/trunk/luci/applications/luci-app-pingcontrol
 # svn co https://github.com/koshev-msk/modemfeed/trunk/packages/net/pingcontrol
