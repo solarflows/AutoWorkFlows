@@ -133,9 +133,9 @@ git clone --depth 1 https://github.com/sirpdboy/luci-app-lucky lucky1 && mvdir l
 git clone --depth 1 https://github.com/hyy-666/luci-app-log
 
 # M
-# MosDNS            插件化可定制的DNS转发器
-svn co https://github.com/QiuSimons/openwrt-mos/trunk/luci-app-mosdns
-svn co https://github.com/QiuSimons/openwrt-mos/trunk/mosdns
+# # MosDNS            插件化可定制的DNS转发器
+# svn co https://github.com/QiuSimons/openwrt-mos/trunk/luci-app-mosdns
+# svn co https://github.com/QiuSimons/openwrt-mos/trunk/mosdns
 # mmconfig          3G/LTE 解调器设置
 git clone --depth 1 https://github.com/erdoukki/luci-app-mmconfig
 # modeminfo         3G/LTE 解调器信息
