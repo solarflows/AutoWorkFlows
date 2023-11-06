@@ -104,7 +104,7 @@ svn co https://github.com/immortalwrt/luci/branches/openwrt-18.06-k5.4/applicati
 # homebridge        米家的智能家居到Apple HomeKit的桥接
 git clone --depth 1 https://github.com/shanglanxin/luci-app-homebridge
 # HomeProxy         Tianling Shen主导的FQ
-git clone --depth 1 https://github.com/immortalwrt/homeproxy
+git clone --depth 1 https://github.com/immortalwrt/homebridger -b master
 
 
 # I
@@ -198,10 +198,7 @@ svn co https://github.com/KFERMercer/OpenWrt/trunk/package/kferm/luci-app-smarti
 # sms-tool          sms-tool的luci界面
 git clone --depth 1 https://github.com/4IceG/luci-app-sms-tool smstool && mvdir smstool
 # ssr-plus          科学上网
-svn co https://github.com/fw876/helloworld/trunk/luci-app-ssr-plus
-svn co https://github.com/fw876/helloworld/trunk/lua-neturl
-svn co https://github.com/fw876/helloworld/trunk/redsocks2
-svn co https://github.com/fw876/helloworld/trunk/tuic-client
+git_sparse_clone https://github.com/fw876/helloworld/ main luci-app-ssr-plus lua-neturl redsocks2
 # subconverter      订阅转换
 git clone --depth 1 https://github.com/WYC-2020/openwrt-subconverter && mvdir openwrt-subconverter
 # sundaqiang        sundaqiang编写的软件合集(luci-app-nginx-manager,luci-app-supervisord,luci-app-wolplus)
