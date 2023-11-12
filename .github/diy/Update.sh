@@ -198,7 +198,7 @@ svn co https://github.com/KFERMercer/OpenWrt/trunk/package/kferm/luci-app-smarti
 # sms-tool          sms-tool的luci界面
 git clone --depth 1 https://github.com/4IceG/luci-app-sms-tool smstool && mvdir smstool
 # ssr-plus          科学上网
-git_sparse_clone https://github.com/fw876/helloworld/ main luci-app-ssr-plus lua-neturl redsocks2
+git_sparse_clone https://github.com/fw876/helloworld/ main luci-app-ssr-plus lua-neturl redsocks2 shadow-tls
 # subconverter      订阅转换
 git clone --depth 1 https://github.com/WYC-2020/openwrt-subconverter && mvdir openwrt-subconverter
 # sundaqiang        sundaqiang编写的软件合集(luci-app-nginx-manager,luci-app-supervisord,luci-app-wolplus)
