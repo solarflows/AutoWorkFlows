@@ -44,23 +44,14 @@ git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config -b 18.06
 # A
 # 阿里网盘Webdav挂载
 svn co https://github.com/messense/aliyundrive-webdav/trunk/openwrt aliyundrive && mvdir aliyundrive
-# AdguardHome广告过滤
-svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/luci-app-adguardhome
-svn co https://github.com/kenzok8/jell/trunk/adguardhome
 # advanced          配置文件级别的设置修改插件
 git clone --depth 1 https://github.com/sirpdboy/luci-app-advanced
 # autoipsetadder    自动添加不能访问的网站到gfwlist转发链
 git clone --depth 1 https://github.com/rufengsuixing/luci-app-autoipsetadder
 # autotimeset       设置OpenWRT按时执行某个操作
 git clone --depth 1 https://github.com/sirpdboy/luci-app-autotimeset
-# autorebootschedule增强版自动重启
-svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-autorebootschedule
 # autorepeater      OpenWRT自动中继网络
 git clone --depth 1 https://github.com/peter-tank/luci-app-autorepeater
-# amule             电驴 from lean
-svn co https://github.com/coolsnowwolf/luci/trunk/applications/luci-app-amule
-svn co https://github.com/coolsnowwolf/packages/trunk/net/amule
-svn co https://github.com/coolsnowwolf/packages/trunk/net/antileech
 
 # B
 # beardropper       控制dropbear的登录
@@ -72,28 +63,12 @@ svn co https://github.com/immortalwrt/packages/trunk/net/cdnspeedtest
 svn co https://github.com/mingxiaoyu/luci-app-cloudflarespeedtest/trunk/applications/luci-app-cloudflarespeedtest
 # control-guest-wifi            访客wifi
 svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-control-guest-wifi
-# control-speedlimit            联网速度控制
-svn co https://github.com/sirpdboy/sirpdboy-package/trunk/luci-app-control-speedlimit
-# control-verysync              增强版VerySync
-svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-control-verysync
-# control-weburl                网址访问控制
-svn co https://github.com/zxlhhyccc/bf-package-master/tunk/zxlhhyccc/luci-app-control-weburl
-# cowb-timecontrol              联网时间控制
-svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-cowb-timecontrol
-# cowb-userrestriction          用户限制
-svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-cowb-userrestriction
-# cowb-wirelessaccesscontrol    无线访问控制
-svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-app-cowb-wirelessaccesscontrol
 
 # D
 # dnsfilter         基于dnsmasq的去广告程序
 git clone --depth 1 https://github.com/kiddin9/luci-app-dnsfilter
 # dockerman         Docker管理界面
 svn co https://github.com/lisaac/luci-app-dockerman/trunk/applications/luci-app-dockerman
-
-# E
-# easymesh          基于batman wpad-mesh dawn 的wlan漫游实现
-git clone --depth 1 https://github.com/ntlf9t/luci-app-easymesh
 
 # F
 # filebrowser       文件管理器
@@ -104,8 +79,9 @@ svn co https://github.com/immortalwrt/luci/branches/openwrt-18.06-k5.4/applicati
 # homebridge        米家的智能家居到Apple HomeKit的桥接
 git clone --depth 1 https://github.com/shanglanxin/luci-app-homebridge
 # HomeProxy         Tianling Shen主导的FQ
-git clone --depth 1 https://github.com/immortalwrt/homebridger -b master
-
+git clone --depth 1 https://github.com/immortalwrt/homeproxy
+# Hyy2001X          软件库
+git_sparse_clone https://github.com/Hyy2001X/AutoBuild-Packages.git master luci-app-adguardhome luci-app-natter luci-app-onliner luci-app-webd webd natter
 
 # I
 # ikoolproxy        广告过滤
@@ -116,7 +92,6 @@ svn co https://github.com/Ysurac/openmptcprouter-feeds/trunk/luci-app-iperf
 git clone --depth 1 https://github.com/riverscn/openwrt-iptvhelper && mvdir openwrt-iptvhelper
 # irqbalance        修复lean的irqbalance
 svn co https://github.com/openwrt/packages/trunk/utils/irqbalance
-svn co https://github.com/QiuSimons/OpenWrt-Add/trunk/luci-app-irqbalance
 
 # L
 # libtorrent-rasterbar
@@ -146,9 +121,6 @@ git clone --depth 1 https://github.com/ximiTech/luci-app-msd_lite
 git clone --depth 1 https://github.com/ximiTech/msd_lite
 
 # N
-# natter            帮助 Full cone NAT (NAT 1) 用户打开公网 TCP 端口。
-svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/luci-app-natter
-svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/natter
 # nezha             开源、轻量的服务器和网站监控、运维工具
 git clone --depth 1 https://github.com/Erope/openwrt_nezha && mvdir openwrt_nezha
 # netdata
@@ -164,8 +136,6 @@ svn co https://github.com/immortalwrt/packages/trunk/net/ngrokc
 git clone --depth 1 https://github.com/tty228/luci-app-nodogsplash
 
 # O
-# onliner           在线人数统计
-git clone --depth 1 https://github.com/selfcan/luci-app-onliner
 # OpenAppFilter     内核级应用过滤
 git clone --depth 1 https://github.com/destan19/OpenAppFilter && mvdir OpenAppFilter
 # openclash         OpenWRT的Clash
@@ -217,18 +187,12 @@ svn co https://github.com/Tencent-Cloud-Plugins/tencentcloud-openwrt-plugin-ddns
 git clone --depth 1 https://github.com/KFERMercer/luci-app-tcpdump
 
 # W
-# webd              轻量级(self-hosted)自建网盘软件
-svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/luci-app-webd
-svn co https://github.com/Hyy2001X/AutoBuild-Packages/trunk/webd
 # wifidog           WIFIDOG的luci管理界面WIFI认证
 git clone --depth 1 https://github.com/walkingsky/luci-wifidog luci-app-wifidog
 
 # X
 # xmurp-ua          在 OpenWrt 上修改 HTTP 流量的 UA
 git clone --depth 1 https://github.com/CHN-beta/xmurp-ua
-
-# proto             batman-adv-compat proto
-svn co https://github.com/zxlhhyccc/bf-package-master/trunk/zxlhhyccc/luci-proto-batman-adv-compat
 
 rm -rf ./*/.git
 rm -f ./*/.gitattributes
