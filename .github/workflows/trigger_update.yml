@@ -32,7 +32,7 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
           sudo timedatectl set-timezone "Asia/Shanghai"
-          ( sudo -E apt-get -qq install rename tree ) &
+          ( sudo -E apt-get -qq install rename ) &
 
       - name: 克隆代码
         run: |
@@ -53,8 +53,6 @@ jobs:
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
           # 应用补丁
-          pwd
-          tree -d -L 1
           find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: 提交代码
@@ -67,8 +65,8 @@ jobs:
           git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
 
   qt6_branches:
-    # if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id
-    if: ${{ false }}
+    if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id
+    # if: ${{ false }}
     runs-on: Ubuntu-22.04
 
     name: 更新 QT6 分支

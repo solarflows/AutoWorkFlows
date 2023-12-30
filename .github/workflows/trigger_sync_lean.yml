@@ -7,13 +7,10 @@ on:
       - '.github/workflows/schedule_sync_lean.yml'
       - '.github/diy/patches/luci_lean/*.patch'
 
-env:
-  TZ: Asia/Shanghai
-
 jobs:
   sync_lede:
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
-    runs-on: ubuntu-latest
+    runs-on: Ubuntu-22.04
 
     name: 同步 lede
     strategy:
@@ -25,14 +22,11 @@ jobs:
 
     steps:
       - name: 初始化环境
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install git subversion git-core wget
-          sudo timedatectl set-timezone "$TZ"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          ( sudo -E apt-get -qq install rename ) &
 
       - name: 克隆代码
         run: |
@@ -64,14 +58,11 @@ jobs:
 
     steps:
       - name: 初始化环境
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install git subversion git-core wget
-          sudo timedatectl set-timezone "$TZ"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          ( sudo -E apt-get -qq install rename ) &
 
       - name: 克隆代码
         run: |
@@ -91,7 +82,7 @@ jobs:
 
   sync_package:
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
-    runs-on: ubuntu-latest
+    runs-on: Ubuntu-22.04
 
     name: 同步 Packages
     strategy:
@@ -103,14 +94,11 @@ jobs:
 
     steps:
       - name: 初始化环境
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install git subversion git-core wget
-          sudo timedatectl set-timezone "$TZ"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          ( sudo -E apt-get -qq install rename ) &
 
       - name: 克隆代码
         run: |
