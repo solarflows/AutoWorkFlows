@@ -4,12 +4,18 @@
 function git_sparse_clone() {
     rurl="$1" branch="$2" localdir="temp_sparse_clone_dir" && shift 2
     git clone -b $branch --depth 1 --filter=blob:none --sparse $rurl $localdir
-    cd $localdir
-    git sparse-checkout init --cone
-    git sparse-checkout set $@
-    mv -n $@ ../
-    cd ..
-    rm -rf $localdir
+    if [ "$(ls -A $localdir)" ]; then
+        cd $localdir
+        git sparse-checkout init --cone
+        git sparse-checkout set $@
+        mv -n $@ ../
+        cd ..
+        rm -rf $localdir
+    else
+        mkdir $localdir
+        echo "Variable errors variables:$@" 
+        exit 1
+    fi
 }
 
 function mvdir() {
@@ -26,7 +32,7 @@ git clone --depth 1 https://github.com/hyy-666/luci-theme-Butterfly-dark
 git clone --depth 1 https://github.com/apollo-ng/luci-theme-darkmatter
 git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon -b 18.06
 git clone --depth 1 https://github.com/thinktip/luci-theme-neobird
-git clone --depth 1 https://github.com/lynxnexy/luci-theme-tano
+git_sparse_clone https://github.com/lynxnexy/packages main luci-theme-tano
 # svn co https://github.com/Carseason/openwrt-themedog/trunk/luci/luci-themedog luci-theme-dog
 # svn co https://github.com/koshev-msk/modemfeed/trunk/luci/themes && mvdir themes
 # git clone --depth 1 https://github.com/kiddin9/luci-theme-edge
@@ -46,6 +52,10 @@ git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config -b 18.06
 svn co https://github.com/messense/aliyundrive-webdav/trunk/openwrt aliyundrive && mvdir aliyundrive
 # advanced          配置文件级别的设置修改插件
 git clone --depth 1 https://github.com/sirpdboy/luci-app-advanced
+# airconnect        将DLNA设备转为AirPlay设备
+git_sparse_clone https://github.com/sbwml/luci-app-airconnect main luci-app-airconnect airconnect
+# amlogic           固件更新功能加强
+git_sparse_clone https://github.com/ophub/luci-app-amlogic main luci-app-amlogic
 # autoipsetadder    自动添加不能访问的网站到gfwlist转发链
 git clone --depth 1 https://github.com/rufengsuixing/luci-app-autoipsetadder
 # autotimeset       设置OpenWRT按时执行某个操作
@@ -144,7 +154,7 @@ svn co https://github.com/vernesong/OpenClash/trunk/luci-app-openclash
 # P
 # PassWall1&2       科学上网
 git clone --depth 1 https://github.com/xiaorouji/openwrt-passwall-packages && mvdir openwrt-passwall-packages
-git_sparse_clone https://github.com/xiaorouji/openwrt-passwall luci-smartdns-dev luci-app-passwall
+git_sparse_clone https://github.com/xiaorouji/openwrt-passwall main luci-app-passwall
 git_sparse_clone https://github.com/xiaorouji/openwrt-passwall2 main luci-app-passwall2
 # # pingcontrol       网络重连
 # svn co https://github.com/koshev-msk/modemfeed/trunk/luci/applications/luci-app-pingcontrol
@@ -185,6 +195,8 @@ svn co https://github.com/jjm2473/openwrt-apps/trunk/luci-app-tasks
 svn co https://github.com/Tencent-Cloud-Plugins/tencentcloud-openwrt-plugin-ddns/trunk/tencentcloud_ddns luci-app-tencentddns
 # tcpdump           抓包工具
 git clone --depth 1 https://github.com/KFERMercer/luci-app-tcpdump
+# tinyfilemanager   最小web-based文件管理工具
+git clone --depth 1 https://github.com/muink/luci-app-tinyfilemanager
 
 # W
 # wifidog           WIFIDOG的luci管理界面WIFI认证

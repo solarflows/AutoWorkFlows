@@ -1,0 +1,2013 @@
+From 44d00113bcbee19449a6d5895d73b5e24c11ae64 Mon Sep 17 00:00:00 2001
+From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
+Date: Sat, 18 Feb 2023 23:30:48 +0800
+Subject: [PATCH 1/4] Revert "luci: temporarily remove SmartDNS shunt scheme"
+
+This reverts commit 33c9ff3b8fe6375ab518cfff666bbd5c09147761.
+---
+ .../model/cbi/passwall/client/global.lua      |  12 +
+ luci-app-passwall/po/zh-cn/passwall.po        |  12 +
+ .../root/usr/share/passwall/app.sh            |  14 +-
+ .../usr/share/passwall/helper_smartdns.sh     |  39 ++
+ .../share/passwall/helper_smartdns_add.lua    | 400 ++++++++++++++++++
+ .../root/usr/share/passwall/iptables.sh       |   1 +
+ .../root/usr/share/passwall/nftables.sh       |   1 +
+ 7 files changed, 478 insertions(+), 1 deletion(-)
+ create mode 100755 luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
+ create mode 100644 luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
+
+diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+index 1fb99e94c4..4f6c9df804 100644
+--- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
++++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+@@ -258,6 +258,18 @@ end
+ 
+ s:tab("DNS", translate("DNS"))
+ 
++if api.is_finded("smartdns") then
++    dns_shunt = s:taboption("DNS", ListValue, "dns_shunt", translate("DNS Shunt"))
++    dns_shunt:value("dnsmasq", "Dnsmasq")
++    dns_shunt:value("smartdns", "SmartDNS")
++
++    group_domestic = s:taboption("DNS", Value, "group_domestic", translate("Domestic group name"))
++    group_domestic.placeholder = "local"
++    group_domestic:depends("dns_shunt", "smartdns")
++    group_domestic.description = translate("You only need to configure domestic DNS packets in SmartDNS and set it redirect or as Dnsmasq upstream, and fill in the domestic DNS group name here.")
++    group_domestic.description = group_domestic.description .. string.format('<a href="%s" target="_blank">%s</a>', "https://github.com/luckyyyyy/blog/issues/57", translate("Guide"))
++end
++
+ o = s:taboption("DNS", Flag, "filter_proxy_ipv6", translate("Filter Proxy Host IPv6"), translate("Experimental feature."))
+ o.default = "0"
+ 
+diff --git a/luci-app-passwall/po/zh-cn/passwall.po b/luci-app-passwall/po/zh-cn/passwall.po
+index ec62291768..430ec1d914 100644
+--- a/luci-app-passwall/po/zh-cn/passwall.po
++++ b/luci-app-passwall/po/zh-cn/passwall.po
+@@ -112,6 +112,18 @@ msgstr "与TCP节点相同"
+ msgid "Current node: %s"
+ msgstr "当前节点：%s"
+ 
++msgid "DNS Shunt"
++msgstr "DNS分流"
++
++msgid "Domestic group name"
++msgstr "国内分组名"
++
++msgid "You only need to configure domestic DNS packets in SmartDNS and set it redirect or as Dnsmasq upstream, and fill in the domestic DNS group name here."
++msgstr "你只需要在SmartDNS配置好国内DNS分组，并设置重定向或作为Dnsmasq上游，此处填入国内DNS分组名。"
++
++msgid "Guide"
++msgstr "教程"
++
+ msgid "Filter Mode"
+ msgstr "过滤模式"
+ 
+diff --git a/luci-app-passwall/root/usr/share/passwall/app.sh b/luci-app-passwall/root/usr/share/passwall/app.sh
+index fff3f8024f..fb2a3d1b2d 100755
+--- a/luci-app-passwall/root/usr/share/passwall/app.sh
++++ b/luci-app-passwall/root/usr/share/passwall/app.sh
+@@ -1316,6 +1316,16 @@ start_dns() {
+ 
+ 	[ "${use_tcp_node_resolve_dns}" = "1" ] && echolog "  * 请确认上游 DNS 支持 TCP 查询，如非直连地址，确保 TCP 代理打开，并且已经正确转发！"
+ 	[ "${use_udp_node_resolve_dns}" = "1" ] && echolog "  * 要求代理 DNS 请求，如上游 DNS 非直连地址，确保 UDP 代理打开，并且已经正确转发！"
++	
++	case "$DNS_SHUNT" in
++	smartdns)
++		local group_domestic=$(config_t_get global group_domestic)
++		CHINADNS_NG=0
++		source $APP_PATH/helper_smartdns.sh add FLAG="default" DNS_MODE=$DNS_MODE SMARTDNS_CONF=/tmp/etc/smartdns/$CONFIG.conf REMOTE_FAKEDNS=$fakedns DEFAULT_DNS=$DEFAULT_DNS LOCAL_GROUP=$group_domestic TUN_DNS=$TUN_DNS TCP_NODE=$TCP_NODE PROXY_MODE=${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${ACL_TCP_PROXY_MODE} NO_PROXY_IPV6=${filter_proxy_ipv6} NFTFLAG=${nftflag}
++		source $APP_PATH/helper_smartdns.sh restart
++		echolog "  - 域名解析：使用SmartDNS，请确保配置正常。"
++	;;
++	esac
+ 
+ 	[ "$CHINADNS_NG" = "1" ] && [ -n "$(first_type chinadns-ng)" ] && ([ -n "$chnlist" ] || [ -n "$gfwlist" ]) && {
+ 		[ "$FILTER_PROXY_IPV6" = "1" ] && {
+@@ -1699,6 +1709,7 @@ stop() {
+ 	unset V2RAY_LOCATION_ASSET
+ 	unset XRAY_LOCATION_ASSET
+ 	stop_crontab
++	source $APP_PATH/helper_smartdns.sh del
+ 	source $APP_PATH/helper_dnsmasq.sh del
+ 	source $APP_PATH/helper_dnsmasq.sh restart no_log=1
+ 	[ -s "$TMP_PATH/bridge_nf_ipt" ] && sysctl -w net.bridge.bridge-nf-call-iptables=$(cat $TMP_PATH/bridge_nf_ipt) >/dev/null 2>&1
+@@ -1746,7 +1757,8 @@ global=$(echo "${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${UDP_PROXY_MODE}${LO
+ returnhome=$(echo "${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${UDP_PROXY_MODE}${LOCALHOST_UDP_PROXY_MODE}" | grep "returnhome")
+ chnlist=$(echo "${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${UDP_PROXY_MODE}${LOCALHOST_UDP_PROXY_MODE}" | grep "chnroute")
+ gfwlist=$(echo "${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${UDP_PROXY_MODE}${LOCALHOST_UDP_PROXY_MODE}" | grep "gfwlist")
+-DNS_SHUNT="dnsmasq"
++DNS_SHUNT=$(config_t_get global dns_shunt dnsmasq)
++[ -z "$(first_type $DNS_SHUNT)" ] && DNS_SHUNT="dnsmasq"
+ DNS_MODE=$(config_t_get global dns_mode dns2tcp)
+ DNS_CACHE=$(config_t_get global dns_cache 0)
+ REMOTE_DNS=$(config_t_get global remote_dns 1.1.1.1:53 | sed 's/#/:/g' | sed -E 's/\:([^:]+)$/#\1/g')
+diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh b/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
+new file mode 100755
+index 0000000000..36ad537ce8
+--- /dev/null
++++ b/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
+@@ -0,0 +1,39 @@
++#!/bin/sh
++
++restart() {
++	local no_log
++	eval_set_val $@
++	_LOG_FILE=$LOG_FILE
++	[ -n "$no_log" ] && LOG_FILE="/dev/null"
++	rm -rf /tmp/smartdns.cache
++	/etc/init.d/smartdns reload >/dev/null 2>&1
++	LOG_FILE=${_LOG_FILE}
++}
++
++add() {
++	local FLAG SMARTDNS_CONF LOCAL_GROUP REMOTE_GROUP REMOTE_FAKEDNS TUN_DNS TCP_NODE PROXY_MODE NO_PROXY_IPV6 NO_LOGIC_LOG NFTFLAG
++	eval_set_val $@
++	lua $APP_PATH/helper_smartdns_add.lua -FLAG $FLAG -SMARTDNS_CONF $SMARTDNS_CONF -LOCAL_GROUP ${LOCAL_GROUP:-nil} -REMOTE_GROUP ${REMOTE_GROUP:-nil} -REMOTE_FAKEDNS ${REMOTE_FAKEDNS:-0} -TUN_DNS $TUN_DNS -TCP_NODE $TCP_NODE -PROXY_MODE $PROXY_MODE -NO_PROXY_IPV6 ${NO_PROXY_IPV6:-0} -NO_LOGIC_LOG ${NO_LOGIC_LOG:-0} -NFTFLAG ${NFTFLAG:-0}
++}
++
++del() {
++	rm -rf /tmp/etc/smartdns/passwall.conf
++	sed -i "/passwall/d" /etc/smartdns/custom.conf >/dev/null 2>&1
++	rm -rf /tmp/smartdns.cache
++	/etc/init.d/smartdns reload >/dev/null 2>&1
++}
++
++arg1=$1
++shift
++case $arg1 in
++add)
++	add $@
++	;;
++del)
++	del $@
++	;;
++restart)
++	restart $@
++	;;
++*) ;;
++esac
+diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
+new file mode 100644
+index 0000000000..96cbd6b0d2
+--- /dev/null
++++ b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
+@@ -0,0 +1,400 @@
++require "luci.sys"
++local api = require "luci.model.cbi.passwall.api.api"
++
++local var = api.get_args(arg)
++local FLAG = var["-FLAG"]
++local SMARTDNS_CONF = var["-SMARTDNS_CONF"]
++local LOCAL_GROUP = var["-LOCAL_GROUP"]
++local REMOTE_GROUP = var["-REMOTE_GROUP"]
++local REMOTE_FAKEDNS = var["-REMOTE_FAKEDNS"]
++local TUN_DNS = var["-TUN_DNS"]
++local TCP_NODE = var["-TCP_NODE"]
++local PROXY_MODE = var["-PROXY_MODE"]
++local NO_PROXY_IPV6 = var["-NO_PROXY_IPV6"]
++local NO_LOGIC_LOG = var["-NO_LOGIC_LOG"]
++local NFTFLAG = var["-NFTFLAG"]
++local LOG_FILE = api.LOG_FILE
++local CACHE_PATH = api.CACHE_PATH
++local CACHE_FLAG = "dns_" .. FLAG
++local CACHE_DNS_PATH = CACHE_PATH .. "/" .. CACHE_FLAG
++local CACHE_DNS_FILE = CACHE_DNS_PATH .. ".conf"
++local CACHE_TEXT_FILE = CACHE_DNS_PATH .. ".txt"
++local SMARTDNS_PATH = "/tmp/etc/smartdns"
++
++local uci = api.uci
++local sys = api.sys
++local jsonc = api.jsonc
++local appname = api.appname
++local fs = api.fs
++local datatypes = api.datatypes
++
++local list1 = {}
++local excluded_domain = {}
++local excluded_domain_str = "!"
++
++local function log(...)
++    if NO_LOGIC_LOG == "1" then
++        return
++    end
++	local f, err = io.open(LOG_FILE, "a")
++    if f and err == nil then
++        local str = os.date("%Y-%m-%d %H:%M:%S: ") .. table.concat({...}, " ")
++        f:write(str .. "\n")
++        f:close()
++    end
++end
++
++--从url获取域名
++local function get_domain_from_url(url)
++    if url then
++        if datatypes.hostname(url) then
++            return url
++        end
++        local domain = url:match("//([^/]+)")
++        if domain then
++            return domain
++        end
++    end
++    return ""
++end
++
++local function check_ipset(domain, ipset)
++    if domain == "" or domain:find("#") then
++        return false
++    end
++    if not ipset then
++        return
++    end
++	for k,v in ipairs(list1[domain].ipsets) do
++		if ipset == v then
++			return true
++		end
++	end
++    return false
++end
++
++local function set_domain_address(domain, address)
++    if domain == "" or domain:find("#") then
++        return
++    end
++    if not list1[domain] then
++        list1[domain] = {
++            ipsets = {}
++        }
++    end
++    if not list1[domain].address then
++        list1[domain].address = address
++    end
++end
++
++local function set_domain_group(domain, group)
++    if domain == "" or domain:find("#") then
++        return
++    end
++    if not group then
++        return
++    end
++    if not list1[domain] then
++        list1[domain] = {
++            ipsets = {}
++        }
++    end
++    if not list1[domain].group then
++        list1[domain].group = group
++        if group == REMOTE_GROUP then
++            list1[domain].speed_check_mode = "none"
++        end
++    end
++end
++
++local function set_domain_ipset(domain, ipset)
++    if domain == "" or domain:find("#") then
++        return
++    end
++    if not ipset then
++        return
++    end
++    if not list1[domain] then
++        list1[domain] = {
++            ipsets = {}
++        }
++    end
++    for line in string.gmatch(ipset, '[^' .. "," .. ']+') do
++        if not check_ipset(domain, line) then
++            table.insert(list1[domain].ipsets, line)
++        end
++    end
++end
++
++local function add_excluded_domain(domain)
++    if domain == "" or domain:find("#") then
++        return
++    end
++	table.insert(excluded_domain, domain)
++    excluded_domain_str = excluded_domain_str .. "|" .. domain
++end
++
++local function check_excluded_domain(domain)
++    if domain == "" or domain:find("#") then
++        return false
++    end
++	for k,v in ipairs(excluded_domain) do
++		if domain:find(v) then
++			return true
++		end
++	end
++    return false
++end
++
++local cache_text = ""
++local subscribe_proxy=uci:get(appname, "@global_subscribe[0]", "subscribe_proxy") or "0"
++local new_rules = luci.sys.exec("echo -n $(find /usr/share/passwall/rules -type f | xargs md5sum)")
++local new_text = SMARTDNS_CONF .. LOCAL_GROUP .. REMOTE_GROUP .. REMOTE_FAKEDNS .. TUN_DNS .. PROXY_MODE .. NO_PROXY_IPV6 .. subscribe_proxy .. new_rules
++if fs.access(CACHE_TEXT_FILE) then
++    for line in io.lines(CACHE_TEXT_FILE) do
++        cache_text = line
++    end
++end
++
++if cache_text ~= new_text then
++    api.remove(CACHE_DNS_PATH .. "*")
++end
++
++local global = PROXY_MODE:find("global")
++local returnhome = PROXY_MODE:find("returnhome")
++local chnlist = PROXY_MODE:find("chnroute")
++local gfwlist = PROXY_MODE:find("gfwlist")
++
++if not REMOTE_GROUP or REMOTE_GROUP == "nil" then
++    REMOTE_GROUP = "passwall_proxy"
++    if TUN_DNS then
++        TUN_DNS = TUN_DNS:gsub("#", ":")
++    end
++    sys.call('sed -i "/passwall/d" /etc/smartdns/custom.conf >/dev/null 2>&1')
++end
++
++local setflag= (NFTFLAG == "1") and "inet#fw4#" or ""
++
++if not fs.access(CACHE_DNS_FILE) then
++    sys.call(string.format('echo "server %s  -group %s -exclude-default-group" >> %s', TUN_DNS, REMOTE_GROUP, CACHE_DNS_FILE))
++    --屏蔽列表
++    for line in io.lines("/usr/share/passwall/rules/block_host") do
++        if line ~= "" and not line:find("#") then
++            set_domain_address(line, "-")
++        end
++    end
++
++    --始终用国内DNS解析节点域名
++    uci:foreach(appname, "nodes", function(t)
++        local address = t.address
++        if datatypes.hostname(address) then
++            set_domain_group(address, LOCAL_GROUP)
++            set_domain_ipset(address, "#4:" .. setflag .. "vpsiplist,#6:" .. setflag .. "vpsiplist6")
++        end
++    end)
++    log(string.format("  - 节点列表中的域名(vpsiplist)使用分组：%s", LOCAL_GROUP or "默认"))
++
++    --始终用国内DNS解析直连（白名单）列表
++    for line in io.lines("/usr/share/passwall/rules/direct_host") do
++        if line ~= "" and not line:find("#") then
++            add_excluded_domain(line)
++            set_domain_group(line, LOCAL_GROUP)
++            set_domain_ipset(line, "#4:" .. setflag .. "whitelist,#6:" .. setflag .. "whitelist6")
++        end
++    end
++    log(string.format("  - 域名白名单(whitelist)使用分组：%s", LOCAL_GROUP or "默认"))
++
++    local fwd_group = LOCAL_GROUP
++    local ipset_flag = "#4:" .. setflag .. "whitelist,#6:" .. setflag .. "whitelist6"
++    local no_ipv6
++    if subscribe_proxy == "1" then
++        fwd_group = REMOTE_GROUP
++        ipset_flag = "#4:" .. setflag .. "blacklist,#6:" .. setflag .. "blacklist6"
++        if NO_PROXY_IPV6 == "1" then
++            ipset_flag = "#4:" .. setflag .. "blacklist"
++            no_ipv6 = true
++        end
++        if REMOTE_FAKEDNS == "1" then
++            ipset_flag = nil
++        end
++    end
++    uci:foreach(appname, "subscribe_list", function(t)
++        local domain = get_domain_from_url(t.url)
++        if domain then
++            if no_ipv6 then
++                set_domain_address(domain, "#6")
++            end
++            set_domain_group(domain, fwd_group)
++            set_domain_ipset(domain, ipset_flag)
++        end
++    end)
++    log(string.format("  - 节点订阅域名(blacklist)使用分组：%s", fwd_group or "默认"))
++
++    --始终使用远程DNS解析代理（黑名单）列表
++    for line in io.lines("/usr/share/passwall/rules/proxy_host") do
++        if line ~= "" and not line:find("#") then
++            add_excluded_domain(line)
++            local ipset_flag = "#4:" .. setflag .. "blacklist,#6:" .. setflag .. "blacklist6"
++            if NO_PROXY_IPV6 == "1" then
++                set_domain_address(line, "#6")
++                ipset_flag = "#4:" .. setflag .. "blacklist"
++            end
++            if REMOTE_FAKEDNS == "1" then
++                ipset_flag = nil
++            end
++            set_domain_group(line, REMOTE_GROUP)
++            set_domain_ipset(line, ipset_flag)
++        end
++    end
++    log(string.format("  - 代理域名表(blacklist)使用分组：%s", REMOTE_GROUP or "默认"))
++
++    --分流规则
++    if uci:get(appname, TCP_NODE, "protocol") == "_shunt" then
++        local t = uci:get_all(appname, TCP_NODE)
++        local default_node_id = t["default_node"] or "_direct"
++        uci:foreach(appname, "shunt_rules", function(s)
++            local _node_id = t[s[".name"]] or "nil"
++            if _node_id ~= "nil" and _node_id ~= "_blackhole" then
++                if _node_id == "_default" then
++                    _node_id = default_node_id
++                end
++
++                fwd_group = nil
++                ipset_flag = nil
++                no_ipv6 = nil
++
++                if _node_id == "_direct" then
++                    fwd_group = LOCAL_GROUP
++                    ipset_flag = "#4:" .. setflag .. "whitelist,#6:" .. setflag .. "whitelist6"
++                else
++                    fwd_group = REMOTE_GROUP
++                    ipset_flag = "#4:" .. setflag .. "shuntlist,#6:" .. setflag .. "shuntlist6"
++                    if NO_PROXY_IPV6 == "1" then
++                        ipset_flag = "#4:" .. setflag .. "shuntlist"
++                        no_ipv6 = true
++                    end
++                    if REMOTE_FAKEDNS == "1" then
++                        ipset_flag = nil
++                    end
++                end
++
++                local domain_list = s.domain_list or ""
++                for line in string.gmatch(domain_list, "[^\r\n]+") do
++                    if line ~= "" and not line:find("#") and not line:find("regexp:") and not line:find("geosite:") and not line:find("ext:") then
++                        if line:find("domain:") or line:find("full:") then
++                            line = string.match(line, ":([^:]+)$")
++                        end
++                        add_excluded_domain(line)
++                        
++                        if no_ipv6 then
++                            set_domain_address(line, "#6")
++                        end
++                        set_domain_group(line, fwd_group)
++                        set_domain_ipset(line, ipset_flag)
++                    end
++                end
++                if _node_id ~= "_direct" then
++                    log(string.format("  - V2ray/Xray分流规则(%s)使用分组：%s", s.remarks, fwd_group or "默认"))
++                end
++            end
++        end)
++    end
++
++    --如果没有使用回国模式
++    if not returnhome then
++        if fs.access("/usr/share/passwall/rules/gfwlist") then
++            local gfwlist_str = sys.exec('cat /usr/share/passwall/rules/gfwlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '"')
++            for line in string.gmatch(gfwlist_str, "[^\r\n]+") do
++                if line ~= "" then
++                    local ipset_flag = "#4:" .. setflag .. "gfwlist,#6:" .. setflag .. "gfwlist6"
++                    if NO_PROXY_IPV6 == "1" then
++                        ipset_flag = "#4:" .. setflag .. "gfwlist"
++                        set_domain_address(line, "#6")
++                    end
++                    fwd_group = REMOTE_GROUP
++                    if REMOTE_FAKEDNS == "1" then
++                        ipset_flag = nil
++                    end
++                    set_domain_group(line, fwd_group)
++                    set_domain_ipset(line, ipset_flag)
++                end
++            end
++            log(string.format("  - 防火墙域名表(gfwlist)使用分组：%s", fwd_group or "默认"))
++        end
++
++        if fs.access("/usr/share/passwall/rules/chnlist") and chnlist then
++            local chnlist_str = sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '"')
++            for line in string.gmatch(chnlist_str, "[^\r\n]+") do
++                if line ~= "" then
++                    set_domain_group(line, LOCAL_GROUP)
++                    set_domain_ipset(line, "#4:" .. setflag .. "chnroute,#6:" .. setflag .. "chnroute6")
++                end
++            end
++        end
++        log(string.format("  - 中国域名表(chnroute)使用分组：%s", LOCAL_GROUP or "默认"))
++    else
++        if fs.access("/usr/share/passwall/rules/chnlist") then
++            local chnlist_str = sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '"')
++            for line in string.gmatch(chnlist_str, "[^\r\n]+") do
++                if line ~= "" then
++                    local ipset_flag = "#4:" .. setflag .. "chnroute,#6:" .. setflag .. "chnroute6"
++                    if NO_PROXY_IPV6 == "1" then
++                        ipset_flag = "#4:" .. setflag .. "chnroute"
++                        set_domain_address(line, "#6")
++                    end
++                    set_domain_group(line, REMOTE_GROUP)
++                    if REMOTE_FAKEDNS == "1" then
++                        ipset_flag = nil
++                    end
++                    set_domain_ipset(line, ipset_flag)
++                end
++            end
++            log(string.format("  - 中国域名表(chnroute)使用分组：%s", REMOTE_GROUP or "默认"))
++        end
++    end
++
++    local f_out = io.open(CACHE_DNS_FILE, "a")
++    for key, value in pairs(list1) do
++        local group_str = ""
++        local ipset_str = ""
++        local speed_check_mode_str = ""
++        local address_str = ""
++        if value.group and #value.group > 0 then
++            group_str = group_str .. value.group
++        end
++        if group_str ~= "" then
++            group_str = " -n " .. group_str
++        end
++        if value.ipsets and #value.ipsets > 0 then
++            for i, ipset in ipairs(value.ipsets) do
++                ipset_str = ipset_str .. ipset .. ","
++            end
++            ipset_str = ipset_str:sub(1, #ipset_str - 1)
++        end
++        if ipset_str ~= "" then
++            ipset_str = " -p " .. ipset_str
++        end
++        if value.address and #value.address > 0 then
++            address_str = address_str .. value.address
++        end
++        if address_str ~= "" then
++            address_str = " -a " .. address_str
++        end
++        if value.speed_check_mode and #value.speed_check_mode > 0 then
++            speed_check_mode_str = value.speed_check_mode
++        end
++        if speed_check_mode_str ~= "" then
++            speed_check_mode_str = " -c " .. speed_check_mode_str
++        end
++        local str = string.format("domain-rules /%s/ %s%s%s%s\n", key, group_str, ipset_str, address_str, speed_check_mode_str)
++        f_out:write(str)
++    end
++    f_out:close()
++
++    f_out = io.open(CACHE_TEXT_FILE, "a")
++    f_out:write(new_text)
++    f_out:close()
++end
++fs.symlink(CACHE_DNS_FILE, SMARTDNS_CONF)
++sys.call(string.format('echo "conf-file %s" >> /etc/smartdns/custom.conf', SMARTDNS_CONF))
++log("  - 请让SmartDNS作为Dnsmasq的上游或重定向！")
+diff --git a/luci-app-passwall/root/usr/share/passwall/iptables.sh b/luci-app-passwall/root/usr/share/passwall/iptables.sh
+index 7ca818589e..9064d65bf2 100755
+--- a/luci-app-passwall/root/usr/share/passwall/iptables.sh
++++ b/luci-app-passwall/root/usr/share/passwall/iptables.sh
+@@ -1126,6 +1126,7 @@ flush_ipset() {
+ 		destroy_ipset ${_name}
+ 	done
+ 	rm -rf /tmp/singbox_passwall*
++	rm -rf /tmp/etc/passwall_tmp/smartdns*
+ 	rm -rf /tmp/etc/passwall_tmp/dnsmasq*
+ 	/etc/init.d/passwall reload
+ }
+diff --git a/luci-app-passwall/root/usr/share/passwall/nftables.sh b/luci-app-passwall/root/usr/share/passwall/nftables.sh
+index 445da3d1f9..ec9653ff8e 100755
+--- a/luci-app-passwall/root/usr/share/passwall/nftables.sh
++++ b/luci-app-passwall/root/usr/share/passwall/nftables.sh
+@@ -1167,6 +1167,7 @@ flush_nftset() {
+ 		destroy_nftset ${_name}
+ 	done
+ 	rm -rf /tmp/singbox_passwall*
++	rm -rf /tmp/etc/passwall_tmp/smartdns*
+ 	rm -rf /tmp/etc/passwall_tmp/dnsmasq*
+ 	/etc/init.d/passwall reload
+ }
+
+From 3984a7dda50d424c1f29a2b2fe464a68b61ad3fa Mon Sep 17 00:00:00 2001
+From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
+Date: Sun, 19 Feb 2023 02:16:06 +0800
+Subject: [PATCH 2/4] luci: update smartdns shunt logic
+
+---
+ .../luasrc/controller/passwall.lua            |   9 +-
+ .../model/cbi/passwall/client/global.lua      |  66 +-
+ luci-app-passwall/po/zh-cn/passwall.po        |   3 -
+ .../root/usr/share/passwall/app.sh            | 249 +++++---
+ .../usr/share/passwall/helper_smartdns.sh     |   9 -
+ .../share/passwall/helper_smartdns_add.lua    | 601 +++++++++---------
+ 6 files changed, 502 insertions(+), 435 deletions(-)
+
+diff --git a/luci-app-passwall/luasrc/controller/passwall.lua b/luci-app-passwall/luasrc/controller/passwall.lua
+index 119dbe59bf..d0df7c8a0a 100644
+--- a/luci-app-passwall/luasrc/controller/passwall.lua
++++ b/luci-app-passwall/luasrc/controller/passwall.lua
+@@ -186,9 +186,14 @@ function clear_log()
+ end
+ 
+ function status()
+-	-- local dns_mode = ucic:get(appname, "@global[0]", "dns_mode")
+ 	local e = {}
+-	e.dns_mode_status = luci.sys.call("netstat -apn | grep ':15353 ' >/dev/null") == 0
++
++	local dns_shunt = ucic:get(appname, "@global[0]", "dns_shunt") or "dnsmasq"
++	if dns_shunt == "smartdns" then
++		e.dns_mode_status = luci.sys.call("pidof smartdns >/dev/null") == 0
++	else
++		e.dns_mode_status = luci.sys.call("netstat -apn | grep ':15353 ' >/dev/null") == 0
++	end
+ 	e.haproxy_status = luci.sys.call(string.format("top -bn1 | grep -v grep | grep '%s/bin/' | grep haproxy >/dev/null", appname)) == 0
+ 	e["tcp_node_status"] = luci.sys.call(string.format("top -bn1 | grep -v -E 'grep|acl/|acl_' | grep '%s/bin/' | grep -i 'TCP' >/dev/null", appname)) == 0
+ 
+diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+index 4f6c9df804..052a735f73 100644
+--- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
++++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+@@ -259,24 +259,58 @@ end
+ s:tab("DNS", translate("DNS"))
+ 
+ if api.is_finded("smartdns") then
+-    dns_shunt = s:taboption("DNS", ListValue, "dns_shunt", translate("DNS Shunt"))
+-    dns_shunt:value("dnsmasq", "Dnsmasq")
+-    dns_shunt:value("smartdns", "SmartDNS")
+-
+-    group_domestic = s:taboption("DNS", Value, "group_domestic", translate("Domestic group name"))
+-    group_domestic.placeholder = "local"
+-    group_domestic:depends("dns_shunt", "smartdns")
+-    group_domestic.description = translate("You only need to configure domestic DNS packets in SmartDNS and set it redirect or as Dnsmasq upstream, and fill in the domestic DNS group name here.")
+-    group_domestic.description = group_domestic.description .. string.format('<a href="%s" target="_blank">%s</a>', "https://github.com/luckyyyyy/blog/issues/57", translate("Guide"))
++	dns_shunt = s:taboption("DNS", ListValue, "dns_shunt", translate("DNS Shunt"))
++	dns_shunt:value("dnsmasq", "Dnsmasq")
++	dns_shunt:value("smartdns", "SmartDNS")
++
++	group_domestic = s:taboption("DNS", Value, "group_domestic", translate("Domestic group name"))
++	group_domestic.placeholder = "local"
++	group_domestic:depends("dns_shunt", "smartdns")
++	group_domestic.description = translate("You only need to configure domestic DNS packets in SmartDNS and set it redirect or as Dnsmasq upstream, and fill in the domestic DNS group name here.")
+ end
+ 
+ o = s:taboption("DNS", Flag, "filter_proxy_ipv6", translate("Filter Proxy Host IPv6"), translate("Experimental feature."))
+ o.default = "0"
+ 
++if api.is_finded("smartdns") then
++	smartdns_mode = s:taboption("DNS", ListValue, "smartdns_mode", translate("Filter Mode"))
++	smartdns_mode:value("tcp", translatef("Requery DNS By %s", "TCP"))
++	smartdns_mode:value("https", translatef("Requery DNS By %s", "HTTPS"))
++	smartdns_mode:value("tls", translatef("Requery DNS By %s", "TLS"))
++	smartdns_mode:value("udp", translatef("Requery DNS By %s", "UDP"))
++	smartdns_mode:depends("dns_shunt", "smartdns")
++
++	o = s:taboption("DNS", Value, "smartdns_remote_dns", translate("Remote DNS"))
++	o.datatype = "or(ipaddr,ipaddrport)"
++	o.default = "1.1.1.1"
++	o:value("1.1.1.1", "1.1.1.1 (CloudFlare)")
++	o:value("1.1.1.2", "1.1.1.2 (CloudFlare-Security)")
++	o:value("8.8.4.4", "8.8.4.4 (Google)")
++	o:value("8.8.8.8", "8.8.8.8 (Google)")
++	o:value("9.9.9.9", "9.9.9.9 (Quad9-Recommended)")
++	o:value("208.67.220.220", "208.67.220.220 (OpenDNS)")
++	o:value("208.67.222.222", "208.67.222.222 (OpenDNS)")
++	o:depends("smartdns_mode", "tcp")
++	o:depends("smartdns_mode", "udp")
++	o:depends("smartdns_mode", "tls")
++
++	o = s:taboption("DNS", Value, "smartdns_remote_dns_doh", translate("Remote DNS DoH"))
++	o.default = "https://1.1.1.1/dns-query"
++	o:value("https://1.1.1.1/dns-query", "CloudFlare")
++	o:value("https://1.1.1.2/dns-query", "CloudFlare-Security")
++	o:value("https://8.8.4.4/dns-query", "Google 8844")
++	o:value("https://8.8.8.8/dns-query", "Google 8888")
++	o:value("https://9.9.9.9/dns-query", "Quad9-Recommended")
++	o:value("https://208.67.222.222/dns-query", "OpenDNS")
++	o:value("https://dns.adguard.com/dns-query,176.103.130.130", "AdGuard")
++	o:value("https://doh.libredns.gr/dns-query,116.202.176.26", "LibreDNS")
++	o:value("https://doh.libredns.gr/ads,116.202.176.26", "LibreDNS (No Ads)")
++	o.validate = doh_validate
++	o:depends("smartdns_mode", "https")
++end
++
+ ---- DNS Forward Mode
+ dns_mode = s:taboption("DNS", ListValue, "dns_mode", translate("Filter Mode"))
+-dns_mode.rmempty = false
+-dns_mode:reset_values()
+ if api.is_finded("dns2tcp") then
+ 	dns_mode:value("dns2tcp", translatef("Requery DNS By %s", "TCP"))
+ end
+@@ -290,6 +324,9 @@ if has_xray then
+ 	dns_mode:value("xray", "Xray")
+ end
+ dns_mode:value("udp", translatef("Requery DNS By %s", "UDP"))
++if api.is_finded("smartdns") then
++	dns_mode:depends("dns_shunt", "dnsmasq")
++end
+ 
+ o = s:taboption("DNS", ListValue, "xray_dns_mode", " ")
+ o:value("tcp", "TCP")
+@@ -421,9 +458,14 @@ if has_chnlist then
+ 	.. "<li>" .. translate("Remote DNS can avoid more DNS leaks, but some domestic domain names maybe to proxy!") .. "</li>"
+ 	.. "<li>" .. translate("Direct DNS Internet experience may be better, but DNS will be leaked!") .. "</li>"
+ 	.. "</ul>"
++	local _depends = {}
++	if api.is_finded("smartdns") then
++		_depends["dns_shunt"] = "dnsmasq"
++	end
+ 	if api.is_finded("chinadns-ng") then
+-		when_chnroute_default_dns:depends("chinadns_ng", false)
++		_depends["chinadns_ng"] = false
+ 	end
++	when_chnroute_default_dns:depends(_depends)
+ end
+ 
+ o = s:taboption("DNS", Button, "clear_ipset", translate("Clear IPSET"), translate("Try this feature if the rule modification does not take effect."))
+diff --git a/luci-app-passwall/po/zh-cn/passwall.po b/luci-app-passwall/po/zh-cn/passwall.po
+index 430ec1d914..5e8685149f 100644
+--- a/luci-app-passwall/po/zh-cn/passwall.po
++++ b/luci-app-passwall/po/zh-cn/passwall.po
+@@ -121,9 +121,6 @@ msgstr "国内分组名"
+ msgid "You only need to configure domestic DNS packets in SmartDNS and set it redirect or as Dnsmasq upstream, and fill in the domestic DNS group name here."
+ msgstr "你只需要在SmartDNS配置好国内DNS分组，并设置重定向或作为Dnsmasq上游，此处填入国内DNS分组名。"
+ 
+-msgid "Guide"
+-msgstr "教程"
+-
+ msgid "Filter Mode"
+ msgstr "过滤模式"
+ 
+diff --git a/luci-app-passwall/root/usr/share/passwall/app.sh b/luci-app-passwall/root/usr/share/passwall/app.sh
+index fb2a3d1b2d..9d1be05ac9 100755
+--- a/luci-app-passwall/root/usr/share/passwall/app.sh
++++ b/luci-app-passwall/root/usr/share/passwall/app.sh
+@@ -1235,117 +1235,108 @@ start_dns() {
+ 		}
+ 	}
+ 
+-	case "$DNS_MODE" in
+-	dns2socks)
+-		local dns2socks_socks_server=$(echo $(config_t_get global socks_server 127.0.0.1:1080) | sed "s/#/:/g")
+-		local dns2socks_forward=$(get_first_dns REMOTE_DNS 53 | sed 's/#/:/g')
+-		run_dns2socks socks=$dns2socks_socks_server listen_address=127.0.0.1 listen_port=${dns_listen_port} dns=$dns2socks_forward cache=$DNS_CACHE
+-		echolog "  - 域名解析：dns2socks(127.0.0.1:${dns_listen_port})，${dns2socks_socks_server} -> ${dns2socks_forward}"
+-	;;
+-	sing-box)
+-		[ "${resolve_dns}" == "0" ] && {
+-			local config_file=$TMP_PATH/DNS.json
+-			local log_file=$TMP_PATH/DNS.log
+-			local log_file=/dev/null
+-			local _args="type=$DNS_MODE config_file=$config_file log_file=$log_file"
+-			[ "${DNS_CACHE}" == "0" ] && _args="${_args} dns_cache=0"
+-			_args="${_args} remote_dns_query_strategy=${DNS_QUERY_STRATEGY}"
+-			use_tcp_node_resolve_dns=1
+-			local v2ray_dns_mode=$(config_t_get global v2ray_dns_mode tcp)
+-			_args="${_args} dns_listen_port=${dns_listen_port}"
+-			_args="${_args} remote_dns_protocol=${v2ray_dns_mode}"
+-			case "$v2ray_dns_mode" in
+-				tcp)
+-					_args="${_args} remote_dns_tcp_server=${REMOTE_DNS}"
+-					echolog "  - 域名解析 DNS Over TCP..."
+-				;;
+-				doh)
++	case "$DNS_SHUNT" in
++	dnsmasq)
++		rm -rf $TMP_PATH2/smartdns_default*
++		case "$DNS_MODE" in
++		dns2socks)
++			local dns2socks_socks_server=$(echo $(config_t_get global socks_server 127.0.0.1:1080) | sed "s/#/:/g")
++			local dns2socks_forward=$(get_first_dns REMOTE_DNS 53 | sed 's/#/:/g')
++			run_dns2socks socks=$dns2socks_socks_server listen_address=127.0.0.1 listen_port=${dns_listen_port} dns=$dns2socks_forward cache=$DNS_CACHE
++			echolog "  - 域名解析：dns2socks(127.0.0.1:${dns_listen_port})，${dns2socks_socks_server} -> ${dns2socks_forward}"
++		;;
++		sing-box)
++			[ "${resolve_dns}" == "0" ] && {
++				local config_file=$TMP_PATH/DNS.json
++				local log_file=$TMP_PATH/DNS.log
++				local log_file=/dev/null
++				local _args="type=$DNS_MODE config_file=$config_file log_file=$log_file"
++				[ "${DNS_CACHE}" == "0" ] && _args="${_args} dns_cache=0"
++				_args="${_args} remote_dns_query_strategy=${DNS_QUERY_STRATEGY}"
++				use_tcp_node_resolve_dns=1
++				local v2ray_dns_mode=$(config_t_get global v2ray_dns_mode tcp)
++				_args="${_args} dns_listen_port=${dns_listen_port}"
++				_args="${_args} remote_dns_protocol=${v2ray_dns_mode}"
++				case "$v2ray_dns_mode" in
++					tcp)
++						_args="${_args} remote_dns_tcp_server=${REMOTE_DNS}"
++						echolog "  - 域名解析 DNS Over TCP..."
++					;;
++					doh)
++						remote_dns_doh=$(config_t_get global remote_dns_doh "https://1.1.1.1/dns-query")
++						_args="${_args} remote_dns_doh=${remote_dns_doh}"
++
++						local _doh_url=$(echo $remote_dns_doh | awk -F ',' '{print $1}')
++						local _doh_host_port=$(lua_api "get_domain_from_url(\"${_doh_url}\")")
++						local _doh_host=$(echo $_doh_host_port | awk -F ':' '{print $1}')
++						local _is_ip=$(lua_api "is_ip(\"${_doh_host}\")")
++						local _doh_port=$(echo $_doh_host_port | awk -F ':' '{print $2}')
++						[ -z "${_doh_port}" ] && _doh_port=443
++						local _doh_bootstrap=$(echo $remote_dns_doh | cut -d ',' -sf 2-)
++						[ "${_is_ip}" = "true" ] && _doh_bootstrap=${_doh_host}
++						[ -n "${_doh_bootstrap}" ] && REMOTE_DNS=${_doh_bootstrap}:${_doh_port}
++						unset _doh_url _doh_host_port _doh_host _is_ip _doh_port _doh_bootstrap
++						echolog "  - 域名解析 DNS Over HTTPS..."
++					;;
++				esac
++				_args="${_args} dns_socks_address=127.0.0.1 dns_socks_port=${tcp_node_socks_port}"
++				run_singbox ${_args}
++			}
++		;;
++		xray)
++			[ "${resolve_dns}" == "0" ] && {
++				local config_file=$TMP_PATH/DNS.json
++				local log_file=$TMP_PATH/DNS.log
++				local log_file=/dev/null
++				local _args="type=$DNS_MODE config_file=$config_file log_file=$log_file"
++				[ "${DNS_CACHE}" == "0" ] && _args="${_args} dns_cache=0"
++				_args="${_args} dns_query_strategy=${DNS_QUERY_STRATEGY}"
++				local _dns_client_ip=$(config_t_get global dns_client_ip)
++				[ -n "${_dns_client_ip}" ] && _args="${_args} dns_client_ip=${_dns_client_ip}"
++				use_tcp_node_resolve_dns=1
++				_args="${_args} dns_listen_port=${dns_listen_port}"
++				_args="${_args} remote_dns_tcp_server=${REMOTE_DNS}"
++				local v2ray_dns_mode=$(config_t_get global v2ray_dns_mode tcp)
++				[ "$v2ray_dns_mode" = "tcp+doh" ] && {
+ 					remote_dns_doh=$(config_t_get global remote_dns_doh "https://1.1.1.1/dns-query")
+ 					_args="${_args} remote_dns_doh=${remote_dns_doh}"
+-
+-					local _doh_url=$(echo $remote_dns_doh | awk -F ',' '{print $1}')
+-					local _doh_host_port=$(lua_api "get_domain_from_url(\"${_doh_url}\")")
+-					local _doh_host=$(echo $_doh_host_port | awk -F ':' '{print $1}')
+-					local _is_ip=$(lua_api "is_ip(\"${_doh_host}\")")
+-					local _doh_port=$(echo $_doh_host_port | awk -F ':' '{print $2}')
+-					[ -z "${_doh_port}" ] && _doh_port=443
+-					local _doh_bootstrap=$(echo $remote_dns_doh | cut -d ',' -sf 2-)
+-					[ "${_is_ip}" = "true" ] && _doh_bootstrap=${_doh_host}
+-					[ -n "${_doh_bootstrap}" ] && REMOTE_DNS=${_doh_bootstrap}:${_doh_port}
+-					unset _doh_url _doh_host_port _doh_host _is_ip _doh_port _doh_bootstrap
+-					echolog "  - 域名解析 DNS Over HTTPS..."
+-				;;
+-			esac
+-			_args="${_args} dns_socks_address=127.0.0.1 dns_socks_port=${tcp_node_socks_port}"
+-			run_singbox ${_args}
+-		}
+-	;;
+-	xray)
+-		[ "${resolve_dns}" == "0" ] && {
+-			local config_file=$TMP_PATH/DNS.json
+-			local log_file=$TMP_PATH/DNS.log
+-			local log_file=/dev/null
+-			local _args="type=$DNS_MODE config_file=$config_file log_file=$log_file"
+-			[ "${DNS_CACHE}" == "0" ] && _args="${_args} dns_cache=0"
+-			_args="${_args} dns_query_strategy=${DNS_QUERY_STRATEGY}"
+-			local _dns_client_ip=$(config_t_get global dns_client_ip)
+-			[ -n "${_dns_client_ip}" ] && _args="${_args} dns_client_ip=${_dns_client_ip}"
+-			use_tcp_node_resolve_dns=1
+-			_args="${_args} dns_listen_port=${dns_listen_port}"
+-			_args="${_args} remote_dns_tcp_server=${REMOTE_DNS}"
+-			local v2ray_dns_mode=$(config_t_get global v2ray_dns_mode tcp)
+-			[ "$v2ray_dns_mode" = "tcp+doh" ] && {
+-				remote_dns_doh=$(config_t_get global remote_dns_doh "https://1.1.1.1/dns-query")
+-				_args="${_args} remote_dns_doh=${remote_dns_doh}"
++				}
++				_args="${_args} dns_socks_address=127.0.0.1 dns_socks_port=${tcp_node_socks_port}"
++				run_xray ${_args}
+ 			}
+-			_args="${_args} dns_socks_address=127.0.0.1 dns_socks_port=${tcp_node_socks_port}"
+-			run_xray ${_args}
+-		}
+-	;;
+-	dns2tcp)
+-		use_tcp_node_resolve_dns=1
+-		ln_run "$(first_type dns2tcp)" dns2tcp "/dev/null" -L "${TUN_DNS}" -R "$(get_first_dns REMOTE_DNS 53)" -v
+-		echolog "  - 域名解析：dns2tcp + 使用(TCP节点)解析域名..."
+-	;;
+-	udp)
+-		use_udp_node_resolve_dns=1
+-		TUN_DNS="$(echo ${REMOTE_DNS} | sed 's/#/:/g' | sed -E 's/\:([^:]+)$/#\1/g')"
+-		echolog "  - 域名解析：使用UDP协议请求DNS（$TUN_DNS）..."
+-	;;
+-	esac
++		;;
++		dns2tcp)
++			use_tcp_node_resolve_dns=1
++			ln_run "$(first_type dns2tcp)" dns2tcp "/dev/null" -L "${TUN_DNS}" -R "$(get_first_dns REMOTE_DNS 53)" -v
++			echolog "  - 域名解析：dns2tcp + 使用(TCP节点)解析域名..."
++		;;
++		udp)
++			use_udp_node_resolve_dns=1
++			TUN_DNS="$(echo ${REMOTE_DNS} | sed 's/#/:/g' | sed -E 's/\:([^:]+)$/#\1/g')"
++			echolog "  - 域名解析：使用UDP协议请求DNS（$TUN_DNS）..."
++		;;
++		esac
+ 
+-	[ "${use_tcp_node_resolve_dns}" = "1" ] && echolog "  * 请确认上游 DNS 支持 TCP 查询，如非直连地址，确保 TCP 代理打开，并且已经正确转发！"
+-	[ "${use_udp_node_resolve_dns}" = "1" ] && echolog "  * 要求代理 DNS 请求，如上游 DNS 非直连地址，确保 UDP 代理打开，并且已经正确转发！"
+-	
+-	case "$DNS_SHUNT" in
+-	smartdns)
+-		local group_domestic=$(config_t_get global group_domestic)
+-		CHINADNS_NG=0
+-		source $APP_PATH/helper_smartdns.sh add FLAG="default" DNS_MODE=$DNS_MODE SMARTDNS_CONF=/tmp/etc/smartdns/$CONFIG.conf REMOTE_FAKEDNS=$fakedns DEFAULT_DNS=$DEFAULT_DNS LOCAL_GROUP=$group_domestic TUN_DNS=$TUN_DNS TCP_NODE=$TCP_NODE PROXY_MODE=${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${ACL_TCP_PROXY_MODE} NO_PROXY_IPV6=${filter_proxy_ipv6} NFTFLAG=${nftflag}
+-		source $APP_PATH/helper_smartdns.sh restart
+-		echolog "  - 域名解析：使用SmartDNS，请确保配置正常。"
+-	;;
+-	esac
++		[ "${use_tcp_node_resolve_dns}" = "1" ] && echolog "  * 请确认上游 DNS 支持 TCP 查询，如非直连地址，确保 TCP 代理打开，并且已经正确转发！"
++		[ "${use_udp_node_resolve_dns}" = "1" ] && echolog "  * 要求代理 DNS 请求，如上游 DNS 非直连地址，确保 UDP 代理打开，并且已经正确转发！"
+ 
+-	[ "$CHINADNS_NG" = "1" ] && [ -n "$(first_type chinadns-ng)" ] && ([ -n "$chnlist" ] || [ -n "$gfwlist" ]) && {
+-		[ "$FILTER_PROXY_IPV6" = "1" ] && {
+-			local _no_ipv6_rules="gt"
++		[ "$CHINADNS_NG" = "1" ] && [ -n "$(first_type chinadns-ng)" ] && ([ -n "$chnlist" ] || [ -n "$gfwlist" ]) && {
++			[ "$FILTER_PROXY_IPV6" = "1" ] && {
++				local _no_ipv6_rules="gt"
++			}
++			local china_ng_listen_port=$(expr $dns_listen_port + 1)
++			local china_ng_listen="127.0.0.1#${china_ng_listen_port}"
++			run_chinadns_ng \
++				_listen_port=${china_ng_listen_port} \
++				_dns_china=$(echo -n $(echo "${LOCAL_DNS}" | sed "s/,/\n/g" | head -n2) | tr " " ",") \
++				_dns_trust="${TUN_DNS}" \
++				_chnlist="${chnlist}" \
++				_gfwlist="${gfwlist}" \
++				_no_ipv6_rules="${_no_ipv6_rules}" \
++				_log_path="${TMP_PATH}/chinadns-ng.log"
++
++			WHEN_CHNROUTE_DEFAULT_DNS="chinadns_ng"
+ 		}
+-		local china_ng_listen_port=$(expr $dns_listen_port + 1)
+-		local china_ng_listen="127.0.0.1#${china_ng_listen_port}"
+-		run_chinadns_ng \
+-			_listen_port=${china_ng_listen_port} \
+-			_dns_china=$(echo -n $(echo "${LOCAL_DNS}" | sed "s/,/\n/g" | head -n2) | tr " " ",") \
+-			_dns_trust="${TUN_DNS}" \
+-			_chnlist="${chnlist}" \
+-			_gfwlist="${gfwlist}" \
+-			_no_ipv6_rules="${_no_ipv6_rules}" \
+-			_log_path="${TMP_PATH}/chinadns-ng.log"
+-
+-		WHEN_CHNROUTE_DEFAULT_DNS="chinadns_ng"
+-	}
+-
+-	[ "$DNS_SHUNT" = "dnsmasq" ] && {
+ 		[ "$WHEN_CHNROUTE_DEFAULT_DNS" = "remote" ] && {
+ 			dnsmasq_version=$(dnsmasq -v | grep -i "Dnsmasq version " | awk '{print $3}')
+ 			[ "$(expr $dnsmasq_version \>= 2.87)" == 0 ] && echolog "Dnsmasq版本低于2.87，有可能无法正常使用！！！"
+@@ -1356,7 +1347,53 @@ start_dns() {
+ 			-TUN_DNS ${TUN_DNS} -REMOTE_FAKEDNS ${fakedns:-0} -CHNROUTE_MODE_DEFAULT_DNS "${WHEN_CHNROUTE_DEFAULT_DNS:-direct}" -CHINADNS_DNS ${china_ng_listen:-0} \
+ 			-TCP_NODE ${TCP_NODE} -PROXY_MODE "${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${ACL_TCP_PROXY_MODE}" -NO_PROXY_IPV6 ${FILTER_PROXY_IPV6:-0} -NFTFLAG ${nftflag:-0} \
+ 			-NO_LOGIC_LOG ${NO_LOGIC_LOG:-0}
+-	}
++	;;
++	smartdns)
++		rm -rf $TMP_PATH2/dnsmasq_default*
++		local SMARTDNS_TUN_DNS=
++		local SMARTDNS_TUN_DNS_PROTO=
++		local group_domestic=$(config_t_get global group_domestic)
++		local smartdns_mode=$(config_t_get global smartdns_mode)
++		case "$smartdns_mode" in
++		tcp)
++			SMARTDNS_TUN_DNS_PROTO="tcp"
++			SMARTDNS_TUN_DNS=$(config_t_get global smartdns_remote_dns 1.1.1.1)
++		;;
++		udp)
++			SMARTDNS_TUN_DNS_PROTO="udp"
++			SMARTDNS_TUN_DNS=$(config_t_get global smartdns_remote_dns 1.1.1.1)
++		;;
++		tls)
++			SMARTDNS_TUN_DNS_PROTO="tls"
++			SMARTDNS_TUN_DNS=$(config_t_get global smartdns_remote_dns 1.1.1.1)
++		;;
++		https)
++			SMARTDNS_TUN_DNS_PROTO="https"
++			SMARTDNS_TUN_DNS=$(config_t_get global smartdns_remote_dns_doh https://1.1.1.1/dns-query)
++			
++			local _doh_url=$(echo $SMARTDNS_TUN_DNS | awk -F ',' '{print $1}')
++			local _doh_host_port=$(lua_api "get_domain_from_url(\"${_doh_url}\")")
++			local _doh_host=$(echo $_doh_host_port | awk -F ':' '{print $1}')
++			local _is_ip=$(lua_api "is_ip(\"${_doh_host}\")")
++			local _doh_port=$(echo $_doh_host_port | awk -F ':' '{print $2}')
++			[ -z "${_doh_port}" ] && _doh_port=443
++			local _doh_bootstrap=$(echo $SMARTDNS_TUN_DNS | cut -d ',' -sf 2-)
++			SMARTDNS_TUN_DNS=${_doh_url}
++			[ -n "${_doh_bootstrap}" ] && {
++				SMARTDNS_TUN_DNS=$(echo "$_doh_url" | sed "s#${_doh_host}#${_doh_bootstrap}#g")
++				SMARTDNS_TUN_HTTP_HOST=${_doh_host}
++			}
++		;;
++		esac
++		lua $APP_PATH/helper_smartdns_add.lua -FLAG "default" -SMARTDNS_CONF "/tmp/etc/smartdns/$CONFIG.conf" \
++			-LOCAL_GROUP ${group_domestic:-nil} -REMOTE_GROUP "passwall_proxy" -REMOTE_PROXY_SERVER $(cat $TMP_PATH/TCP_SOCKS_server) \
++			-TUN_DNS_PROTO $SMARTDNS_TUN_DNS_PROTO -TUN_DNS $SMARTDNS_TUN_DNS -TUN_HTTP_HOST ${SMARTDNS_TUN_HTTP_HOST:-nil} \
++			-TCP_NODE $TCP_NODE -PROXY_MODE "${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${ACL_TCP_PROXY_MODE}" -NO_PROXY_IPV6 ${FILTER_PROXY_IPV6:-0} -NFTFLAG ${nftflag:-0} \
++			-NO_LOGIC_LOG ${NO_LOGIC_LOG:-0}
++		source $APP_PATH/helper_smartdns.sh restart
++		echolog "  - 域名解析：使用SmartDNS，请确保配置正常。"
++	;;
++	esac
+ }
+ 
+ add_ip2route() {
+diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh b/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
+index 36ad537ce8..14254f141f 100755
+--- a/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
++++ b/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
+@@ -10,12 +10,6 @@ restart() {
+ 	LOG_FILE=${_LOG_FILE}
+ }
+ 
+-add() {
+-	local FLAG SMARTDNS_CONF LOCAL_GROUP REMOTE_GROUP REMOTE_FAKEDNS TUN_DNS TCP_NODE PROXY_MODE NO_PROXY_IPV6 NO_LOGIC_LOG NFTFLAG
+-	eval_set_val $@
+-	lua $APP_PATH/helper_smartdns_add.lua -FLAG $FLAG -SMARTDNS_CONF $SMARTDNS_CONF -LOCAL_GROUP ${LOCAL_GROUP:-nil} -REMOTE_GROUP ${REMOTE_GROUP:-nil} -REMOTE_FAKEDNS ${REMOTE_FAKEDNS:-0} -TUN_DNS $TUN_DNS -TCP_NODE $TCP_NODE -PROXY_MODE $PROXY_MODE -NO_PROXY_IPV6 ${NO_PROXY_IPV6:-0} -NO_LOGIC_LOG ${NO_LOGIC_LOG:-0} -NFTFLAG ${NFTFLAG:-0}
+-}
+-
+ del() {
+ 	rm -rf /tmp/etc/smartdns/passwall.conf
+ 	sed -i "/passwall/d" /etc/smartdns/custom.conf >/dev/null 2>&1
+@@ -26,9 +20,6 @@ del() {
+ arg1=$1
+ shift
+ case $arg1 in
+-add)
+-	add $@
+-	;;
+ del)
+ 	del $@
+ 	;;
+diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
+index 96cbd6b0d2..1154c5c150 100644
+--- a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
++++ b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
+@@ -1,21 +1,22 @@
+ require "luci.sys"
+-local api = require "luci.model.cbi.passwall.api.api"
++local api = require "luci.passwall.api"
+ 
+ local var = api.get_args(arg)
+ local FLAG = var["-FLAG"]
+ local SMARTDNS_CONF = var["-SMARTDNS_CONF"]
+ local LOCAL_GROUP = var["-LOCAL_GROUP"]
+ local REMOTE_GROUP = var["-REMOTE_GROUP"]
+-local REMOTE_FAKEDNS = var["-REMOTE_FAKEDNS"]
++local REMOTE_PROXY_SERVER = var["-REMOTE_PROXY_SERVER"]
++local TUN_DNS_PROTO = var["-TUN_DNS_PROTO"]
+ local TUN_DNS = var["-TUN_DNS"]
++local TUN_HTTP_HOST = var["-TUN_HTTP_HOST"]
+ local TCP_NODE = var["-TCP_NODE"]
+ local PROXY_MODE = var["-PROXY_MODE"]
+ local NO_PROXY_IPV6 = var["-NO_PROXY_IPV6"]
+ local NO_LOGIC_LOG = var["-NO_LOGIC_LOG"]
+ local NFTFLAG = var["-NFTFLAG"]
+-local LOG_FILE = api.LOG_FILE
+ local CACHE_PATH = api.CACHE_PATH
+-local CACHE_FLAG = "dns_" .. FLAG
++local CACHE_FLAG = "smartdns_" .. FLAG
+ local CACHE_DNS_PATH = CACHE_PATH .. "/" .. CACHE_FLAG
+ local CACHE_DNS_FILE = CACHE_DNS_PATH .. ".conf"
+ local CACHE_TEXT_FILE = CACHE_DNS_PATH .. ".txt"
+@@ -33,131 +34,125 @@ local excluded_domain = {}
+ local excluded_domain_str = "!"
+ 
+ local function log(...)
+-    if NO_LOGIC_LOG == "1" then
+-        return
+-    end
+-	local f, err = io.open(LOG_FILE, "a")
+-    if f and err == nil then
+-        local str = os.date("%Y-%m-%d %H:%M:%S: ") .. table.concat({...}, " ")
+-        f:write(str .. "\n")
+-        f:close()
+-    end
+-end
+-
+---从url获取域名
+-local function get_domain_from_url(url)
+-    if url then
+-        if datatypes.hostname(url) then
+-            return url
+-        end
+-        local domain = url:match("//([^/]+)")
+-        if domain then
+-            return domain
+-        end
+-    end
+-    return ""
++	if NO_LOGIC_LOG == "1" then
++		return
++	end
++	api.log(...)
+ end
+ 
+ local function check_ipset(domain, ipset)
+-    if domain == "" or domain:find("#") then
+-        return false
+-    end
+-    if not ipset then
+-        return
+-    end
++	if domain == "" or domain:find("#") then
++		return false
++	end
++	if not ipset then
++		return
++	end
+ 	for k,v in ipairs(list1[domain].ipsets) do
+ 		if ipset == v then
+ 			return true
+ 		end
+ 	end
+-    return false
++	return false
++end
++
++local function set_domain_extra_param(domain, param)
++	if domain == "" or domain:find("#") then
++		return
++	end
++	if not list1[domain] then
++		list1[domain] = {
++			params = {}
++		}
++	end
++	if not list1[domain].params then
++		list1[domain].params = {}
++	end
++	if not list1[domain].params[param] then
++		list1[domain].params[param] = param
++	end
+ end
+ 
+ local function set_domain_address(domain, address)
+-    if domain == "" or domain:find("#") then
+-        return
+-    end
+-    if not list1[domain] then
+-        list1[domain] = {
+-            ipsets = {}
+-        }
+-    end
+-    if not list1[domain].address then
+-        list1[domain].address = address
+-    end
++	if domain == "" or domain:find("#") then
++		return
++	end
++	if not list1[domain] then
++		list1[domain] = {}
++	end
++	if not list1[domain].address then
++		list1[domain].address = address
++	end
+ end
+ 
+ local function set_domain_group(domain, group)
+-    if domain == "" or domain:find("#") then
+-        return
+-    end
+-    if not group then
+-        return
+-    end
+-    if not list1[domain] then
+-        list1[domain] = {
+-            ipsets = {}
+-        }
+-    end
+-    if not list1[domain].group then
+-        list1[domain].group = group
+-        if group == REMOTE_GROUP then
+-            list1[domain].speed_check_mode = "none"
+-        end
+-    end
++	if domain == "" or domain:find("#") then
++		return
++	end
++	if not group then
++		return
++	end
++	if not list1[domain] then
++		list1[domain] = {}
++	end
++	if not list1[domain].group then
++		list1[domain].group = group
++		if group == REMOTE_GROUP then
++			list1[domain].speed_check_mode = "none"
++		end
++	end
+ end
+ 
+ local function set_domain_ipset(domain, ipset)
+-    if domain == "" or domain:find("#") then
+-        return
+-    end
+-    if not ipset then
+-        return
+-    end
+-    if not list1[domain] then
+-        list1[domain] = {
+-            ipsets = {}
+-        }
+-    end
+-    for line in string.gmatch(ipset, '[^' .. "," .. ']+') do
+-        if not check_ipset(domain, line) then
+-            table.insert(list1[domain].ipsets, line)
+-        end
+-    end
++	if domain == "" or domain:find("#") then
++		return
++	end
++	if not ipset then
++		return
++	end
++	if not list1[domain] then
++		list1[domain] = {}
++	end
++	if not list1[domain].ipsets then
++		list1[domain].ipsets = {}
++	end
++	for line in string.gmatch(ipset, '[^' .. "," .. ']+') do
++		if not check_ipset(domain, line) then
++			table.insert(list1[domain].ipsets, line)
++		end
++	end
+ end
+ 
+ local function add_excluded_domain(domain)
+-    if domain == "" or domain:find("#") then
+-        return
+-    end
++	if domain == "" or domain:find("#") then
++		return
++	end
+ 	table.insert(excluded_domain, domain)
+-    excluded_domain_str = excluded_domain_str .. "|" .. domain
++	excluded_domain_str = excluded_domain_str .. "|" .. domain
+ end
+ 
+ local function check_excluded_domain(domain)
+-    if domain == "" or domain:find("#") then
+-        return false
+-    end
++	if domain == "" or domain:find("#") then
++		return false
++	end
+ 	for k,v in ipairs(excluded_domain) do
+ 		if domain:find(v) then
+ 			return true
+ 		end
+ 	end
+-    return false
++	return false
+ end
+ 
+ local cache_text = ""
+-local subscribe_proxy=uci:get(appname, "@global_subscribe[0]", "subscribe_proxy") or "0"
+ local new_rules = luci.sys.exec("echo -n $(find /usr/share/passwall/rules -type f | xargs md5sum)")
+-local new_text = SMARTDNS_CONF .. LOCAL_GROUP .. REMOTE_GROUP .. REMOTE_FAKEDNS .. TUN_DNS .. PROXY_MODE .. NO_PROXY_IPV6 .. subscribe_proxy .. new_rules
++local new_text = SMARTDNS_CONF .. LOCAL_GROUP .. REMOTE_GROUP .. REMOTE_PROXY_SERVER .. TUN_DNS_PROTO .. TUN_DNS .. PROXY_MODE .. NO_PROXY_IPV6 .. new_rules
+ if fs.access(CACHE_TEXT_FILE) then
+-    for line in io.lines(CACHE_TEXT_FILE) do
+-        cache_text = line
+-    end
++	for line in io.lines(CACHE_TEXT_FILE) do
++		cache_text = line
++	end
+ end
+ 
+ if cache_text ~= new_text then
+-    api.remove(CACHE_DNS_PATH .. "*")
++	api.remove(CACHE_DNS_PATH .. "*")
+ end
+ 
+ local global = PROXY_MODE:find("global")
+@@ -165,235 +160,235 @@ local returnhome = PROXY_MODE:find("returnhome")
+ local chnlist = PROXY_MODE:find("chnroute")
+ local gfwlist = PROXY_MODE:find("gfwlist")
+ 
++if LOCAL_GROUP == "nil" then
++	LOCAL_GROUP = nil
++end
++
+ if not REMOTE_GROUP or REMOTE_GROUP == "nil" then
+-    REMOTE_GROUP = "passwall_proxy"
+-    if TUN_DNS then
+-        TUN_DNS = TUN_DNS:gsub("#", ":")
+-    end
+-    sys.call('sed -i "/passwall/d" /etc/smartdns/custom.conf >/dev/null 2>&1')
++	REMOTE_GROUP = "passwall_proxy"
++	if TUN_DNS then
++		TUN_DNS = TUN_DNS:gsub("#", ":")
++	end
++	sys.call('sed -i "/passwall/d" /etc/smartdns/custom.conf >/dev/null 2>&1')
+ end
+ 
+ local setflag= (NFTFLAG == "1") and "inet#fw4#" or ""
+ 
+ if not fs.access(CACHE_DNS_FILE) then
+-    sys.call(string.format('echo "server %s  -group %s -exclude-default-group" >> %s', TUN_DNS, REMOTE_GROUP, CACHE_DNS_FILE))
+-    --屏蔽列表
+-    for line in io.lines("/usr/share/passwall/rules/block_host") do
+-        if line ~= "" and not line:find("#") then
+-            set_domain_address(line, "-")
+-        end
+-    end
++	local proxy_server_name = "passwall-proxy-server"
++	sys.call(string.format('echo "proxy-server socks5://%s -name %s" >> %s', REMOTE_PROXY_SERVER, proxy_server_name, CACHE_DNS_FILE))
++	if true then
++		local server_param = string.format("server%s %s -group %s -exclude-default-group -proxy %s", "%s", TUN_DNS, REMOTE_GROUP, proxy_server_name)
++		if TUN_DNS_PROTO == "tcp" then
++			server_param = string.format(server_param, "-tcp")
++		elseif TUN_DNS_PROTO == "udp" then
++			server_param = string.format(server_param, "")
++		elseif TUN_DNS_PROTO == "tls" then
++			server_param = string.format(server_param, "-tls")
++		elseif TUN_DNS_PROTO == "https" then
++			server_param = string.format(server_param, "-https")
++			if TUN_HTTP_HOST and TUN_HTTP_HOST ~= "nil" then
++				server_param = server_param .. " -http-host " .. TUN_HTTP_HOST
++			end
++		end
++		sys.exec(string.format('echo "%s" >> %s', server_param, CACHE_DNS_FILE))
++	end
++
++	local setflag= (NFTFLAG == "1") and "inet#fw4#" or ""
++	local set_type= (NFTFLAG == "1") and "-nftset" or "-ipset"
+ 
+-    --始终用国内DNS解析节点域名
+-    uci:foreach(appname, "nodes", function(t)
+-        local address = t.address
+-        if datatypes.hostname(address) then
+-            set_domain_group(address, LOCAL_GROUP)
+-            set_domain_ipset(address, "#4:" .. setflag .. "vpsiplist,#6:" .. setflag .. "vpsiplist6")
+-        end
+-    end)
+-    log(string.format("  - 节点列表中的域名(vpsiplist)使用分组：%s", LOCAL_GROUP or "默认"))
++	--屏蔽列表
++	for line in io.lines("/usr/share/passwall/rules/block_host") do
++		if line ~= "" and not line:find("#") then
++			set_domain_address(line, "-")
++		end
++	end
+ 
+-    --始终用国内DNS解析直连（白名单）列表
+-    for line in io.lines("/usr/share/passwall/rules/direct_host") do
+-        if line ~= "" and not line:find("#") then
+-            add_excluded_domain(line)
+-            set_domain_group(line, LOCAL_GROUP)
+-            set_domain_ipset(line, "#4:" .. setflag .. "whitelist,#6:" .. setflag .. "whitelist6")
+-        end
+-    end
+-    log(string.format("  - 域名白名单(whitelist)使用分组：%s", LOCAL_GROUP or "默认"))
++	--始终用国内DNS解析节点域名
++	uci:foreach(appname, "nodes", function(t)
++		local address = t.address
++		if datatypes.hostname(address) then
++			set_domain_group(address, LOCAL_GROUP)
++			set_domain_ipset(address, "#4:" .. setflag .. "passwall_vpslist,#6:" .. setflag .. "passwall_vpslist6")
++		end
++	end)
++	log(string.format("  - 节点列表中的域名(vpslist)使用分组：%s", LOCAL_GROUP or "默认"))
+ 
+-    local fwd_group = LOCAL_GROUP
+-    local ipset_flag = "#4:" .. setflag .. "whitelist,#6:" .. setflag .. "whitelist6"
+-    local no_ipv6
+-    if subscribe_proxy == "1" then
+-        fwd_group = REMOTE_GROUP
+-        ipset_flag = "#4:" .. setflag .. "blacklist,#6:" .. setflag .. "blacklist6"
+-        if NO_PROXY_IPV6 == "1" then
+-            ipset_flag = "#4:" .. setflag .. "blacklist"
+-            no_ipv6 = true
+-        end
+-        if REMOTE_FAKEDNS == "1" then
+-            ipset_flag = nil
+-        end
+-    end
+-    uci:foreach(appname, "subscribe_list", function(t)
+-        local domain = get_domain_from_url(t.url)
+-        if domain then
+-            if no_ipv6 then
+-                set_domain_address(domain, "#6")
+-            end
+-            set_domain_group(domain, fwd_group)
+-            set_domain_ipset(domain, ipset_flag)
+-        end
+-    end)
+-    log(string.format("  - 节点订阅域名(blacklist)使用分组：%s", fwd_group or "默认"))
++	--始终用国内DNS解析直连（白名单）列表
++	for line in io.lines("/usr/share/passwall/rules/direct_host") do
++		if line ~= "" and not line:find("#") then
++			add_excluded_domain(line)
++			set_domain_group(line, LOCAL_GROUP)
++			set_domain_ipset(line, "#4:" .. setflag .. "passwall_whitelist,#6:" .. setflag .. "passwall_whitelist6")
++		end
++	end
++	log(string.format("  - 域名白名单(whitelist)使用分组：%s", LOCAL_GROUP or "默认"))
+ 
+-    --始终使用远程DNS解析代理（黑名单）列表
+-    for line in io.lines("/usr/share/passwall/rules/proxy_host") do
+-        if line ~= "" and not line:find("#") then
+-            add_excluded_domain(line)
+-            local ipset_flag = "#4:" .. setflag .. "blacklist,#6:" .. setflag .. "blacklist6"
+-            if NO_PROXY_IPV6 == "1" then
+-                set_domain_address(line, "#6")
+-                ipset_flag = "#4:" .. setflag .. "blacklist"
+-            end
+-            if REMOTE_FAKEDNS == "1" then
+-                ipset_flag = nil
+-            end
+-            set_domain_group(line, REMOTE_GROUP)
+-            set_domain_ipset(line, ipset_flag)
+-        end
+-    end
+-    log(string.format("  - 代理域名表(blacklist)使用分组：%s", REMOTE_GROUP or "默认"))
++	--始终使用远程DNS解析代理（黑名单）列表
++	for line in io.lines("/usr/share/passwall/rules/proxy_host") do
++		if line ~= "" and not line:find("#") then
++			add_excluded_domain(line)
++			local ipset_flag = "#4:" .. setflag .. "passwall_blacklist,#6:" .. setflag .. "passwall_blacklist6"
++			if NO_PROXY_IPV6 == "1" then
++				set_domain_address(line, "#6")
++				ipset_flag = "#4:" .. setflag .. "passwall_blacklist"
++			end
++			set_domain_group(line, REMOTE_GROUP)
++			set_domain_ipset(line, ipset_flag)
++			set_domain_extra_param(line, "-no-serve-expired")
++		end
++	end
++	log(string.format("  - 代理域名表(blacklist)使用分组：%s", REMOTE_GROUP or "默认"))
+ 
+-    --分流规则
+-    if uci:get(appname, TCP_NODE, "protocol") == "_shunt" then
+-        local t = uci:get_all(appname, TCP_NODE)
+-        local default_node_id = t["default_node"] or "_direct"
+-        uci:foreach(appname, "shunt_rules", function(s)
+-            local _node_id = t[s[".name"]] or "nil"
+-            if _node_id ~= "nil" and _node_id ~= "_blackhole" then
+-                if _node_id == "_default" then
+-                    _node_id = default_node_id
+-                end
++	--分流规则
++	if uci:get(appname, TCP_NODE, "protocol") == "_shunt" then
++		local t = uci:get_all(appname, TCP_NODE)
++		local default_node_id = t["default_node"] or "_direct"
++		uci:foreach(appname, "shunt_rules", function(s)
++			local _node_id = t[s[".name"]] or "nil"
++			if _node_id ~= "nil" and _node_id ~= "_blackhole" then
++				if _node_id == "_default" then
++					_node_id = default_node_id
++				end
+ 
+-                fwd_group = nil
+-                ipset_flag = nil
+-                no_ipv6 = nil
++				local fwd_group = nil
++				local ipset_flag = nil
++				local no_ipv6 = nil
+ 
+-                if _node_id == "_direct" then
+-                    fwd_group = LOCAL_GROUP
+-                    ipset_flag = "#4:" .. setflag .. "whitelist,#6:" .. setflag .. "whitelist6"
+-                else
+-                    fwd_group = REMOTE_GROUP
+-                    ipset_flag = "#4:" .. setflag .. "shuntlist,#6:" .. setflag .. "shuntlist6"
+-                    if NO_PROXY_IPV6 == "1" then
+-                        ipset_flag = "#4:" .. setflag .. "shuntlist"
+-                        no_ipv6 = true
+-                    end
+-                    if REMOTE_FAKEDNS == "1" then
+-                        ipset_flag = nil
+-                    end
+-                end
++				if _node_id == "_direct" then
++					fwd_group = LOCAL_GROUP
++					ipset_flag = "#4:" .. setflag .. "passwall_whitelist,#6:" .. setflag .. "passwall_whitelist6"
++				else
++					fwd_group = REMOTE_GROUP
++					ipset_flag = "#4:" .. setflag .. "passwall_shuntlist,#6:" .. setflag .. "passwall_shuntlist6"
++					if NO_PROXY_IPV6 == "1" then
++						ipset_flag = "#4:" .. setflag .. "passwall_shuntlist"
++						no_ipv6 = true
++					end
++				end
+ 
+-                local domain_list = s.domain_list or ""
+-                for line in string.gmatch(domain_list, "[^\r\n]+") do
+-                    if line ~= "" and not line:find("#") and not line:find("regexp:") and not line:find("geosite:") and not line:find("ext:") then
+-                        if line:find("domain:") or line:find("full:") then
+-                            line = string.match(line, ":([^:]+)$")
+-                        end
+-                        add_excluded_domain(line)
+-                        
+-                        if no_ipv6 then
+-                            set_domain_address(line, "#6")
+-                        end
+-                        set_domain_group(line, fwd_group)
+-                        set_domain_ipset(line, ipset_flag)
+-                    end
+-                end
+-                if _node_id ~= "_direct" then
+-                    log(string.format("  - V2ray/Xray分流规则(%s)使用分组：%s", s.remarks, fwd_group or "默认"))
+-                end
+-            end
+-        end)
+-    end
++				local domain_list = s.domain_list or ""
++				for line in string.gmatch(domain_list, "[^\r\n]+") do
++					if line ~= "" and not line:find("#") and not line:find("regexp:") and not line:find("geosite:") and not line:find("ext:") then
++						if line:find("domain:") or line:find("full:") then
++							line = string.match(line, ":([^:]+)$")
++						end
++						add_excluded_domain(line)
++						
++						if no_ipv6 then
++							set_domain_address(line, "#6")
++						end
++						set_domain_group(line, fwd_group)
++						set_domain_ipset(line, ipset_flag)
++						if fwd_group == REMOTE_GROUP then
++							set_domain_extra_param(line, "-no-serve-expired")
++						end
++					end
++				end
++				if _node_id ~= "_direct" then
++					log(string.format("  - V2ray/Xray分流规则(%s)使用分组：%s", s.remarks, fwd_group or "默认"))
++				end
++			end
++		end)
++	end
+ 
+-    --如果没有使用回国模式
+-    if not returnhome then
+-        if fs.access("/usr/share/passwall/rules/gfwlist") then
+-            local gfwlist_str = sys.exec('cat /usr/share/passwall/rules/gfwlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '"')
+-            for line in string.gmatch(gfwlist_str, "[^\r\n]+") do
+-                if line ~= "" then
+-                    local ipset_flag = "#4:" .. setflag .. "gfwlist,#6:" .. setflag .. "gfwlist6"
+-                    if NO_PROXY_IPV6 == "1" then
+-                        ipset_flag = "#4:" .. setflag .. "gfwlist"
+-                        set_domain_address(line, "#6")
+-                    end
+-                    fwd_group = REMOTE_GROUP
+-                    if REMOTE_FAKEDNS == "1" then
+-                        ipset_flag = nil
+-                    end
+-                    set_domain_group(line, fwd_group)
+-                    set_domain_ipset(line, ipset_flag)
+-                end
+-            end
+-            log(string.format("  - 防火墙域名表(gfwlist)使用分组：%s", fwd_group or "默认"))
+-        end
++	--如果没有使用回国模式
++	if not returnhome then
++		if fs.access("/usr/share/passwall/rules/gfwlist") then
++			local domain_set_name = "passwall-gfwlist"
++			local domain_file = CACHE_DNS_PATH .. "_gfwlist.list"
++			sys.exec('cat /usr/share/passwall/rules/gfwlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '" > ' .. domain_file)
++			sys.exec(string.format('echo "domain-set -name %s -file %s" >> %s', domain_set_name, domain_file, CACHE_DNS_FILE))
++			local domain_rules_str = string.format('domain-rules /domain-set:%s/ -nameserver %s', domain_set_name, REMOTE_GROUP)
++			domain_rules_str = domain_rules_str .. " -speed-check-mode none"
++			domain_rules_str = domain_rules_str .. " -no-serve-expired"
++			if NO_PROXY_IPV6 == "1" then
++				domain_rules_str = domain_rules_str .. " -address #6"
++				domain_rules_str = domain_rules_str .. " " .. set_type .. " #4:" .. setflag .. "passwall_gfwlist"
++			else
++				domain_rules_str = domain_rules_str .. " " .. set_type .. " #4:" .. setflag .. "passwall_gfwlist" .. ",#6:" .. setflag .. "passwall_gfwlist6"
++			end
++			sys.exec(string.format('echo "%s" >> %s', domain_rules_str, CACHE_DNS_FILE))
++			log(string.format("  - 防火墙域名表(gfwlist)使用分组：%s", REMOTE_GROUP or "默认"))
++		end
+ 
+-        if fs.access("/usr/share/passwall/rules/chnlist") and chnlist then
+-            local chnlist_str = sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '"')
+-            for line in string.gmatch(chnlist_str, "[^\r\n]+") do
+-                if line ~= "" then
+-                    set_domain_group(line, LOCAL_GROUP)
+-                    set_domain_ipset(line, "#4:" .. setflag .. "chnroute,#6:" .. setflag .. "chnroute6")
+-                end
+-            end
+-        end
+-        log(string.format("  - 中国域名表(chnroute)使用分组：%s", LOCAL_GROUP or "默认"))
+-    else
+-        if fs.access("/usr/share/passwall/rules/chnlist") then
+-            local chnlist_str = sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '"')
+-            for line in string.gmatch(chnlist_str, "[^\r\n]+") do
+-                if line ~= "" then
+-                    local ipset_flag = "#4:" .. setflag .. "chnroute,#6:" .. setflag .. "chnroute6"
+-                    if NO_PROXY_IPV6 == "1" then
+-                        ipset_flag = "#4:" .. setflag .. "chnroute"
+-                        set_domain_address(line, "#6")
+-                    end
+-                    set_domain_group(line, REMOTE_GROUP)
+-                    if REMOTE_FAKEDNS == "1" then
+-                        ipset_flag = nil
+-                    end
+-                    set_domain_ipset(line, ipset_flag)
+-                end
+-            end
+-            log(string.format("  - 中国域名表(chnroute)使用分组：%s", REMOTE_GROUP or "默认"))
+-        end
+-    end
++		if fs.access("/usr/share/passwall/rules/chnlist") and chnlist then
++			local domain_set_name = "passwall-chnlist"
++			local domain_file = CACHE_DNS_PATH .. "_chnlist.list"
++			sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '" > ' .. domain_file)
++			sys.exec(string.format('echo "domain-set -name %s -file %s" >> %s', domain_set_name, domain_file, CACHE_DNS_FILE))
++			local domain_rules_str = string.format('domain-rules /domain-set:%s/ %s', domain_set_name, LOCAL_GROUP and "-nameserver " .. LOCAL_GROUP or "")
++			domain_rules_str = domain_rules_str .. " " .. set_type .. " #4:" .. setflag .. "passwall_chnroute,#6:" .. setflag .. "passwall_chnroute6"
++			sys.exec(string.format('echo "%s" >> %s', domain_rules_str, CACHE_DNS_FILE))
++			log(string.format("  - 中国域名表(chnroute)使用分组：%s", LOCAL_GROUP or "默认"))
++		end
++	else
++		if fs.access("/usr/share/passwall/rules/chnlist") then
++			local domain_set_name = "passwall-chnlist"
++			local domain_file = CACHE_DNS_PATH .. "_chnlist.list"
++			sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '" > ' .. domain_file)
++			sys.exec(string.format('echo "domain-set -name %s -file %s" >> %s', domain_set_name, domain_file, CACHE_DNS_FILE))
++			local domain_rules_str = string.format('domain-rules /domain-set:%s/ -nameserver %s', domain_set_name, REMOTE_GROUP)
++			domain_rules_str = domain_rules_str .. " -speed-check-mode none"
++			domain_rules_str = domain_rules_str .. " -no-serve-expired"
++			if NO_PROXY_IPV6 == "1" then
++				domain_rules_str = domain_rules_str .. " -address #6"
++				domain_rules_str = domain_rules_str .. " " .. set_type .. " #4:" .. setflag .. "passwall_chnroute"
++			else
++				domain_rules_str = domain_rules_str .. " " .. set_type .. " #4:" .. setflag .. "passwall_chnroute" .. ",#6:" .. setflag .. "passwall_chnroute6"
++			end
++			sys.exec(string.format('echo "%s" >> %s', domain_rules_str, CACHE_DNS_FILE))
++			log(string.format("  - 中国域名表(chnroute)使用分组：%s", REMOTE_GROUP or "默认"))
++		end
++	end
+ 
+-    local f_out = io.open(CACHE_DNS_FILE, "a")
+-    for key, value in pairs(list1) do
+-        local group_str = ""
+-        local ipset_str = ""
+-        local speed_check_mode_str = ""
+-        local address_str = ""
+-        if value.group and #value.group > 0 then
+-            group_str = group_str .. value.group
+-        end
+-        if group_str ~= "" then
+-            group_str = " -n " .. group_str
+-        end
+-        if value.ipsets and #value.ipsets > 0 then
+-            for i, ipset in ipairs(value.ipsets) do
+-                ipset_str = ipset_str .. ipset .. ","
+-            end
+-            ipset_str = ipset_str:sub(1, #ipset_str - 1)
+-        end
+-        if ipset_str ~= "" then
+-            ipset_str = " -p " .. ipset_str
+-        end
+-        if value.address and #value.address > 0 then
+-            address_str = address_str .. value.address
+-        end
+-        if address_str ~= "" then
+-            address_str = " -a " .. address_str
+-        end
+-        if value.speed_check_mode and #value.speed_check_mode > 0 then
+-            speed_check_mode_str = value.speed_check_mode
+-        end
+-        if speed_check_mode_str ~= "" then
+-            speed_check_mode_str = " -c " .. speed_check_mode_str
+-        end
+-        local str = string.format("domain-rules /%s/ %s%s%s%s\n", key, group_str, ipset_str, address_str, speed_check_mode_str)
+-        f_out:write(str)
+-    end
+-    f_out:close()
++	local f_out = io.open(CACHE_DNS_FILE, "a")
++	for key, value in pairs(list1) do
++		local group_str = ""
++		local ipset_str = ""
++		local speed_check_mode_str = ""
++		local address_str = ""
++		local extra_param_str = ""
++		if value.group and #value.group > 0 then
++			group_str = group_str .. value.group
++		end
++		if group_str ~= "" then
++			group_str = " -n " .. group_str
++		end
++		if value.ipsets and #value.ipsets > 0 then
++			for i, ipset in ipairs(value.ipsets) do
++				ipset_str = ipset_str .. ipset .. ","
++			end
++			ipset_str = ipset_str:sub(1, #ipset_str - 1)
++		end
++		if ipset_str ~= "" then
++			ipset_str = " " .. set_type .. " " .. ipset_str
++		end
++		if value.address and #value.address > 0 then
++			address_str = address_str .. value.address
++		end
++		if address_str ~= "" then
++			address_str = " -a " .. address_str
++		end
++		if value.speed_check_mode and #value.speed_check_mode > 0 then
++			speed_check_mode_str = value.speed_check_mode
++		end
++		if speed_check_mode_str ~= "" then
++			speed_check_mode_str = " -c " .. speed_check_mode_str
++		end
++		if value.params then
++			for k2, v2 in pairs(value.params) do
++				extra_param_str = extra_param_str .. " " .. v2
++			end
++		end
++		local str = string.format("domain-rules /%s/ %s%s%s%s%s\n", key, group_str, ipset_str, address_str, speed_check_mode_str, extra_param_str)
++		f_out:write(str)
++	end
++	f_out:close()
+ 
+-    f_out = io.open(CACHE_TEXT_FILE, "a")
+-    f_out:write(new_text)
+-    f_out:close()
++	f_out = io.open(CACHE_TEXT_FILE, "a")
++	f_out:write(new_text)
++	f_out:close()
+ end
+ fs.symlink(CACHE_DNS_FILE, SMARTDNS_CONF)
+ sys.call(string.format('echo "conf-file %s" >> /etc/smartdns/custom.conf', SMARTDNS_CONF))
+
+From b9fc6e9d25e40458ea2f146503548514d8a1f18a Mon Sep 17 00:00:00 2001
+From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
+Date: Sun, 19 Feb 2023 22:40:03 +0800
+Subject: [PATCH 3/4] luci: smartdns option support multiple remote dns
+
+---
+ .../model/cbi/passwall/client/global.lua      | 75 ++++++++++---------
+ .../root/usr/share/passwall/0_default_config  |  1 +
+ .../root/usr/share/passwall/app.sh            | 43 ++---------
+ .../share/passwall/helper_smartdns_add.lua    | 50 ++++++++-----
+ 4 files changed, 82 insertions(+), 87 deletions(-)
+
+diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+index 052a735f73..f3d1d3189e 100644
+--- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
++++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+@@ -273,40 +273,47 @@ o = s:taboption("DNS", Flag, "filter_proxy_ipv6", translate("Filter Proxy Host I
+ o.default = "0"
+ 
+ if api.is_finded("smartdns") then
+-	smartdns_mode = s:taboption("DNS", ListValue, "smartdns_mode", translate("Filter Mode"))
+-	smartdns_mode:value("tcp", translatef("Requery DNS By %s", "TCP"))
+-	smartdns_mode:value("https", translatef("Requery DNS By %s", "HTTPS"))
+-	smartdns_mode:value("tls", translatef("Requery DNS By %s", "TLS"))
+-	smartdns_mode:value("udp", translatef("Requery DNS By %s", "UDP"))
+-	smartdns_mode:depends("dns_shunt", "smartdns")
+-
+-	o = s:taboption("DNS", Value, "smartdns_remote_dns", translate("Remote DNS"))
+-	o.datatype = "or(ipaddr,ipaddrport)"
+-	o.default = "1.1.1.1"
+-	o:value("1.1.1.1", "1.1.1.1 (CloudFlare)")
+-	o:value("1.1.1.2", "1.1.1.2 (CloudFlare-Security)")
+-	o:value("8.8.4.4", "8.8.4.4 (Google)")
+-	o:value("8.8.8.8", "8.8.8.8 (Google)")
+-	o:value("9.9.9.9", "9.9.9.9 (Quad9-Recommended)")
+-	o:value("208.67.220.220", "208.67.220.220 (OpenDNS)")
+-	o:value("208.67.222.222", "208.67.222.222 (OpenDNS)")
+-	o:depends("smartdns_mode", "tcp")
+-	o:depends("smartdns_mode", "udp")
+-	o:depends("smartdns_mode", "tls")
+-
+-	o = s:taboption("DNS", Value, "smartdns_remote_dns_doh", translate("Remote DNS DoH"))
+-	o.default = "https://1.1.1.1/dns-query"
+-	o:value("https://1.1.1.1/dns-query", "CloudFlare")
+-	o:value("https://1.1.1.2/dns-query", "CloudFlare-Security")
+-	o:value("https://8.8.4.4/dns-query", "Google 8844")
+-	o:value("https://8.8.8.8/dns-query", "Google 8888")
+-	o:value("https://9.9.9.9/dns-query", "Quad9-Recommended")
+-	o:value("https://208.67.222.222/dns-query", "OpenDNS")
+-	o:value("https://dns.adguard.com/dns-query,176.103.130.130", "AdGuard")
+-	o:value("https://doh.libredns.gr/dns-query,116.202.176.26", "LibreDNS")
+-	o:value("https://doh.libredns.gr/ads,116.202.176.26", "LibreDNS (No Ads)")
+-	o.validate = doh_validate
+-	o:depends("smartdns_mode", "https")
++	o = s:taboption("DNS", DynamicList, "smartdns_remote_dns", translate("Remote DNS"))
++	o:value("tcp://1.1.1.1")
++	o:value("tcp://8.8.4.4")
++	o:value("tcp://8.8.8.8")
++	o:value("tcp://9.9.9.9")
++	o:value("tcp://208.67.222.222")
++	o:value("tls://1.1.1.1")
++	o:value("tls://8.8.4.4")
++	o:value("tls://8.8.8.8")
++	o:value("tls://9.9.9.9")
++	o:value("tls://208.67.222.222")
++	o:value("https://1.1.1.1/dns-query")
++	o:value("https://8.8.4.4/dns-query")
++	o:value("https://8.8.8.8/dns-query")
++	o:value("https://9.9.9.9/dns-query")
++	o:value("https://208.67.222.222/dns-query")
++	o:value("https://dns.adguard.com/dns-query,176.103.130.130")
++	o:value("https://doh.libredns.gr/dns-query,116.202.176.26")
++	o:value("https://doh.libredns.gr/ads,116.202.176.26")
++	o:depends("dns_shunt", "smartdns")
++	o.cfgvalue = function(self, section)
++		return m:get(section, self.option) or {"tcp://1.1.1.1"}
++	end
++	function o.write(self, section, value)
++		local t = {}
++		local t2 = {}
++		if type(value) == "table" then
++			local x
++			for _, x in ipairs(value) do
++				if x and #x > 0 then
++					if not t2[x] then
++						t2[x] = x
++						t[#t+1] = x
++					end
++				end
++			end
++		else
++			t = { value }
++		end
++		return DynamicList.write(self, section, t)
++	end
+ end
+ 
+ ---- DNS Forward Mode
+diff --git a/luci-app-passwall/root/usr/share/passwall/0_default_config b/luci-app-passwall/root/usr/share/passwall/0_default_config
+index de46b8a307..3d6188eb86 100644
+--- a/luci-app-passwall/root/usr/share/passwall/0_default_config
++++ b/luci-app-passwall/root/usr/share/passwall/0_default_config
+@@ -7,6 +7,7 @@ config global
+ 	option tcp_node_socks_port '1070'
+ 	option dns_mode 'dns2tcp'
+ 	option remote_dns '1.1.1.1'
++	list smartdns_remote_dns 'https://1.1.1.1/dns-query'
+ 	option filter_proxy_ipv6 '0'
+ 	option when_chnroute_default_dns 'direct'
+ 	option tcp_proxy_mode 'chnroute'
+diff --git a/luci-app-passwall/root/usr/share/passwall/app.sh b/luci-app-passwall/root/usr/share/passwall/app.sh
+index 9d1be05ac9..a84c5b4929 100755
+--- a/luci-app-passwall/root/usr/share/passwall/app.sh
++++ b/luci-app-passwall/root/usr/share/passwall/app.sh
+@@ -1350,44 +1350,17 @@ start_dns() {
+ 	;;
+ 	smartdns)
+ 		rm -rf $TMP_PATH2/dnsmasq_default*
+-		local SMARTDNS_TUN_DNS=
+-		local SMARTDNS_TUN_DNS_PROTO=
+ 		local group_domestic=$(config_t_get global group_domestic)
+-		local smartdns_mode=$(config_t_get global smartdns_mode)
+-		case "$smartdns_mode" in
+-		tcp)
+-			SMARTDNS_TUN_DNS_PROTO="tcp"
+-			SMARTDNS_TUN_DNS=$(config_t_get global smartdns_remote_dns 1.1.1.1)
+-		;;
+-		udp)
+-			SMARTDNS_TUN_DNS_PROTO="udp"
+-			SMARTDNS_TUN_DNS=$(config_t_get global smartdns_remote_dns 1.1.1.1)
+-		;;
+-		tls)
+-			SMARTDNS_TUN_DNS_PROTO="tls"
+-			SMARTDNS_TUN_DNS=$(config_t_get global smartdns_remote_dns 1.1.1.1)
+-		;;
+-		https)
+-			SMARTDNS_TUN_DNS_PROTO="https"
+-			SMARTDNS_TUN_DNS=$(config_t_get global smartdns_remote_dns_doh https://1.1.1.1/dns-query)
+-			
+-			local _doh_url=$(echo $SMARTDNS_TUN_DNS | awk -F ',' '{print $1}')
+-			local _doh_host_port=$(lua_api "get_domain_from_url(\"${_doh_url}\")")
+-			local _doh_host=$(echo $_doh_host_port | awk -F ':' '{print $1}')
+-			local _is_ip=$(lua_api "is_ip(\"${_doh_host}\")")
+-			local _doh_port=$(echo $_doh_host_port | awk -F ':' '{print $2}')
+-			[ -z "${_doh_port}" ] && _doh_port=443
+-			local _doh_bootstrap=$(echo $SMARTDNS_TUN_DNS | cut -d ',' -sf 2-)
+-			SMARTDNS_TUN_DNS=${_doh_url}
+-			[ -n "${_doh_bootstrap}" ] && {
+-				SMARTDNS_TUN_DNS=$(echo "$_doh_url" | sed "s#${_doh_host}#${_doh_bootstrap}#g")
+-				SMARTDNS_TUN_HTTP_HOST=${_doh_host}
+-			}
+-		;;
+-		esac
++		local smartdns_remote_dns=$(config_t_get global smartdns_remote_dns)
++		if [ -n "$smartdns_remote_dns" -a "$smartdns_remote_dns" != "nil" ]; then
++			smartdns_remote_dns=$(echo $smartdns_remote_dns | tr -s ' ' '|')
++		else
++			smartdns_remote_dns="tcp://1.1.1.1"
++		fi
++		local SMARTDNS_TUN_DNS=$smartdns_remote_dns
+ 		lua $APP_PATH/helper_smartdns_add.lua -FLAG "default" -SMARTDNS_CONF "/tmp/etc/smartdns/$CONFIG.conf" \
+ 			-LOCAL_GROUP ${group_domestic:-nil} -REMOTE_GROUP "passwall_proxy" -REMOTE_PROXY_SERVER $(cat $TMP_PATH/TCP_SOCKS_server) \
+-			-TUN_DNS_PROTO $SMARTDNS_TUN_DNS_PROTO -TUN_DNS $SMARTDNS_TUN_DNS -TUN_HTTP_HOST ${SMARTDNS_TUN_HTTP_HOST:-nil} \
++			-TUN_DNS $SMARTDNS_TUN_DNS \
+ 			-TCP_NODE $TCP_NODE -PROXY_MODE "${TCP_PROXY_MODE}${LOCALHOST_TCP_PROXY_MODE}${ACL_TCP_PROXY_MODE}" -NO_PROXY_IPV6 ${FILTER_PROXY_IPV6:-0} -NFTFLAG ${nftflag:-0} \
+ 			-NO_LOGIC_LOG ${NO_LOGIC_LOG:-0}
+ 		source $APP_PATH/helper_smartdns.sh restart
+diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
+index 1154c5c150..597f1f0a12 100644
+--- a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
++++ b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
+@@ -7,9 +7,7 @@ local SMARTDNS_CONF = var["-SMARTDNS_CONF"]
+ local LOCAL_GROUP = var["-LOCAL_GROUP"]
+ local REMOTE_GROUP = var["-REMOTE_GROUP"]
+ local REMOTE_PROXY_SERVER = var["-REMOTE_PROXY_SERVER"]
+-local TUN_DNS_PROTO = var["-TUN_DNS_PROTO"]
+ local TUN_DNS = var["-TUN_DNS"]
+-local TUN_HTTP_HOST = var["-TUN_HTTP_HOST"]
+ local TCP_NODE = var["-TCP_NODE"]
+ local PROXY_MODE = var["-PROXY_MODE"]
+ local NO_PROXY_IPV6 = var["-NO_PROXY_IPV6"]
+@@ -144,7 +142,7 @@ end
+ 
+ local cache_text = ""
+ local new_rules = luci.sys.exec("echo -n $(find /usr/share/passwall/rules -type f | xargs md5sum)")
+-local new_text = SMARTDNS_CONF .. LOCAL_GROUP .. REMOTE_GROUP .. REMOTE_PROXY_SERVER .. TUN_DNS_PROTO .. TUN_DNS .. PROXY_MODE .. NO_PROXY_IPV6 .. new_rules
++local new_text = SMARTDNS_CONF .. LOCAL_GROUP .. REMOTE_GROUP .. REMOTE_PROXY_SERVER .. TUN_DNS .. PROXY_MODE .. NO_PROXY_IPV6 .. new_rules
+ if fs.access(CACHE_TEXT_FILE) then
+ 	for line in io.lines(CACHE_TEXT_FILE) do
+ 		cache_text = line
+@@ -172,26 +170,42 @@ if not REMOTE_GROUP or REMOTE_GROUP == "nil" then
+ 	sys.call('sed -i "/passwall/d" /etc/smartdns/custom.conf >/dev/null 2>&1')
+ end
+ 
+-local setflag= (NFTFLAG == "1") and "inet#fw4#" or ""
+-
+ if not fs.access(CACHE_DNS_FILE) then
+ 	local proxy_server_name = "passwall-proxy-server"
+ 	sys.call(string.format('echo "proxy-server socks5://%s -name %s" >> %s', REMOTE_PROXY_SERVER, proxy_server_name, CACHE_DNS_FILE))
+ 	if true then
+-		local server_param = string.format("server%s %s -group %s -exclude-default-group -proxy %s", "%s", TUN_DNS, REMOTE_GROUP, proxy_server_name)
+-		if TUN_DNS_PROTO == "tcp" then
+-			server_param = string.format(server_param, "-tcp")
+-		elseif TUN_DNS_PROTO == "udp" then
+-			server_param = string.format(server_param, "")
+-		elseif TUN_DNS_PROTO == "tls" then
+-			server_param = string.format(server_param, "-tls")
+-		elseif TUN_DNS_PROTO == "https" then
+-			server_param = string.format(server_param, "-https")
+-			if TUN_HTTP_HOST and TUN_HTTP_HOST ~= "nil" then
+-				server_param = server_param .. " -http-host " .. TUN_HTTP_HOST
++		string.gsub(TUN_DNS, '[^' .. "|" .. ']+', function(w)
++			local server_dns = w
++			local server_param = string.format("server %s -group %s -exclude-default-group -proxy %s", "%s", REMOTE_GROUP, proxy_server_name)
++
++			local isHTTPS = w:find("https://")
++			if isHTTPS and isHTTPS == 1 then
++				local http_host = nil
++				local url = w
++				local port = 443
++				local s = api.split(w, ",")
++				if s and #s > 1 then
++					url = s[1]
++					local dns_ip = s[2]
++					local host_port = api.get_domain_from_url(s[1])
++					if host_port and #host_port > 0 then
++						http_host = host_port
++						local s2 = api.split(host_port, ":")
++						if s2 and #s2 > 1 then
++							http_host = s2[1]
++							port = s2[2]
++						end 
++						url = url:gsub(http_host, dns_ip)
++					end
++				end
++				server_dns = url
++				if http_host then
++					server_dns = server_dns .. " -http-host " .. http_host
++				end
+ 			end
+-		end
+-		sys.exec(string.format('echo "%s" >> %s', server_param, CACHE_DNS_FILE))
++			server_param = string.format(server_param, server_dns)
++			sys.exec(string.format('echo "%s" >> %s', server_param, CACHE_DNS_FILE))
++		end)
+ 	end
+ 
+ 	local setflag= (NFTFLAG == "1") and "inet#fw4#" or ""
+
+From 3523cdbf4205210e94bdabcdb72b43dc4216ed8e Mon Sep 17 00:00:00 2001
+From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
+Date: Mon, 24 Jul 2023 02:58:31 +0800
+Subject: [PATCH 4/4] luci: optimization and testing
+
+It is currently in testing and development, and has not been merged to the master branch.
+---
+ luci-app-passwall/Makefile | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/luci-app-passwall/Makefile b/luci-app-passwall/Makefile
+index ffa6ebb2b8..d1627801e8 100644
+--- a/luci-app-passwall/Makefile
++++ b/luci-app-passwall/Makefile
+@@ -7,6 +7,7 @@ include $(TOPDIR)/rules.mk
+ 
+ PKG_NAME:=luci-app-passwall
+ PKG_VERSION:=4.71-2
++PKG_VERSION:=$(PKG_VERSION)-smartdns-dev
+ PKG_RELEASE:=
+ 
+ PKG_CONFIG_DEPENDS:= \
+
+Perconfig someting.
+---
+ luci-app-passwall/root/usr/share/passwall/0_default_config | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/luci-app-passwall/root/usr/share/passwall/0_default_config b/luci-app-passwall/root/usr/share/passwall/0_default_config
+index 3d6188eb..178f6872 100644
+--- a/luci-app-passwall/root/usr/share/passwall/0_default_config
++++ b/luci-app-passwall/root/usr/share/passwall/0_default_config
+@@ -61,8 +61,8 @@ config global_rules
+ 	option chnroute_update '1'
+ 	option chnroute6_update '1'
+ 	option gfwlist_update '1'
+-	option geosite_update '0'
+-	option geoip_update '0'
++	option geosite_update '1'
++	option geoip_update '1'
+ 	list gfwlist_url 'https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/gfw.txt'
+ 	list chnroute_url 'https://ispip.clang.cn/all_cn.txt'
+ 	list chnroute_url 'https://fastly.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china.txt'

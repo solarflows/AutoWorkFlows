@@ -37,7 +37,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           chmod +x .github/diy/*.sh
-          git clone -b ${{matrix.target}} https://github.com/hyy-666/openwrt-packages.git ${{matrix.target}}
+          git clone -b ${{matrix.target}} https://github.com/FlawShatter/openwrt-packages.git ${{matrix.target}}
           cd ${{matrix.target}}
           git rm -r --cache * >/dev/null 2>&1 &
           # 删除除diy目录以外的文件夹
@@ -61,7 +61,7 @@ jobs:
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           git add .
           git commit -m "schedule update-$(TZ='Asia/Shanghai' date +%m.%d)"
-          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}
+          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
 
       - name: Delete workflow runs
         uses: GitRML/delete-workflow-runs@main
@@ -97,7 +97,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           chmod +x .github/diy/*.sh
-          git clone -b ${{matrix.target}} https://github.com/hyy-666/openwrt-packages.git ${{matrix.target}}
+          git clone -b ${{matrix.target}} https://github.com/FlawShatter/openwrt-packages.git ${{matrix.target}}
           cd ${{matrix.target}}
           git rm -r --cache * >/dev/null 2>&1 &
           # 删除除diy目录以外的文件夹
@@ -121,4 +121,4 @@ jobs:
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           git add .
           git commit -m "schedule update$(TZ='Asia/Shanghai' date +%m.%d)"
-          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/openwrt-packages.git" HEAD:${{matrix.target}}
+          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
