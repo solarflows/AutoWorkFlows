@@ -42,6 +42,12 @@ format_git_clone_output() {
   echo "克隆成功：$repo_url"
 
   rm "$output_file"  # 删除临时文件
+
+  rm -rf ./*/.git
+  rm -f ./*/.gitattributes
+  rm -rf ./*/.svn
+  rm -rf ./*/.github
+  rm -rf ./*/.gitignore
 }
 
 # 使用git检出指定的代码到目标运行目录或当前目录
@@ -212,7 +218,7 @@ format_git_clone_output -r https://github.com/ximiTech/msd_lite
 
 # N
 # nezha             开源、轻量的服务器和网站监控、运维工具
-format_git_clone_output -r https://github.com/Erope/openwrt_nezha && mvdir openwrt_nezha
+checkout_partial_code -r https://github.com/Erope/openwrt_nezha luci-app-nezha openwrt-nezha && mv openwrt-nezha nezha-agent
 # netdata
 format_git_clone_output -r https://github.com/sirpdboy/luci-app-netdata
 # netspeedtest      网络测速
@@ -257,7 +263,7 @@ checkout_partial_code -r https://github.com/immortalwrt/packages net/smartdns
 # smartinfo         S.M.A.R.T监控软件
 format_git_clone_output -r https://github.com/huajijam/luci-app-smartinfo
 # sms-tool          sms-tool的luci界面
-git clone --depth 1 https://github.com/4IceG/luci-app-sms-tool smstool && mvdir smstool
+checkout_partial_code -r https://github.com/4IceG/luci-app-sms-tool luci-app-sms-tool sms-tool
 # ssr-plus          科学上网
 checkout_partial_code -r https://github.com/fw876/helloworld luci-app-ssr-plus lua-neturl redsocks2 shadow-tls
 # subconverter      订阅转换
@@ -285,9 +291,4 @@ format_git_clone_output -r https://github.com/walkingsky/luci-wifidog && mv luci
 # xmurp-ua          在 OpenWrt 上修改 HTTP 流量的 UA
 format_git_clone_output -r https://github.com/CHN-beta/xmurp-ua
 
-rm -rf ./*/.git
-rm -f ./*/.gitattributes
-rm -rf ./*/.svn
-rm -rf ./*/.github
-rm -rf ./*/.gitignore
 exit 0
