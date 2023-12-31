@@ -1982,12 +1982,8 @@ diff --git a/luci-app-passwall/Makefile b/luci-app-passwall/Makefile
 index ffa6ebb2b8..d1627801e8 100644
 --- a/luci-app-passwall/Makefile
 +++ b/luci-app-passwall/Makefile
-@@ -7,6 +7,7 @@ include $(TOPDIR)/rules.mk
- 
- PKG_NAME:=luci-app-passwall
- PKG_VERSION:=4.71-2
+@@ -10,2 +10,3 @@ PKG_RELEASE:=
 +PKG_VERSION:=$(PKG_VERSION)-smartdns-dev
- PKG_RELEASE:=
  
  PKG_CONFIG_DEPENDS:= \
 
