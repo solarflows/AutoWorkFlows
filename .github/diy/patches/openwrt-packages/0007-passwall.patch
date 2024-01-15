@@ -2030,3 +2030,18 @@ index c0d67e14..5c36bab6 100644
  				</div>
  			</div>
  		</div>
+diff --git a/luci-app-passwall/po/zh-cn/passwall.po b/luci-app-passwall/po/zh-cn/passwall.po
+index 6b4844f8..33877d8b 100644
+--- a/luci-app-passwall/po/zh-cn/passwall.po
++++ b/luci-app-passwall/po/zh-cn/passwall.po
+@@ -70,8 +70,8 @@ msgstr "谷歌连接"
+ msgid "GitHub Connection"
+ msgstr "GitHub连接"
+ 
+-msgid "Instagram Connection"
+-msgstr "Instagram连接"
++msgid "Youtube Connection"
++msgstr "油管连接"
+ 
+ msgid "Node Check"
+ msgstr "节点检测"
