@@ -40,9 +40,8 @@ jobs:
           cd $GITHUB_WORKSPACE/${{matrix.repo}}
           git remote add upstream ${{matrix.upstream}}/${{matrix.repo}}
           git fetch upstream
-          git checkout ${{matrix.target}}
-          git merge upstream/${{matrix.target}}
-          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/${{matrix.repo}}.git"
+          git checkout -B ${{matrix.target}} upstream/${{matrix.target}}
+          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/hyy-666/${{matrix.repo}}.git" -f origin ${{matrix.target}}
 
   sync_luci:
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
