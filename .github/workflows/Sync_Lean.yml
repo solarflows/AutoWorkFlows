@@ -82,12 +82,12 @@ jobs:
             fi
 
             if [[ $target == "lean" ]]; then
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:master
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:master
             else
               rm -rf .github/workflows
               git add .
               git commit -m "Removing workflows files."
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:$target
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:$target
             fi
 
           done
@@ -157,12 +157,12 @@ jobs:
             fi
 
             if [[ $target == "lean" ]]; then
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:master
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:master
             else
               rm -rf .github/workflows
               git add .
               git commit -m "Removing workflows files."
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:$target
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:$target
             fi
 
             if [[ $target == "immortalwrt" ]]; then
@@ -186,7 +186,7 @@ jobs:
                 git commit -m "Appling Patches."
               fi
 
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:hanwckf
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:hanwckf
             fi
           done
 
@@ -252,12 +252,12 @@ jobs:
             fi
 
             if [[ $target == "lean" ]]; then
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:master
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:master
             else
               rm -rf .github/workflows
               git add .
               git commit -m "Removing workflows files."
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:$target
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:$target
             fi
 
             if [[ $target == "immortalwrt" ]]; then
@@ -282,6 +282,6 @@ jobs:
               rm -rf .github/workflows
               git add .
               git commit -m "Removing workflows files."
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
             fi
           done
