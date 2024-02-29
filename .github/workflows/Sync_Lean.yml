@@ -47,7 +47,7 @@ jobs:
             ((index++))
           done
 
-          git fetch --all
+          git fetch --all --no-tags
 
       - name: 拉取上游代码并打补丁
         env:
@@ -125,7 +125,7 @@ jobs:
             ((index++))
           done
 
-          git fetch --all
+          git fetch --all --no-tags
 
       - name: 拉取上游代码并打补丁
         env:
@@ -221,7 +221,7 @@ jobs:
             ((index++))
           done
 
-          git fetch --all
+          git fetch --all --no-tags
 
       - name: 拉取上游代码并打补丁
         env:
