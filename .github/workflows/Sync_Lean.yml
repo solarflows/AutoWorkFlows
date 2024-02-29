@@ -6,32 +6,22 @@ on:
   push:
       paths:
         - '.github/workflows/Sync_Lean.yml'
-        - '.github/diy/patches/lede_lean/*.patch'
-        - '.github/diy/patches/luci_lean/*.patch'
-        - '.github/diy/patches/packages_lean/*.patch'  # 当workflow文件有改变时触发
+        - '.github/diy/patches/lede/*/*.patch'
+        - '.github/diy/patches/luci/*/*.patch'
+        - '.github/diy/patches/packages/*/*.patch'  # 当workflow文件有改变时触发
   watch:
     types: [started]
 
 jobs:
   sync_lede:
-    name: 同步lede仓库
+    name: 同步 lede 仓库
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
     env:
-      target: |
-        - lede
-        - openwrt-snapshot
-        - dg741a
-        - immortalwrt
-        - hanwckf
-      upstream: |
-        - https://github.com/coolsnowwolf/lede.git
-        - https://github.com/openwrt/openwrt.git
-        - https://github.com/dg741a/lede.git
-        - https://github.com/immortalwrt/immortalwrt.git
-        - https://github.com/hanwckf/immortalwrt-mt798x.git
+      TARGETS: "lean openwrt-snapshot dg741a immortalwrt hanwckf"
+      UPSTREAMS: "https://github.com/coolsnowwolf/lede.git https://github.com/openwrt/openwrt.git https://github.com/dg741a/lede.git https://github.com/immortalwrt/immortalwrt.git https://github.com/hanwckf/immortalwrt-mt798x.git"
 
     steps:
       - name: 检出仓库
@@ -45,123 +35,141 @@ jobs:
 
       - name: 克隆仓库并设置上游
         run: |
-          target=($TARGET)
-          upstream=($UPSTREAM)
           cd $GITHUB_WORKSPACE
           git clone --quiet --depth=1 https://github.com/FlawShatter/lede.git temp_rep
           cd temp_rep
-          for ((i=1; i<${#upstream[@]}; i++)); do
-            echo "Target: ${target[$i]}, Upstream: ${upstream[$i]}"
-            git remote add ${target[$i]} ${upstream[$i]}
+
+          for target in $TARGETS; do
+            upstream=$(echo $UPSTREAMS | cut -d' ' -f$(($i+1)))
+            echo "Target: $target  Upstream: $upstream"
+            git remote add $target $upstream
           done
+
           git fetch --all
 
       - name: 拉取上游代码并打补丁
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          target=($TARGET)
-          upstream=($UPSTREAM)
           cd $GITHUB_WORKSPACE/temp_rep
-          for ((i=1; i<${#upstream[@]}; i++)); do
-            echo "Target: ${target[$i]}, Upstream: ${upstream[$i]}"
-            if [[ ${TARGET[$i]} == "hanwckf" ]]; then
-              git checkout -B ${target[$i]} ${target[$i]}/openwrt-21.02
+
+          for target in $TARGETS; do
+            echo "Target: $target"
+
+            if [[ $target == "hanwckf" ]]; then
+              git checkout -B $target $target/openwrt-21.02
             else
-              git checkout -B ${target[$i]} ${target[$i]}/master
+              git checkout -B $target $target/master
             fi
-            for patch_file in "$$GITHUB_WORKSPACE/.github/diy/patch/lede/${{ env.target[0] }}"/*.patch
-            do
-              echo "应用补丁中: $patch_file"
-              if git apply --check "$patch_file"; then
-                git apply "$patch_file"
-              else
-                echo "应用补丁时出错: $patch_file"
-              fi
-            done
-            git add .
-            git commit -m "Appling Patches."
-            if [[ ${TARGET[$i]} == "lean" ]]; then
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:master
-            else
-              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:${TARGET[$i]}
-            fi
-          done
 
-  sync_luci:
-    name: 同步 Luci 仓库
-    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-    env:
-      target: |
-        - lede
-        - openwrt
-        - immortalwrt
-      upstream: |
-        - https://github.com/coolsnowwolf/luci.git
-        - https://github.com/openwrt/luci.git
-        - https://github.com/immortalwrt/luci.git
+            if [ -d $GITHUB_WORKSPACE/.github/diy/patches/lede/$target ]; then
 
-    steps:
-      - name: 检出仓库
-        uses: actions/checkout@v2
-
-      - name: 配置环境
-        run: |
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          sudo timedatectl set-timezone "Asia/Shanghai"
-
-      - name: 克隆仓库并设置上游
-        run: |
-          target=($TARGET)
-          upstream=($UPSTREAM)
-          cd $GITHUB_WORKSPACE
-          git clone --quiet --depth=1 https://github.com/FlawShatter/luci.git temp_rep
-          cd temp_rep
-          for ((i=1; i<${#upstream[@]}; i++)); do
-            git remote add ${target[$i]} ${upstream[$i]}
-          done
-          git fetch --all
-
-      - name: 拉取上游代码并打补丁
-        env:
-          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          target=($TARGET)
-          upstream=($UPSTREAM)
-          cd $GITHUB_WORKSPACE/temp_rep
-          for ((i=1; i<${#upstream[@]}; i++)); do
-            echo "Target: ${target[$i]}"
-            git checkout -B ${target[$i]} ${target[$i]}/master
-            for patch_file in "$$GITHUB_WORKSPACE/.github/diy/patch/lede/${target[$i]}"/*.patch
-            do
-              echo "应用补丁中: $patch_file"
-              if git apply --check "$patch_file"; then
-                git apply "$patch_file"
-              else
-                echo "应用补丁时出错: $patch_file"
-              fi
-            done
-            git add .
-            git commit -m "Appling Patches."
-            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:${TARGET[$i]}
-            if [[ ${TARGET[$i]} == "immortalwrt" ]]; then
-              echo "Target: hanwckf"
-              git checkout -B hanwckf ${target[$i]}/openwrt-21.02
-              for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/lede/hanwckf/*.patch
-              do
+              for patch_file in $(find $GITHUB_WORKSPACE/.github/diy/patches/lede/$target -name '*.patch'); do
                 echo "应用补丁中: $patch_file"
+
                 if git apply --check "$patch_file"; then
                   git apply "$patch_file"
                 else
                   echo "应用补丁时出错: $patch_file"
                 fi
+
               done
+
               git add .
               git commit -m "Appling Patches."
+            fi
+
+            if [[ $target == "lean" ]]; then
+              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:master
+            else
+              git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:$target
+            fi
+
+          done
+
+  sync_luci:
+    name: 同步 Luci 仓库
+    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    # if: ${{ false }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    env:
+      TARGETS: "lean openwrt immortalwrt"
+      UPSTREAMS: "https://github.com/coolsnowwolf/luci.git https://github.com/openwrt/luci.git https://github.com/immortalwrt/luci.git"
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v2
+
+      - name: 配置环境
+        run: |
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          sudo timedatectl set-timezone "Asia/Shanghai"
+
+      - name: 克隆仓库并设置上游
+        run: |
+          cd $GITHUB_WORKSPACE
+          git clone --quiet --depth=1 https://github.com/FlawShatter/luci.git temp_rep
+          cd temp_rep
+
+          for target in $TARGETS; do
+            upstream=$(echo $UPSTREAMS | cut -d' ' -f$(($i+1)))
+            echo "Target: $target  Upstream: $upstream"
+            git remote add $target $upstream
+          done
+
+          git fetch --all
+
+      - name: 拉取上游代码并打补丁
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          cd $GITHUB_WORKSPACE/temp_rep
+
+          for target in $TARGETS; do
+            echo "Target: $target"
+            git checkout -B $target $target/master
+
+            if [ -d $GITHUB_WORKSPACE/.github/diy/patches/luci/$target ];then
+
+              for patch_file in $(find $GITHUB_WORKSPACE/.github/diy/patches/luci/$target -name '*.patch'); do
+                echo "应用补丁中: $patch_file"
+
+                if git apply --check "$patch_file"; then
+                  git apply "$patch_file"
+                else
+                  echo "应用补丁时出错: $patch_file"
+                fi
+
+              done
+
+              git add .
+              git commit -m "Appling Patches."
+            fi
+            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:$target
+            if [[ $target == "immortalwrt" ]]; then
+              echo "Target: hanwckf"
+              git checkout -B hanwckf $target/openwrt-21.02
+
+              if [ -d $GITHUB_WORKSPACE/.github/diy/patches/luci/hanwckf ];then
+
+                for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/luci/hanwckf/*.patch do
+                  echo "应用补丁中: $patch_file"
+
+                  if git apply --check "$patch_file"; then
+                    git apply "$patch_file"
+                  else
+                    echo "应用补丁时出错: $patch_file"
+                  fi
+
+                done
+
+                git add .
+                git commit -m "Appling Patches."
+              fi
+
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:hanwckf
             fi
           done
@@ -169,18 +177,13 @@ jobs:
   sync_packages:
     name: 同步 Packages 仓库
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    # if: ${{ false }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
     env:
-      target: |
-        - lede
-        - openwrt
-        - immortalwrt
-      upstream: |
-        - https://github.com/coolsnowwolf/luci.git
-        - https://github.com/openwrt/luci.git
-        - https://github.com/immortalwrt/luci.git
+      TARGETS: "lean openwrt immortalwrt"
+      UPSTREAMS: "https://github.com/coolsnowwolf/luci.git https://github.com/openwrt/luci.git https://github.com/immortalwrt/luci.git"
 
     steps:
       - name: 检出仓库
@@ -194,43 +197,30 @@ jobs:
 
       - name: 克隆仓库并设置上游
         run: |
-          target=($TARGET)
-          upstream=($UPSTREAM)
           cd $GITHUB_WORKSPACE
           git clone --quiet --depth=1 https://github.com/FlawShatter/packages.git temp_rep
           cd temp_rep
-          for ((i=1; i<${#upstream[@]}; i++)); do
-            git remote add ${target[$i]} ${upstream[$i]}
+
+          for target in $TARGETS; do
+            upstream=$(echo $UPSTREAMS | cut -d' ' -f$(($i+1)))
+            echo "Target: $target  Upstream: $upstream"
+            git remote add $target $upstream
           done
+
           git fetch --all
 
       - name: 拉取上游代码并打补丁
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          target=($TARGET)
-          upstream=($UPSTREAM)
           cd $GITHUB_WORKSPACE/temp_rep
-          for ((i=1; i<${#upstream[@]}; i++)); do
-            echo "Target: ${target[$i]}"
-            git checkout -B ${target[$i]} ${target[$i]}/master
-            for patch_file in "$$GITHUB_WORKSPACE/.github/diy/patch/lede/${target[$i]}"/*.patch
-            do
-              echo "应用补丁中: $patch_file"
-              if git apply --check "$patch_file"; then
-                git apply "$patch_file"
-              else
-                echo "应用补丁时出错: $patch_file"
-              fi
-            done
-            git add .
-            git commit -m "Appling Patches."
-            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:${TARGET[$i]}
-            if [[ ${TARGET[$i]} == "immortalwrt" ]]; then
-              echo "Target: hanwckf"
-              git checkout -B hanwckf ${target[$i]}/openwrt-21.02
-              for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/lede/hanwckf/*.patch
-              do
+          for target in $TARGETS; do
+            echo "Target: $target"
+            git checkout -B $target $target/master
+
+            if [ -d $GITHUB_WORKSPACE/.github/diy/patches/packages/$target ];then
+
+              for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/packages/$target/*.patch do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
                   git apply "$patch_file"
@@ -238,8 +228,32 @@ jobs:
                   echo "应用补丁时出错: $patch_file"
                 fi
               done
+
               git add .
               git commit -m "Appling Patches."
+            fi
+
+            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:$target
+
+            if [[ $target == "immortalwrt" ]]; then
+              echo "Target: hanwckf"
+              git checkout -B hanwckf $target/openwrt-21.02
+
+              if [ -d $GITHUB_WORKSPACE/.github/diy/patches/packages/$target ];then
+
+                for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/packages/hanwckf/*.patch do
+                  echo "应用补丁中: $patch_file"
+                  if git apply --check "$patch_file"; then
+                    git apply "$patch_file"
+                  else
+                    echo "应用补丁时出错: $patch_file"
+                  fi
+                done
+
+                git add .
+                git commit -m "Appling Patches."
+              fi
+
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
             fi
           done
