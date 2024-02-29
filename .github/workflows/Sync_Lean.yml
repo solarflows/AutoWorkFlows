@@ -165,30 +165,31 @@ jobs:
               git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:$target
             fi
 
-            if [[ $target == "immortalwrt" ]]; then
-              echo "Target: hanwckf"
-              git checkout -B hanwckf $target/openwrt-21.02
+          done
+          echo "Target: hanwckf"
+          git checkout -B hanwckf immortalwrt/openwrt-21.02
 
-              if [ -d $GITHUB_WORKSPACE/.github/diy/patches/luci/hanwckf ];then
+          if [ -d $GITHUB_WORKSPACE/.github/diy/patches/luci/hanwckf ];then
 
-                for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/luci/hanwckf/*.patch; do
-                  echo "应用补丁中: $patch_file"
+            for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/luci/hanwckf/*.patch; do
+              echo "应用补丁中: $patch_file"
 
-                  if git apply --check "$patch_file"; then
-                    git apply "$patch_file"
-                  else
-                    echo "应用补丁时出错: $patch_file"
-                  fi
-
-                done
-
-                git add .
-                git commit -m "Appling Patches."
+              if git apply --check "$patch_file"; then
+                git apply "$patch_file"
+              else
+                echo "应用补丁时出错: $patch_file"
               fi
 
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:hanwckf
-            fi
-          done
+            done
+
+            git add .
+            git commit -m "Appling Patches."
+          fi
+
+          rm -rf .github/workflows
+          git add .
+          git commit -m "Removing workflows files."
+          git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:hanwckf
 
   sync_packages:
     name: 同步 Packages 仓库
@@ -260,28 +261,26 @@ jobs:
               git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:$target
             fi
 
-            if [[ $target == "immortalwrt" ]]; then
-              echo "Target: hanwckf"
-              git checkout -B hanwckf $target/openwrt-21.02
-
-              if [ -d $GITHUB_WORKSPACE/.github/diy/patches/packages/$target ];then
-
-                for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/packages/hanwckf/*.patch; do
-                  echo "应用补丁中: $patch_file"
-                  if git apply --check "$patch_file"; then
-                    git apply "$patch_file"
-                  else
-                    echo "应用补丁时出错: $patch_file"
-                  fi
-                done
-
-                git add .
-                git commit -m "Appling Patches."
-              fi
-
-              rm -rf .github/workflows
-              git add .
-              git commit -m "Removing workflows files."
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
-            fi
           done
+          echo "Target: hanwckf"
+          git checkout -B hanwckf immortalwrt/openwrt-21.02
+
+          if [ -d $GITHUB_WORKSPACE/.github/diy/patches/packages/hanwckf ];then
+
+            for patch_file in $GITHUB_WORKSPACE/.github/diy/patch/packages/hanwckf/*.patch; do
+              echo "应用补丁中: $patch_file"
+              if git apply --check "$patch_file"; then
+                git apply "$patch_file"
+              else
+                echo "应用补丁时出错: $patch_file"
+              fi
+            done
+
+            git add .
+            git commit -m "Appling Patches."
+          fi
+
+          rm -rf .github/workflows
+          git add .
+          git commit -m "Removing workflows files."
+          git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
