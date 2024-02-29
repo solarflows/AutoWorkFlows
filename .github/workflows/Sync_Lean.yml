@@ -85,6 +85,8 @@ jobs:
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:master
             else
               rm -rf .github/workflows
+              git add .
+              git commit -m "Removing workflows files."
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:$target
             fi
 
@@ -158,6 +160,8 @@ jobs:
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:master
             else
               rm -rf .github/workflows
+              git add .
+              git commit -m "Removing workflows files."
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:$target
             fi
 
@@ -251,6 +255,8 @@ jobs:
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:master
             else
               rm -rf .github/workflows
+              git add .
+              git commit -m "Removing workflows files."
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:$target
             fi
 
@@ -274,6 +280,8 @@ jobs:
               fi
 
               rm -rf .github/workflows
+              git add .
+              git commit -m "Removing workflows files."
               git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
             fi
           done
