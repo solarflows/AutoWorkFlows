@@ -59,16 +59,24 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          if [ "$(git status --porcelain)" != "" ]; then
-            cd $GITHUB_WORKSPACE/${{matrix.target}}
-            git add .
-            if [ "${{ github.event.action }}" == "schedule" ]; then
-              git commit -m "⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
-            else
-              git commit -m "🔗 Trigger update$(TZ='Asia/Shanghai' date -d now)"
-            fi
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            commit_message="⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
+          else
+            commit_message="🔗 Trigger update-$(TZ='Asia/Shanghai' date -d now)"
           fi
-          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
+          # 添加文件到工作区
+          git add .
+          # 检查是否有需要提交的更改
+          if ! git diff --quiet; then
+            # 提交更改
+            git commit -m "$commit_message"
+            echo "Commit successful. Pushing changes to the repository."
+            git push origin main
+          else
+            echo "No changes to commit. Skipping the push step."
+          fi
+
   qt6_branches:
     # if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id
     if: ${{ false }}
@@ -117,13 +125,19 @@ jobs:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
-          if [ "$(git status --porcelain)" != "" ]; then
-            cd $GITHUB_WORKSPACE/${{matrix.target}}
-            git add .
-            if [ "${{ github.event.action }}" == "schedule" ]; then
-              git commit -m "⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
-            else
-              git commit -m "🔗 Trigger update$(TZ='Asia/Shanghai' date -d now)"
-            fi
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            commit_message="⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
+          else
+            commit_message="🔗 Trigger update-$(TZ='Asia/Shanghai' date -d now)"
           fi
-          git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
+          # 添加文件到工作区
+          git add .
+          # 检查是否有需要提交的更改
+          if ! git diff --quiet; then
+            # 提交更改
+            git commit -m "$commit_message"
+            echo "Commit successful. Pushing changes to the repository."
+            git push origin main
+          else
+            echo "No changes to commit. Skipping the push step."
+          fi
