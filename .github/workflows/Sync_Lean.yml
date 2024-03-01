@@ -276,3 +276,18 @@ jobs:
             git commit -m "Appling Patches."
           fi
           git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
+
+  del_runs:
+    name: 删除旧运行记录
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 1
+          keep_minimum_runs: 4

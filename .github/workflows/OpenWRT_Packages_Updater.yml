@@ -59,17 +59,16 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          cd $GITHUB_WORKSPACE/${{matrix.target}}
-          git add .
-          git commit -m "Update-$(TZ='Asia/Shanghai' date -d now)"
+          if [ "$(git status --porcelain)" != "" ]; then
+            cd $GITHUB_WORKSPACE/${{matrix.target}}
+            git add .
+            if [ "${{ github.event.action }}" == "schedule" ]; then
+              git commit -m "⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
+            else
+              git commit -m "🔗 Trigger update$(TZ='Asia/Shanghai' date -d now)"
+            fi
+          fi
           git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
-
-      - name: 删除旧的workflows记录
-        uses: GitRML/delete-workflow-runs@main
-        with:
-          retain_days: 1
-          keep_minimum_runs: 3
-
   qt6_branches:
     # if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id
     if: ${{ false }}
@@ -118,6 +117,13 @@ jobs:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
-          git add .
-          git commit -m "Update-$(TZ='Asia/Shanghai' date -d now)"
+          if [ "$(git status --porcelain)" != "" ]; then
+            cd $GITHUB_WORKSPACE/${{matrix.target}}
+            git add .
+            if [ "${{ github.event.action }}" == "schedule" ]; then
+              git commit -m "⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
+            else
+              git commit -m "🔗 Trigger update$(TZ='Asia/Shanghai' date -d now)"
+            fi
+          fi
           git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
