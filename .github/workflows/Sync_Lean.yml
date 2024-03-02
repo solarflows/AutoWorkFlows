@@ -185,6 +185,9 @@ jobs:
             git add .
             git commit -m "Appling Patches."
           fi
+          rm -rf .github
+          git add .
+          git commit -m "Removing workflows files."
           git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:hanwckf
 
   sync_packages:
@@ -196,7 +199,7 @@ jobs:
       fail-fast: false
     env:
       TARGETS: "lean openwrt immortalwrt"
-      UPSTREAMS: "https://github.com/coolsnowwolf/luci.git https://github.com/openwrt/luci.git https://github.com/immortalwrt/luci.git"
+      UPSTREAMS: "https://github.com/coolsnowwolf/packages.git https://github.com/openwrt/packages.git https://github.com/immortalwrt/packages.git"
 
     steps:
       - name: 检出仓库
@@ -275,6 +278,9 @@ jobs:
             git add .
             git commit -m "Appling Patches."
           fi
+          rm -rf .github
+          git add .
+          git commit -m "Removing workflows files."
           git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
 
   del_runs:
