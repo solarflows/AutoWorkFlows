@@ -64,8 +64,8 @@ jobs:
               git checkout -B $target $target/master
             fi
 
-            if [ -d "$GITHUB_WORKSPACE/.github/diy/patch/lede/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/patch/lede/$target" -type f -name '*.patch' -print0 |
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/lede/$target" ]; then
+              find "$GITHUB_WORKSPACE/.github/diy/patches/lede/$target" -type f -name '*.patch' -print0 |
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -138,8 +138,8 @@ jobs:
             echo "Target: $target"
             git checkout -B $target $target/master
 
-            if [ -d "$GITHUB_WORKSPACE/.github/diy/patch/luci/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/patch/luci/$target" -type f -name '*.patch' -print0 |
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/luci/$target" ]; then
+              find "$GITHUB_WORKSPACE/.github/diy/patches/luci/$target" -type f -name '*.patch' -print0 |
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -167,8 +167,8 @@ jobs:
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
-          if [ -d "$GITHUB_WORKSPACE/.github/diy/patch/luci/hanwckf" ]; then
-            find "$GITHUB_WORKSPACE/.github/diy/patch/luci/hanwckf" -type f -name '*.patch' -print0 |
+          if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/luci/hanwckf" ]; then
+            find "$GITHUB_WORKSPACE/.github/diy/patches/luci/hanwckf" -type f -name '*.patch' -print0 |
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check "$patch_file"; then
@@ -235,8 +235,8 @@ jobs:
             echo "Target: $target"
             git checkout -B $target $target/master
 
-            if [ -d "$GITHUB_WORKSPACE/.github/diy/patch/packages/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/patch/packages/$target" -type f -name '*.patch' -print0 |
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/packages/$target" ]; then
+              find "$GITHUB_WORKSPACE/.github/diy/patches/packages/$target" -type f -name '*.patch' -print0 |
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -265,8 +265,8 @@ jobs:
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
-          if [ -d "$GITHUB_WORKSPACE/.github/diy/patch/packages/hanwckf" ]; then
-            find "$GITHUB_WORKSPACE/.github/diy/patch/packages/hanwckf" -type f -name '*.patch' -print0 |
+          if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/packages/hanwckf" ]; then
+            find "$GITHUB_WORKSPACE/.github/diy/patches/packages/hanwckf" -type f -name '*.patch' -print0 |
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check "$patch_file"; then
