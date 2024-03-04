@@ -67,12 +67,13 @@ jobs:
           fi
           # 添加文件到工作区
           git add .
+
           # 检查是否有需要提交的更改
-          if ! git diff --quiet; then
+          if [ -n "$(git status --porcelain)" ]; then
             # 提交更改
             git commit -m "$commit_message"
             echo "Commit successful. Pushing changes to the repository."
-            git push origin main
+            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
           else
             echo "No changes to commit. Skipping the push step."
           fi
@@ -132,12 +133,13 @@ jobs:
           fi
           # 添加文件到工作区
           git add .
+
           # 检查是否有需要提交的更改
-          if ! git diff --quiet; then
+          if [ -n "$(git status --porcelain)" ]; then
             # 提交更改
             git commit -m "$commit_message"
             echo "Commit successful. Pushing changes to the repository."
-            git push origin main
+            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
           else
             echo "No changes to commit. Skipping the push step."
           fi
