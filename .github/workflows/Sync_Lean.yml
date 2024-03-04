@@ -71,7 +71,7 @@ jobs:
                 if git apply --check "$patch_file"; then
                   git apply "$patch_file"
                   git add .
-                  git commit -m "Applying $patch_file."
+                  git commit -m "Applying $(basename "$file_path")."
                 else
                   echo "应用补丁时出错: $patch_file"
                 fi
@@ -145,7 +145,7 @@ jobs:
                 if git apply --check "$patch_file"; then
                   git apply "$patch_file"
                   git add .
-                  git commit -m "Applying $patch_file."
+                  git commit -m "Applying $(basename "$file_path")."
                 else
                   echo "应用补丁时出错: $patch_file"
                 fi
@@ -174,7 +174,7 @@ jobs:
               if git apply --check "$patch_file"; then
                 git apply "$patch_file"
                 git add .
-                git commit -m "Applying $patch_file."
+                git commit -m "Applying $(basename "$file_path")."
               else
                 echo "应用补丁时出错: $patch_file"
               fi
@@ -242,7 +242,7 @@ jobs:
                 if git apply --check "$patch_file"; then
                   git apply "$patch_file"
                   git add .
-                  git commit -m "Applying $patch_file."
+                  git commit -m "Applying $(basename "$file_path")."
                 else
                   echo "应用补丁时出错: $patch_file"
                 fi
@@ -272,7 +272,7 @@ jobs:
               if git apply --check "$patch_file"; then
                 git apply "$patch_file"
                 git add .
-                git commit -m "Applying $patch_file."
+                git commit -m "Applying $(basename "$file_path")."
               else
                 echo "应用补丁时出错: $patch_file"
               fi
