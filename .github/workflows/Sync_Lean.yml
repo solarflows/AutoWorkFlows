@@ -2,7 +2,7 @@ name: 同步 Coolsnowwolf 仓库
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # 每6小时运行一次
+    - cron: '0 */4 * * *'  # 每6小时运行一次
   push:
       paths:
         - '.github/workflows/Sync_Lean.yml'
@@ -70,12 +70,12 @@ jobs:
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
                   git apply "$patch_file"
+                  git add .
+                  git commit -m "Applying $patch_file."
                 else
                   echo "应用补丁时出错: $patch_file"
                 fi
               done
-              git add .
-              git commit -m "Applying Patches."
             fi
 
             if [[ $target == "lean" ]]; then
@@ -144,12 +144,12 @@ jobs:
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
                   git apply "$patch_file"
+                  git add .
+                  git commit -m "Applying $patch_file."
                 else
                   echo "应用补丁时出错: $patch_file"
                 fi
               done
-              git add .
-              git commit -m "Applying Patches."
             fi
 
             if [[ $target == "lean" ]]; then
@@ -173,12 +173,12 @@ jobs:
               echo "应用补丁中: $patch_file"
               if git apply --check "$patch_file"; then
                 git apply "$patch_file"
+                git add .
+                git commit -m "Applying $patch_file."
               else
                 echo "应用补丁时出错: $patch_file"
               fi
             done
-            git add .
-            git commit -m "Applying Patches."
           fi
 
           if [ -d .github ]; then
@@ -241,12 +241,12 @@ jobs:
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
                   git apply "$patch_file"
+                  git add .
+                  git commit -m "Applying $patch_file."
                 else
                   echo "应用补丁时出错: $patch_file"
                 fi
               done
-              git add .
-              git commit -m "Applying Patches."
             fi
 
             if [[ $target == "lean" ]]; then
@@ -271,12 +271,12 @@ jobs:
               echo "应用补丁中: $patch_file"
               if git apply --check "$patch_file"; then
                 git apply "$patch_file"
+                git add .
+                git commit -m "Applying $patch_file."
               else
                 echo "应用补丁时出错: $patch_file"
               fi
             done
-            git add .
-            git commit -m "Applying Patches."
           fi
 
           if [ -d .github ]; then

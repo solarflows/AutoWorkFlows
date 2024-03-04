@@ -2,7 +2,7 @@ name: OpenWRT Packages Updater
 
 on:
   schedule:
-    - cron: 0 19 * * *
+    - cron: '0 */4 * * *'  # 每4小时运行一次
   push:
     paths:
       - '.github/diy/Update.sh'
