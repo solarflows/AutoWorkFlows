@@ -2,7 +2,7 @@ name: 同步 Coolsnowwolf 仓库
 
 on:
   schedule:
-    - cron: '0 */4 * * *'  # 每6小时运行一次
+    - cron: '0 */12 * * *'  # 每12小时运行一次
   push:
       paths:
         - '.github/workflows/Sync_Lean.yml'
