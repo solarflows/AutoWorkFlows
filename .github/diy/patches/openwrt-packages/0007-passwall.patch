@@ -1,10 +1,10 @@
-From 05cee4b031940c94f00b47fe65ffdd2c96772164 Mon Sep 17 00:00:00 2001
+From 5ec3969dff8680f7fe60b2a39e827cf5ba45b12d Mon Sep 17 00:00:00 2001
 From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
 Date: Sat, 18 Feb 2023 23:30:48 +0800
 Subject: [PATCH 1/2] luci: add smartdns logic
 
 ---
- .../luasrc/controller/passwall.lua            |   9 +-
+ .../luasrc/controller/passwall.lua            |   8 +-
  .../model/cbi/passwall/client/global.lua      |  67 ++-
  luci-app-passwall/po/zh-cn/passwall.po        |  15 +
  .../root/usr/share/passwall/0_default_config  |   1 +
@@ -13,33 +13,32 @@ Subject: [PATCH 1/2] luci: add smartdns logic
  .../share/passwall/helper_smartdns_add.lua    | 422 ++++++++++++++++++
  .../root/usr/share/passwall/iptables.sh       |   1 +
  .../root/usr/share/passwall/nftables.sh       |   1 +
- 9 files changed, 567 insertions(+), 4 deletions(-)
+ 9 files changed, 566 insertions(+), 4 deletions(-)
  create mode 100755 luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
  create mode 100644 luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
 
 diff --git a/luci-app-passwall/luasrc/controller/passwall.lua b/luci-app-passwall/luasrc/controller/passwall.lua
-index be604f7efa..22b40fa593 100644
+index d5d46baf35..3fabd3ab05 100644
 --- a/luci-app-passwall/luasrc/controller/passwall.lua
 +++ b/luci-app-passwall/luasrc/controller/passwall.lua
-@@ -186,9 +186,14 @@ function clear_log()
+@@ -189,9 +189,13 @@ function clear_log()
  end
  
  function status()
 -	-- local dns_mode = ucic:get(appname, "@global[0]", "dns_mode")
  	local e = {}
 -	e.dns_mode_status = luci.sys.call("netstat -apn | grep ':15353 ' >/dev/null") == 0
-+
 +	local dns_shunt = ucic:get(appname, "@global[0]", "dns_shunt") or "dnsmasq"
 +	if dns_shunt == "smartdns" then
 +		e.dns_mode_status = luci.sys.call("pidof smartdns >/dev/null") == 0
 +	else
 +		e.dns_mode_status = luci.sys.call("netstat -apn | grep ':15353 ' >/dev/null") == 0
 +	end
- 	e.haproxy_status = luci.sys.call(string.format("top -bn1 | grep -v grep | grep '%s/bin/' | grep haproxy >/dev/null", appname)) == 0
- 	e["tcp_node_status"] = luci.sys.call(string.format("top -bn1 | grep -v -E 'grep|acl/|acl_' | grep '%s/bin/' | grep -i 'TCP' >/dev/null", appname)) == 0
+ 	e.haproxy_status = luci.sys.call(string.format("/bin/busybox top -bn1 | grep -v grep | grep '%s/bin/' | grep haproxy >/dev/null", appname)) == 0
+ 	e["tcp_node_status"] = luci.sys.call("/bin/busybox top -bn1 | grep -v 'grep' | grep '/tmp/etc/passwall/bin/' | grep -v '_acl_' | grep 'TCP' >/dev/null") == 0
  
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-index 3b4b828760..f659757e96 100644
+index fa54e92404..7a44c78d7b 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 @@ -246,13 +246,70 @@ end
@@ -136,7 +135,7 @@ index 3b4b828760..f659757e96 100644
  	_depends["chinadns_ng"] = false
  end
 diff --git a/luci-app-passwall/po/zh-cn/passwall.po b/luci-app-passwall/po/zh-cn/passwall.po
-index fbb56cda78..3c10a6567c 100644
+index 4f3357dbae..58db80dba4 100644
 --- a/luci-app-passwall/po/zh-cn/passwall.po
 +++ b/luci-app-passwall/po/zh-cn/passwall.po
 @@ -112,6 +112,21 @@ msgstr "与TCP节点相同"
@@ -174,10 +173,10 @@ index 13ea9855df..f388d5fdd7 100644
  	option use_direct_list '1'
  	option use_proxy_list '1'
 diff --git a/luci-app-passwall/root/usr/share/passwall/app.sh b/luci-app-passwall/root/usr/share/passwall/app.sh
-index ff6e02e57c..1e50b20e57 100755
+index 9569864c2b..7bd079c673 100755
 --- a/luci-app-passwall/root/usr/share/passwall/app.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/app.sh
-@@ -1170,6 +1170,28 @@ start_dns() {
+@@ -1162,6 +1162,28 @@ start_dns() {
  		}
  	}
  
@@ -192,7 +191,7 @@ index ff6e02e57c..1e50b20e57 100755
 +		fi
 +		local smartdns_exclude_default_group=$(config_t_get global smartdns_exclude_default_group 0)
 +		lua $APP_PATH/helper_smartdns_add.lua -FLAG "default" -SMARTDNS_CONF "/tmp/etc/smartdns/$CONFIG.conf" \
-+			-LOCAL_GROUP ${group_domestic:-nil} -REMOTE_GROUP "passwall_proxy" -REMOTE_PROXY_SERVER $(cat $TMP_PATH/TCP_SOCKS_server) -REMOTE_EXCLUDE "${smartdns_exclude_default_group}" \
++			-LOCAL_GROUP ${group_domestic:-nil} -REMOTE_GROUP "passwall_proxy" -REMOTE_PROXY_SERVER ${TCP_SOCKS_server} -REMOTE_EXCLUDE "${smartdns_exclude_default_group}" \
 +			-TUN_DNS ${smartdns_remote_dns} \
 +			-USE_DIRECT_LIST "${USE_BLOCK_LIST}" -USE_PROXY_LIST "${USE_PROXY_LIST}" -USE_BLOCK_LIST "${USE_BLOCK_LIST}" -USE_GFW_LIST "${USE_GFW_LIST}" -CHN_LIST "${CHN_LIST}" \
 +			-TCP_NODE ${TCP_NODE} -DEFAULT_PROXY_MODE "${TCP_PROXY_MODE}" -NO_PROXY_IPV6 ${FILTER_PROXY_IPV6:-0} -NFTFLAG ${nftflag:-0} \
@@ -261,12 +260,13 @@ index 0000000000..14254f141f
 +esac
 diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
 new file mode 100644
-index 0000000000..438d03a236
+index 0000000000..4a15c5de82
 --- /dev/null
 +++ b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
 @@ -0,0 +1,422 @@
 +require "luci.sys"
 +local api = require "luci.passwall.api"
++local appname = "passwall"
 +
 +local var = api.get_args(arg)
 +local FLAG = var["-FLAG"]
@@ -294,7 +294,6 @@ index 0000000000..438d03a236
 +
 +local uci = api.uci
 +local sys = api.sys
-+local appname = api.appname
 +local fs = api.fs
 +local datatypes = api.datatypes
 +
@@ -688,10 +687,10 @@ index 0000000000..438d03a236
 +sys.call(string.format('echo "conf-file %s" >> /etc/smartdns/custom.conf', SMARTDNS_CONF))
 +log("  - 请让SmartDNS作为Dnsmasq的上游或重定向！")
 diff --git a/luci-app-passwall/root/usr/share/passwall/iptables.sh b/luci-app-passwall/root/usr/share/passwall/iptables.sh
-index bcc1e4b9c4..9463c24648 100755
+index 1fdb34ac80..5c8382a09e 100755
 --- a/luci-app-passwall/root/usr/share/passwall/iptables.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/iptables.sh
-@@ -1156,6 +1156,7 @@ flush_ipset() {
+@@ -1174,6 +1174,7 @@ flush_ipset() {
  		destroy_ipset ${_name}
  	done
  	rm -rf /tmp/singbox_passwall*
@@ -700,10 +699,10 @@ index bcc1e4b9c4..9463c24648 100755
  	/etc/init.d/passwall reload
  }
 diff --git a/luci-app-passwall/root/usr/share/passwall/nftables.sh b/luci-app-passwall/root/usr/share/passwall/nftables.sh
-index 2d8c6f9886..005920c376 100755
+index 009af8764c..7e43a321e4 100755
 --- a/luci-app-passwall/root/usr/share/passwall/nftables.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/nftables.sh
-@@ -1201,6 +1201,7 @@ flush_nftset() {
+@@ -1218,6 +1218,7 @@ flush_nftset() {
  		destroy_nftset ${_name}
  	done
  	rm -rf /tmp/singbox_passwall*
@@ -712,7 +711,7 @@ index 2d8c6f9886..005920c376 100755
  	/etc/init.d/passwall reload
  }
 
-From 3c9cc3a674d2e91ab5ecfa5d57ffb9fd65e6f249 Mon Sep 17 00:00:00 2001
+From f87f77080047c28c8e195661948cb328ab3e471e Mon Sep 17 00:00:00 2001
 From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
 Date: Mon, 24 Jul 2023 02:58:31 +0800
 Subject: [PATCH 2/2] luci: testing
