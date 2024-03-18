@@ -1,4 +1,4 @@
-From 5ec3969dff8680f7fe60b2a39e827cf5ba45b12d Mon Sep 17 00:00:00 2001
+From d2e50ce57fb1f18425fb5f7c09366bab4931b43b Mon Sep 17 00:00:00 2001
 From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
 Date: Sat, 18 Feb 2023 23:30:48 +0800
 Subject: [PATCH 1/2] luci: add smartdns logic
@@ -38,10 +38,10 @@ index d5d46baf35..3fabd3ab05 100644
  	e["tcp_node_status"] = luci.sys.call("/bin/busybox top -bn1 | grep -v 'grep' | grep '/tmp/etc/passwall/bin/' | grep -v '_acl_' | grep 'TCP' >/dev/null") == 0
  
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-index fa54e92404..7a44c78d7b 100644
+index c26498f334..4bd30a660e 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-@@ -246,13 +246,70 @@ end
+@@ -261,13 +261,70 @@ end
  
  s:tab("DNS", translate("DNS"))
  
@@ -114,7 +114,7 @@ index fa54e92404..7a44c78d7b 100644
  if api.is_finded("dns2tcp") then
  	dns_mode:value("dns2tcp", translatef("Requery DNS By %s", "TCP"))
  end
-@@ -266,6 +323,9 @@ if has_xray then
+@@ -281,6 +338,9 @@ if has_xray then
  	dns_mode:value("xray", "Xray")
  end
  dns_mode:value("udp", translatef("Requery DNS By %s", "UDP"))
@@ -124,7 +124,7 @@ index fa54e92404..7a44c78d7b 100644
  
  o = s:taboption("DNS", ListValue, "xray_dns_mode", " ")
  o:value("tcp", "TCP")
-@@ -396,6 +456,9 @@ o.description = translate("The default DNS used when not in the domain name rule
+@@ -411,6 +471,9 @@ o.description = translate("The default DNS used when not in the domain name rule
  .. "<li>" .. translate("Direct DNS Internet experience may be better, but DNS will be leaked!") .. "</li>"
  .. "</ul>"
  local _depends = {tcp_proxy_mode = "proxy"}
@@ -711,7 +711,7 @@ index 009af8764c..7e43a321e4 100755
  	/etc/init.d/passwall reload
  }
 
-From f87f77080047c28c8e195661948cb328ab3e471e Mon Sep 17 00:00:00 2001
+From 614e063f4a63160b5c67f045189494c3340f673e Mon Sep 17 00:00:00 2001
 From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
 Date: Mon, 24 Jul 2023 02:58:31 +0800
 Subject: [PATCH 2/2] luci: testing
