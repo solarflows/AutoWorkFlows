@@ -1,31 +1,29 @@
-From d2e50ce57fb1f18425fb5f7c09366bab4931b43b Mon Sep 17 00:00:00 2001
+From 85828a2a4f11d6b398be23e4523bc4ead48426aa Mon Sep 17 00:00:00 2001
 From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
 Date: Sat, 18 Feb 2023 23:30:48 +0800
 Subject: [PATCH 1/2] luci: add smartdns logic
 
 ---
- .../luasrc/controller/passwall.lua            |   8 +-
- .../model/cbi/passwall/client/global.lua      |  67 ++-
+ .../luasrc/controller/passwall.lua            |   7 +-
+ .../model/cbi/passwall/client/global.lua      |  73 ++-
  luci-app-passwall/po/zh-cn/passwall.po        |  15 +
  .../root/usr/share/passwall/0_default_config  |   1 +
- .../root/usr/share/passwall/app.sh            |  25 ++
+ .../root/usr/share/passwall/app.sh            |  25 +
  .../usr/share/passwall/helper_smartdns.sh     |  30 ++
- .../share/passwall/helper_smartdns_add.lua    | 422 ++++++++++++++++++
+ .../share/passwall/helper_smartdns_add.lua    | 427 ++++++++++++++++++
  .../root/usr/share/passwall/iptables.sh       |   1 +
  .../root/usr/share/passwall/nftables.sh       |   1 +
- 9 files changed, 566 insertions(+), 4 deletions(-)
+ 9 files changed, 576 insertions(+), 4 deletions(-)
  create mode 100755 luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
  create mode 100644 luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
 
 diff --git a/luci-app-passwall/luasrc/controller/passwall.lua b/luci-app-passwall/luasrc/controller/passwall.lua
-index d5d46baf35..3fabd3ab05 100644
+index bfb8f79613..cc94e5663a 100644
 --- a/luci-app-passwall/luasrc/controller/passwall.lua
 +++ b/luci-app-passwall/luasrc/controller/passwall.lua
-@@ -189,9 +189,13 @@ function clear_log()
- end
+@@ -203,7 +203,12 @@ end
  
- function status()
--	-- local dns_mode = ucic:get(appname, "@global[0]", "dns_mode")
+ function index_status()
  	local e = {}
 -	e.dns_mode_status = luci.sys.call("netstat -apn | grep ':15353 ' >/dev/null") == 0
 +	local dns_shunt = ucic:get(appname, "@global[0]", "dns_shunt") or "dnsmasq"
@@ -35,10 +33,10 @@ index d5d46baf35..3fabd3ab05 100644
 +		e.dns_mode_status = luci.sys.call("netstat -apn | grep ':15353 ' >/dev/null") == 0
 +	end
  	e.haproxy_status = luci.sys.call(string.format("/bin/busybox top -bn1 | grep -v grep | grep '%s/bin/' | grep haproxy >/dev/null", appname)) == 0
- 	e["tcp_node_status"] = luci.sys.call("/bin/busybox top -bn1 | grep -v 'grep' | grep '/tmp/etc/passwall/bin/' | grep -v '_acl_' | grep 'TCP' >/dev/null") == 0
+ 	e["tcp_node_status"] = luci.sys.call("/bin/busybox top -bn1 | grep -v 'grep' | grep '/tmp/etc/passwall/bin/' | grep 'default' | grep 'TCP' >/dev/null") == 0
  
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-index c26498f334..4bd30a660e 100644
+index 9923b8cbf5..31efd01bc8 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 @@ -261,13 +261,70 @@ end
@@ -124,9 +122,22 @@ index c26498f334..4bd30a660e 100644
  
  o = s:taboption("DNS", ListValue, "xray_dns_mode", " ")
  o:value("tcp", "TCP")
-@@ -411,6 +471,9 @@ o.description = translate("The default DNS used when not in the domain name rule
- .. "<li>" .. translate("Direct DNS Internet experience may be better, but DNS will be leaked!") .. "</li>"
- .. "</ul>"
+@@ -385,7 +445,11 @@ o.rmempty = false
+ if api.is_finded("chinadns-ng") then
+ 	o = s:taboption("DNS", Flag, "chinadns_ng", translate("ChinaDNS-NG"), translate("The effect is better, recommend."))
+ 	o.default = "0"
+-	o:depends({remote_fakedns = false})
++	local _depends = {remote_fakedns = false}
++	if api.is_finded("smartdns") then
++		_depends["dns_shunt"] = "dnsmasq"
++	end
++	o:depends(_depends)
+ 
+ 	o = s:taboption("DNS", ListValue, "chinadns_ng_default_tag", translate("ChinaDNS-NG Domain Default Tag"))
+ 	o.default = "none"
+@@ -411,6 +475,9 @@ o.description = "<ul>"
+ 		.. "<li>" .. translate("Direct DNS: Internet experience may be better, but DNS will be leaked!") .. "</li>"
+ 		.. "</ul>"
  local _depends = {tcp_proxy_mode = "proxy"}
 +if api.is_finded("smartdns") then
 +	_depends["dns_shunt"] = "dnsmasq"
@@ -135,7 +146,7 @@ index c26498f334..4bd30a660e 100644
  	_depends["chinadns_ng"] = false
  end
 diff --git a/luci-app-passwall/po/zh-cn/passwall.po b/luci-app-passwall/po/zh-cn/passwall.po
-index 4f3357dbae..58db80dba4 100644
+index f4ff64d74f..840765db9f 100644
 --- a/luci-app-passwall/po/zh-cn/passwall.po
 +++ b/luci-app-passwall/po/zh-cn/passwall.po
 @@ -112,6 +112,21 @@ msgstr "与TCP节点相同"
@@ -161,22 +172,22 @@ index 4f3357dbae..58db80dba4 100644
  msgstr "过滤模式"
  
 diff --git a/luci-app-passwall/root/usr/share/passwall/0_default_config b/luci-app-passwall/root/usr/share/passwall/0_default_config
-index 13ea9855df..f388d5fdd7 100644
+index b9ad81e5fd..e6bd5ed295 100644
 --- a/luci-app-passwall/root/usr/share/passwall/0_default_config
 +++ b/luci-app-passwall/root/usr/share/passwall/0_default_config
 @@ -8,6 +8,7 @@ config global
- 	option filter_proxy_ipv6 '0'
+ 	option filter_proxy_ipv6 '1'
  	option dns_mode 'dns2tcp'
  	option remote_dns '1.1.1.1'
 +	list smartdns_remote_dns 'https://1.1.1.1/dns-query'
  	option use_default_dns 'direct'
- 	option use_direct_list '1'
- 	option use_proxy_list '1'
+ 	option chinadns_ng '1'
+ 	option chinadns_ng_default_tag 'none'
 diff --git a/luci-app-passwall/root/usr/share/passwall/app.sh b/luci-app-passwall/root/usr/share/passwall/app.sh
-index 9569864c2b..7bd079c673 100755
+index 5ba4da30c1..5f21126bf5 100755
 --- a/luci-app-passwall/root/usr/share/passwall/app.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/app.sh
-@@ -1162,6 +1162,28 @@ start_dns() {
+@@ -1231,6 +1231,28 @@ start_dns() {
  		}
  	}
  
@@ -193,7 +204,7 @@ index 9569864c2b..7bd079c673 100755
 +		lua $APP_PATH/helper_smartdns_add.lua -FLAG "default" -SMARTDNS_CONF "/tmp/etc/smartdns/$CONFIG.conf" \
 +			-LOCAL_GROUP ${group_domestic:-nil} -REMOTE_GROUP "passwall_proxy" -REMOTE_PROXY_SERVER ${TCP_SOCKS_server} -REMOTE_EXCLUDE "${smartdns_exclude_default_group}" \
 +			-TUN_DNS ${smartdns_remote_dns} \
-+			-USE_DIRECT_LIST "${USE_BLOCK_LIST}" -USE_PROXY_LIST "${USE_PROXY_LIST}" -USE_BLOCK_LIST "${USE_BLOCK_LIST}" -USE_GFW_LIST "${USE_GFW_LIST}" -CHN_LIST "${CHN_LIST}" \
++			-USE_DIRECT_LIST "${USE_DIRECT_LIST}" -USE_PROXY_LIST "${USE_PROXY_LIST}" -USE_BLOCK_LIST "${USE_BLOCK_LIST}" -USE_GFW_LIST "${USE_GFW_LIST}" -CHN_LIST "${CHN_LIST}" \
 +			-TCP_NODE ${TCP_NODE} -DEFAULT_PROXY_MODE "${TCP_PROXY_MODE}" -NO_PROXY_IPV6 ${FILTER_PROXY_IPV6:-0} -NFTFLAG ${nftflag:-0} \
 +			-NO_LOGIC_LOG ${NO_LOGIC_LOG:-0}
 +		source $APP_PATH/helper_smartdns.sh restart
@@ -205,7 +216,7 @@ index 9569864c2b..7bd079c673 100755
  	case "$DNS_MODE" in
  	dns2socks)
  		local dns2socks_socks_server=$(echo $(config_t_get global socks_server 127.0.0.1:1080) | sed "s/#/:/g")
-@@ -1632,6 +1654,7 @@ stop() {
+@@ -1710,6 +1732,7 @@ stop() {
  	unset V2RAY_LOCATION_ASSET
  	unset XRAY_LOCATION_ASSET
  	stop_crontab
@@ -213,7 +224,7 @@ index 9569864c2b..7bd079c673 100755
  	source $APP_PATH/helper_dnsmasq.sh del
  	source $APP_PATH/helper_dnsmasq.sh restart no_log=1
  	[ -s "$TMP_PATH/bridge_nf_ipt" ] && sysctl -w net.bridge.bridge-nf-call-iptables=$(cat $TMP_PATH/bridge_nf_ipt) >/dev/null 2>&1
-@@ -1684,6 +1707,8 @@ LOCALHOST_PROXY=$(config_t_get global localhost_proxy 1)
+@@ -1763,6 +1786,8 @@ LOCALHOST_PROXY=$(config_t_get global localhost_proxy 1)
  	LOCALHOST_UDP_PROXY_MODE=$UDP_PROXY_MODE
  }
  CLIENT_PROXY=$(config_t_get global client_proxy 1)
@@ -260,10 +271,10 @@ index 0000000000..14254f141f
 +esac
 diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
 new file mode 100644
-index 0000000000..4a15c5de82
+index 0000000000..e74f38e95c
 --- /dev/null
 +++ b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
-@@ -0,0 +1,422 @@
+@@ -0,0 +1,427 @@
 +require "luci.sys"
 +local api = require "luci.passwall.api"
 +local appname = "passwall"
@@ -411,8 +422,9 @@ index 0000000000..4a15c5de82
 +end
 +
 +local cache_text = ""
++local nodes_address_md5 = luci.sys.exec("echo -n $(uci show passwall | grep '\\.address') | md5sum")
 +local new_rules = luci.sys.exec("echo -n $(find /usr/share/passwall/rules -type f | xargs md5sum)")
-+local new_text = SMARTDNS_CONF .. LOCAL_GROUP .. REMOTE_GROUP .. REMOTE_PROXY_SERVER .. REMOTE_EXCLUDE .. TUN_DNS .. USE_DIRECT_LIST .. USE_PROXY_LIST .. USE_BLOCK_LIST .. USE_GFW_LIST .. CHN_LIST .. DEFAULT_PROXY_MODE .. NO_PROXY_IPV6 .. new_rules
++local new_text = SMARTDNS_CONF .. LOCAL_GROUP .. REMOTE_GROUP .. REMOTE_PROXY_SERVER .. REMOTE_EXCLUDE .. TUN_DNS .. USE_DIRECT_LIST .. USE_PROXY_LIST .. USE_BLOCK_LIST .. USE_GFW_LIST .. CHN_LIST .. DEFAULT_PROXY_MODE .. NO_PROXY_IPV6 .. nodes_address_md5 .. new_rules
 +if fs.access(CACHE_TEXT_FILE) then
 +	for line in io.lines(CACHE_TEXT_FILE) do
 +		cache_text = line
@@ -480,18 +492,10 @@ index 0000000000..4a15c5de82
 +	local setflag= (NFTFLAG == "1") and "inet#fw4#" or ""
 +	local set_type= (NFTFLAG == "1") and "-nftset" or "-ipset"
 +
-+	--屏蔽列表
-+	if USE_BLOCK_LIST == "1" then
-+		for line in io.lines("/usr/share/passwall/rules/block_host") do
-+			if line ~= "" and not line:find("#") then
-+				set_domain_address(line, "-")
-+			end
-+		end
-+	end
-+
 +	--始终用国内DNS解析节点域名
 +	uci:foreach(appname, "nodes", function(t)
 +		local address = t.address
++		if address == "engage.cloudflareclient.com" then return end
 +		if datatypes.hostname(address) then
 +			set_domain_group(address, LOCAL_GROUP)
 +			set_domain_ipset(address, "#4:" .. setflag .. "passwall_vpslist,#6:" .. setflag .. "passwall_vpslist6")
@@ -499,34 +503,49 @@ index 0000000000..4a15c5de82
 +	end)
 +	log(string.format("  - 节点列表中的域名(vpslist)使用分组：%s", LOCAL_GROUP or "默认"))
 +
-+	--直连（白名单）列表
-+	if USE_DIRECT_LIST == "1" then
-+		for line in io.lines("/usr/share/passwall/rules/direct_host") do
-+			if line ~= "" and not line:find("#") then
-+				add_excluded_domain(line)
-+				set_domain_group(line, LOCAL_GROUP)
-+				set_domain_ipset(line, "#4:" .. setflag .. "passwall_whitelist,#6:" .. setflag .. "passwall_whitelist6")
++	--屏蔽列表
++	if USE_BLOCK_LIST == "1" then
++		if fs.access("/usr/share/passwall/rules/block_host") then
++			for line in io.lines("/usr/share/passwall/rules/block_host") do
++				if line ~= "" and not line:find("#") then
++					set_domain_address(line, "-")
++				end
 +			end
 +		end
-+		log(string.format("  - 域名白名单(whitelist)使用分组：%s", LOCAL_GROUP or "默认"))
++	end
++
++	--直连（白名单）列表
++	if USE_DIRECT_LIST == "1" then
++		if fs.access("/usr/share/passwall/rules/direct_host") then
++			for line in io.lines("/usr/share/passwall/rules/direct_host") do
++				if line ~= "" and not line:find("#") then
++					add_excluded_domain(line)
++					set_domain_group(line, LOCAL_GROUP)
++					set_domain_ipset(line, "#4:" .. setflag .. "passwall_whitelist,#6:" .. setflag .. "passwall_whitelist6")
++				end
++			end
++			log(string.format("  - 域名白名单(whitelist)使用分组：%s", LOCAL_GROUP or "默认"))
++		end
 +	end
 +
 +	--代理（黑名单）列表
 +	if USE_PROXY_LIST == "1" then
-+		for line in io.lines("/usr/share/passwall/rules/proxy_host") do
-+			if line ~= "" and not line:find("#") then
-+				add_excluded_domain(line)
-+				local ipset_flag = "#4:" .. setflag .. "passwall_blacklist,#6:" .. setflag .. "passwall_blacklist6"
-+				if NO_PROXY_IPV6 == "1" then
-+					set_domain_address(line, "#6")
-+					ipset_flag = "#4:" .. setflag .. "passwall_blacklist"
++		if fs.access("/usr/share/passwall/rules/proxy_host") then
++			for line in io.lines("/usr/share/passwall/rules/proxy_host") do
++				if line ~= "" and not line:find("#") then
++					add_excluded_domain(line)
++					local ipset_flag = "#4:" .. setflag .. "passwall_blacklist,#6:" .. setflag .. "passwall_blacklist6"
++					if NO_PROXY_IPV6 == "1" then
++						set_domain_address(line, "#6")
++						ipset_flag = "#4:" .. setflag .. "passwall_blacklist"
++					end
++					set_domain_group(line, REMOTE_GROUP)
++					set_domain_ipset(line, ipset_flag)
++					set_domain_extra_param(line, "-no-serve-expired")
 +				end
-+				set_domain_group(line, REMOTE_GROUP)
-+				set_domain_ipset(line, ipset_flag)
-+				set_domain_extra_param(line, "-no-serve-expired")
 +			end
++			log(string.format("  - 代理域名表(blacklist)使用分组：%s", REMOTE_GROUP or "默认"))
 +		end
-+		log(string.format("  - 代理域名表(blacklist)使用分组：%s", REMOTE_GROUP or "默认"))
 +	end
 +
 +	--GFW列表
@@ -553,21 +572,18 @@ index 0000000000..4a15c5de82
 +	--中国列表
 +	if CHN_LIST ~= "0" then
 +		if fs.access("/usr/share/passwall/rules/chnlist") then
++			local domain_set_name = "passwall-chnlist"
++			local domain_file = CACHE_DNS_PATH .. "_chnlist.list"
++			sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '" > ' .. domain_file)
++			sys.exec(string.format('echo "domain-set -name %s -file %s" >> %s', domain_set_name, domain_file, CACHE_DNS_FILE))
++
 +			if CHN_LIST == "direct" then
-+				local domain_set_name = "passwall-chnlist"
-+				local domain_file = CACHE_DNS_PATH .. "_chnlist.list"
-+				sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '" > ' .. domain_file)
-+				sys.exec(string.format('echo "domain-set -name %s -file %s" >> %s', domain_set_name, domain_file, CACHE_DNS_FILE))
 +				local domain_rules_str = string.format('domain-rules /domain-set:%s/ %s', domain_set_name, LOCAL_GROUP and "-nameserver " .. LOCAL_GROUP or "")
 +				domain_rules_str = domain_rules_str .. " " .. set_type .. " #4:" .. setflag .. "passwall_chnroute,#6:" .. setflag .. "passwall_chnroute6"
 +				sys.exec(string.format('echo "%s" >> %s', domain_rules_str, CACHE_DNS_FILE))
 +				log(string.format("  - 中国域名表(chnroute)使用分组：%s", LOCAL_GROUP or "默认"))
 +			end
 +			if CHN_LIST == "proxy" then
-+				local domain_set_name = "passwall-chnlist"
-+				local domain_file = CACHE_DNS_PATH .. "_chnlist.list"
-+				sys.exec('cat /usr/share/passwall/rules/chnlist | grep -v -E "^#" | grep -v -E "' .. excluded_domain_str .. '" > ' .. domain_file)
-+				sys.exec(string.format('echo "domain-set -name %s -file %s" >> %s', domain_set_name, domain_file, CACHE_DNS_FILE))
 +				local domain_rules_str = string.format('domain-rules /domain-set:%s/ -nameserver %s', domain_set_name, REMOTE_GROUP)
 +				domain_rules_str = domain_rules_str .. " -speed-check-mode none"
 +				domain_rules_str = domain_rules_str .. " -no-serve-expired"
@@ -687,31 +703,31 @@ index 0000000000..4a15c5de82
 +sys.call(string.format('echo "conf-file %s" >> /etc/smartdns/custom.conf', SMARTDNS_CONF))
 +log("  - 请让SmartDNS作为Dnsmasq的上游或重定向！")
 diff --git a/luci-app-passwall/root/usr/share/passwall/iptables.sh b/luci-app-passwall/root/usr/share/passwall/iptables.sh
-index 1fdb34ac80..5c8382a09e 100755
+index 4eb3dc2eaf..9a06c2d991 100755
 --- a/luci-app-passwall/root/usr/share/passwall/iptables.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/iptables.sh
-@@ -1174,6 +1174,7 @@ flush_ipset() {
- 		destroy_ipset ${_name}
- 	done
+@@ -1186,6 +1186,7 @@ flush_ipset_reload() {
+ 	del_firewall_rule
+ 	flush_ipset
  	rm -rf /tmp/singbox_passwall*
 +	rm -rf /tmp/etc/passwall_tmp/smartdns*
  	rm -rf /tmp/etc/passwall_tmp/dnsmasq*
  	/etc/init.d/passwall reload
  }
 diff --git a/luci-app-passwall/root/usr/share/passwall/nftables.sh b/luci-app-passwall/root/usr/share/passwall/nftables.sh
-index 009af8764c..7e43a321e4 100755
+index 4e3fd7da90..de9acee241 100755
 --- a/luci-app-passwall/root/usr/share/passwall/nftables.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/nftables.sh
-@@ -1218,6 +1218,7 @@ flush_nftset() {
- 		destroy_nftset ${_name}
- 	done
+@@ -1228,6 +1228,7 @@ flush_nftset_reload() {
+ 	del_firewall_rule
+ 	flush_nftset
  	rm -rf /tmp/singbox_passwall*
 +	rm -rf /tmp/etc/passwall_tmp/smartdns*
  	rm -rf /tmp/etc/passwall_tmp/dnsmasq*
  	/etc/init.d/passwall reload
  }
 
-From 614e063f4a63160b5c67f045189494c3340f673e Mon Sep 17 00:00:00 2001
+From ad1b6663d929bd6bca3ef69a19b002e1f84d329a Mon Sep 17 00:00:00 2001
 From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
 Date: Mon, 24 Jul 2023 02:58:31 +0800
 Subject: [PATCH 2/2] luci: testing
@@ -722,7 +738,7 @@ It is currently in testing and development, and has not been merged to the maste
  1 file changed, 2 insertions(+)
 
 diff --git a/luci-app-passwall/Makefile b/luci-app-passwall/Makefile
-index 7868fe21b9..86b047192a 100644
+index dbed859ef4..0ba5c5e11f 100644
 --- a/luci-app-passwall/Makefile
 +++ b/luci-app-passwall/Makefile
 @@ -10,2 +10,3 @@ PKG_RELEASE:=
@@ -750,4 +766,3 @@ index 3d6188eb..178f6872 100644
  	list gfwlist_url 'https://fastly.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/gfw.txt'
  	list chnroute_url 'https://ispip.clang.cn/all_cn.txt'
  	list chnroute_url 'https://fastly.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/china.txt'
-	
