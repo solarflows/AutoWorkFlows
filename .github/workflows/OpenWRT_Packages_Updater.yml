@@ -7,7 +7,7 @@ on:
     paths:
       - '.github/diy/Update.sh'
       - '.github/workflows/OpenWRT_Packages_Updater.yml'
-      - '.github/diy/patches/openwrt-packages/*.patch'
+      - '.github/diy/patches/openwrt-packages/*/*.patch'
   watch:
     types: started
   repository_dispatch:
@@ -53,7 +53,7 @@ jobs:
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
           # 应用补丁
-          find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages/${{matrix.target}}" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: 提交代码
         env:
@@ -119,7 +119,7 @@ jobs:
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
           # 应用补丁
-          find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages/${{matrix.target}}" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: 提交代码
         env:
