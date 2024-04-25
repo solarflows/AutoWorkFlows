@@ -44,82 +44,16 @@ jobs:
           # 删除除diy目录以外的文件夹
           # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
           rm -rf ./* >/dev/null 2>&1
-          bash $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
+          bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/${{matrix.target}}.sh
 
       - name: 修改代码
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
-          bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
-          bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
-          bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
+          bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/convert_translation.sh
+          bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/create_acl_for_luci.sh -a
+          bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/Modify.sh
           # 应用补丁
-          find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages/${{matrix.target}}" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
-
-      - name: 提交代码
-        env:
-          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          cd $GITHUB_WORKSPACE/${{matrix.target}}
-          if [ "${{ github.event_name }}" == "schedule" ]; then
-            commit_message="⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
-          else
-            commit_message="🔗 Trigger update-$(TZ='Asia/Shanghai' date -d now)"
-          fi
-          # 添加文件到工作区
-          git add .
-
-          # 检查是否有需要提交的更改
-          if [ -n "$(git status --porcelain)" ]; then
-            # 提交更改
-            git commit -m "$commit_message"
-            echo "Commit successful. Pushing changes to the repository."
-            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
-          else
-            echo "No changes to commit. Skipping the push step."
-          fi
-
-  qt6_branches:
-    # if: github.event.repository.owner.id == github.event.sender.id || ! github.event.sender.id
-    if: ${{ false }}
-    runs-on: Ubuntu-22.04
-
-    name: 更新 QT6 分支
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [qt6]
-
-    steps:
-      - name: 签出代码
-        uses: actions/checkout@main
-
-      - name: 初始化环境
-        run: |
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          sudo timedatectl set-timezone "Asia/Shanghai"
-          ( sudo -E apt-get -qq install rename ) &
-
-      - name: 克隆代码
-        run: |
-          cd $GITHUB_WORKSPACE
-          chmod +x .github/diy/*.sh
-          git clone -b ${{matrix.target}} https://github.com/FlawShatter/openwrt-packages.git ${{matrix.target}}
-          cd ${{matrix.target}}
-          git rm -r --cache * >/dev/null 2>&1 &
-          # 删除除diy目录以外的文件夹
-          # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
-          rm -rf ./* >/dev/null 2>&1
-          bash $GITHUB_WORKSPACE/.github/diy/Update.sh ${{matrix.target}}
-
-      - name: 修改代码
-        run: |
-          cd $GITHUB_WORKSPACE/${{matrix.target}}
-          bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
-          bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
-          bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
-          # 应用补丁
-          find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages/${{matrix.target}}" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          find "$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches/${{matrix.target}}" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: 提交代码
         env:

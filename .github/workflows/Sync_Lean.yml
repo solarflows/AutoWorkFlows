@@ -17,8 +17,6 @@ jobs:
     name: 同步 lede 仓库
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
     env:
       TARGETS: "lean openwrt-snapshot dg741a immortalwrt hanwckf"
       UPSTREAMS: "https://github.com/coolsnowwolf/lede.git https://github.com/openwrt/openwrt.git https://github.com/dg741a/lede.git https://github.com/immortalwrt/immortalwrt.git https://github.com/hanwckf/immortalwrt-mt798x.git"
@@ -64,8 +62,8 @@ jobs:
               git checkout -B $target $target/master
             fi
 
-            if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/lede/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/patches/lede/$target" -type f -name '*.patch' -print0 |
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" ]; then
+              find "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" -type f -name '*.patch' -print0 |
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -96,8 +94,6 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     # if: ${{ false }}
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
     env:
       TARGETS: "lean openwrt immortalwrt"
       UPSTREAMS: "https://github.com/coolsnowwolf/luci.git https://github.com/openwrt/luci.git https://github.com/immortalwrt/luci.git"
@@ -138,8 +134,8 @@ jobs:
             echo "Target: $target"
             git checkout -B $target $target/master
 
-            if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/luci/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/patches/luci/$target" -type f -name '*.patch' -print0 |
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" ]; then
+              find "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" -type f -name '*.patch' -print0 |
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -167,8 +163,8 @@ jobs:
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
-          if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/luci/hanwckf" ]; then
-            find "$GITHUB_WORKSPACE/.github/diy/patches/luci/hanwckf" -type f -name '*.patch' -print0 |
+          if [ -d "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" ]; then
+            find "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" -type f -name '*.patch' -print0 |
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check "$patch_file"; then
@@ -194,8 +190,6 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     # if: ${{ false }}
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
     env:
       TARGETS: "lean openwrt immortalwrt"
       UPSTREAMS: "https://github.com/coolsnowwolf/packages.git https://github.com/openwrt/packages.git https://github.com/immortalwrt/packages.git"
@@ -235,8 +229,8 @@ jobs:
             echo "Target: $target"
             git checkout -B $target $target/master
 
-            if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/packages/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/patches/packages/$target" -type f -name '*.patch' -print0 |
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" ]; then
+              find "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" -type f -name '*.patch' -print0 |
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -265,8 +259,8 @@ jobs:
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
-          if [ -d "$GITHUB_WORKSPACE/.github/diy/patches/packages/hanwckf" ]; then
-            find "$GITHUB_WORKSPACE/.github/diy/patches/packages/hanwckf" -type f -name '*.patch' -print0 |
+          if [ -d "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" ]; then
+            find "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" -type f -name '*.patch' -print0 |
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check "$patch_file"; then

@@ -112,7 +112,7 @@ function mvdir() {
     fi
 }
 
-format_git_clone_output -r https://github.com/hyy-666/my-diy -b "$1" && mvdir my-diy
+format_git_clone_output -r https://github.com/hyy-666/my-diy -b main && mvdir my-diy
 
 # LuCI Theme
 
