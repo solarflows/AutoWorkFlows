@@ -37,7 +37,7 @@ jobs:
       - name: 克隆代码
         run: |
           cd $GITHUB_WORKSPACE
-          chmod +x .github/diy/*.sh
+          chmod +x .github/diy/openwrt-packages/*.sh
           git clone -b ${{matrix.target}} https://github.com/FlawShatter/openwrt-packages.git ${{matrix.target}}
           cd ${{matrix.target}}
           git rm -r --cache * >/dev/null 2>&1 &
