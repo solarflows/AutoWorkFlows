@@ -1,11 +1,11 @@
-From 85828a2a4f11d6b398be23e4523bc4ead48426aa Mon Sep 17 00:00:00 2001
+From 1d511a9c79610f685b4751af2c7524569fd04891 Mon Sep 17 00:00:00 2001
 From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
 Date: Sat, 18 Feb 2023 23:30:48 +0800
 Subject: [PATCH 1/2] luci: add smartdns logic
 
 ---
  .../luasrc/controller/passwall.lua            |   7 +-
- .../model/cbi/passwall/client/global.lua      |  73 ++-
+ .../model/cbi/passwall/client/global.lua      |  71 ++-
  luci-app-passwall/po/zh-cn/passwall.po        |  15 +
  .../root/usr/share/passwall/0_default_config  |   1 +
  .../root/usr/share/passwall/app.sh            |  25 +
@@ -13,7 +13,7 @@ Subject: [PATCH 1/2] luci: add smartdns logic
  .../share/passwall/helper_smartdns_add.lua    | 427 ++++++++++++++++++
  .../root/usr/share/passwall/iptables.sh       |   1 +
  .../root/usr/share/passwall/nftables.sh       |   1 +
- 9 files changed, 576 insertions(+), 4 deletions(-)
+ 9 files changed, 576 insertions(+), 2 deletions(-)
  create mode 100755 luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
  create mode 100644 luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
 
@@ -36,10 +36,10 @@ index bfb8f79613..cc94e5663a 100644
  	e["tcp_node_status"] = luci.sys.call("/bin/busybox top -bn1 | grep -v 'grep' | grep '/tmp/etc/passwall/bin/' | grep 'default' | grep 'TCP' >/dev/null") == 0
  
 diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-index 9923b8cbf5..31efd01bc8 100644
+index 7f26ed7be6..acf7b12342 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-@@ -261,13 +261,70 @@ end
+@@ -261,9 +261,68 @@ end
  
  s:tab("DNS", translate("DNS"))
  
@@ -107,22 +107,18 @@ index 9923b8cbf5..31efd01bc8 100644
 +
  ---- DNS Forward Mode
  dns_mode = s:taboption("DNS", ListValue, "dns_mode", translate("Filter Mode"))
--dns_mode.rmempty = false
--dns_mode:reset_values()
- if api.is_finded("dns2tcp") then
- 	dns_mode:value("dns2tcp", translatef("Requery DNS By %s", "TCP"))
- end
-@@ -281,6 +338,9 @@ if has_xray then
+ dns_mode:value("tcp", translatef("Requery DNS By %s", "TCP"))
+@@ -277,6 +336,9 @@ end
+ if has_xray then
  	dns_mode:value("xray", "Xray")
  end
- dns_mode:value("udp", translatef("Requery DNS By %s", "UDP"))
 +if api.is_finded("smartdns") then
 +	dns_mode:depends("dns_shunt", "dnsmasq")
 +end
  
- o = s:taboption("DNS", ListValue, "xray_dns_mode", " ")
+ o = s:taboption("DNS", ListValue, "xray_dns_mode", translate("Request protocol"))
  o:value("tcp", "TCP")
-@@ -385,7 +445,11 @@ o.rmempty = false
+@@ -374,7 +436,11 @@ end
  if api.is_finded("chinadns-ng") then
  	o = s:taboption("DNS", Flag, "chinadns_ng", translate("ChinaDNS-NG"), translate("The effect is better, recommend."))
  	o.default = "0"
@@ -135,7 +131,7 @@ index 9923b8cbf5..31efd01bc8 100644
  
  	o = s:taboption("DNS", ListValue, "chinadns_ng_default_tag", translate("ChinaDNS-NG Domain Default Tag"))
  	o.default = "none"
-@@ -411,6 +475,9 @@ o.description = "<ul>"
+@@ -400,6 +466,9 @@ o.description = "<ul>"
  		.. "<li>" .. translate("Direct DNS: Internet experience may be better, but DNS will be leaked!") .. "</li>"
  		.. "</ul>"
  local _depends = {tcp_proxy_mode = "proxy"}
@@ -146,7 +142,7 @@ index 9923b8cbf5..31efd01bc8 100644
  	_depends["chinadns_ng"] = false
  end
 diff --git a/luci-app-passwall/po/zh-cn/passwall.po b/luci-app-passwall/po/zh-cn/passwall.po
-index f4ff64d74f..840765db9f 100644
+index f9b167b5e2..580e2434ae 100644
 --- a/luci-app-passwall/po/zh-cn/passwall.po
 +++ b/luci-app-passwall/po/zh-cn/passwall.po
 @@ -112,6 +112,21 @@ msgstr "与TCP节点相同"
@@ -172,24 +168,24 @@ index f4ff64d74f..840765db9f 100644
  msgstr "过滤模式"
  
 diff --git a/luci-app-passwall/root/usr/share/passwall/0_default_config b/luci-app-passwall/root/usr/share/passwall/0_default_config
-index b9ad81e5fd..e6bd5ed295 100644
+index 67db6af52f..9ee7b06f53 100644
 --- a/luci-app-passwall/root/usr/share/passwall/0_default_config
 +++ b/luci-app-passwall/root/usr/share/passwall/0_default_config
 @@ -8,6 +8,7 @@ config global
  	option filter_proxy_ipv6 '1'
- 	option dns_mode 'dns2tcp'
+ 	option dns_mode 'tcp'
  	option remote_dns '1.1.1.1'
 +	list smartdns_remote_dns 'https://1.1.1.1/dns-query'
  	option use_default_dns 'direct'
  	option chinadns_ng '1'
  	option chinadns_ng_default_tag 'none'
 diff --git a/luci-app-passwall/root/usr/share/passwall/app.sh b/luci-app-passwall/root/usr/share/passwall/app.sh
-index 5ba4da30c1..5f21126bf5 100755
+index 630ede1c5a..c6a52fcefe 100755
 --- a/luci-app-passwall/root/usr/share/passwall/app.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/app.sh
-@@ -1231,6 +1231,28 @@ start_dns() {
- 		}
- 	}
+@@ -1223,6 +1223,28 @@ start_dns() {
+ 
+ 	TUN_DNS="127.0.0.1#${dns_listen_port}"
  
 +	[ "${DNS_SHUNT}" = "smartdns" ] && {
 +		rm -rf $TMP_PATH2/dnsmasq_default*
@@ -216,7 +212,7 @@ index 5ba4da30c1..5f21126bf5 100755
  	case "$DNS_MODE" in
  	dns2socks)
  		local dns2socks_socks_server=$(echo $(config_t_get global socks_server 127.0.0.1:1080) | sed "s/#/:/g")
-@@ -1710,6 +1732,7 @@ stop() {
+@@ -1713,6 +1735,7 @@ stop() {
  	unset V2RAY_LOCATION_ASSET
  	unset XRAY_LOCATION_ASSET
  	stop_crontab
@@ -224,14 +220,14 @@ index 5ba4da30c1..5f21126bf5 100755
  	source $APP_PATH/helper_dnsmasq.sh del
  	source $APP_PATH/helper_dnsmasq.sh restart no_log=1
  	[ -s "$TMP_PATH/bridge_nf_ipt" ] && sysctl -w net.bridge.bridge-nf-call-iptables=$(cat $TMP_PATH/bridge_nf_ipt) >/dev/null 2>&1
-@@ -1763,6 +1786,8 @@ LOCALHOST_PROXY=$(config_t_get global localhost_proxy 1)
+@@ -1766,6 +1789,8 @@ LOCALHOST_PROXY=$(config_t_get global localhost_proxy 1)
  	LOCALHOST_UDP_PROXY_MODE=$UDP_PROXY_MODE
  }
  CLIENT_PROXY=$(config_t_get global client_proxy 1)
 +DNS_SHUNT=$(config_t_get global dns_shunt dnsmasq)
 +[ -z "$(first_type $DNS_SHUNT)" ] && DNS_SHUNT="dnsmasq"
- DNS_MODE=$(config_t_get global dns_mode dns2tcp)
- DNS_CACHE=$(config_t_get global dns_cache 0)
+ DNS_MODE=$(config_t_get global dns_mode tcp)
+ DNS_CACHE=0
  REMOTE_DNS=$(config_t_get global remote_dns 1.1.1.1:53 | sed 's/#/:/g' | sed -E 's/\:([^:]+)$/#\1/g')
 diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh b/luci-app-passwall/root/usr/share/passwall/helper_smartdns.sh
 new file mode 100755
@@ -703,7 +699,7 @@ index 0000000000..e74f38e95c
 +sys.call(string.format('echo "conf-file %s" >> /etc/smartdns/custom.conf', SMARTDNS_CONF))
 +log("  - 请让SmartDNS作为Dnsmasq的上游或重定向！")
 diff --git a/luci-app-passwall/root/usr/share/passwall/iptables.sh b/luci-app-passwall/root/usr/share/passwall/iptables.sh
-index 4eb3dc2eaf..9a06c2d991 100755
+index 2a7e94d890..5dfb52c123 100755
 --- a/luci-app-passwall/root/usr/share/passwall/iptables.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/iptables.sh
 @@ -1186,6 +1186,7 @@ flush_ipset_reload() {
@@ -715,10 +711,10 @@ index 4eb3dc2eaf..9a06c2d991 100755
  	/etc/init.d/passwall reload
  }
 diff --git a/luci-app-passwall/root/usr/share/passwall/nftables.sh b/luci-app-passwall/root/usr/share/passwall/nftables.sh
-index 4e3fd7da90..de9acee241 100755
+index 0bff3d45f5..3c03748cc8 100755
 --- a/luci-app-passwall/root/usr/share/passwall/nftables.sh
 +++ b/luci-app-passwall/root/usr/share/passwall/nftables.sh
-@@ -1228,6 +1228,7 @@ flush_nftset_reload() {
+@@ -1225,6 +1225,7 @@ flush_nftset_reload() {
  	del_firewall_rule
  	flush_nftset
  	rm -rf /tmp/singbox_passwall*
@@ -727,7 +723,7 @@ index 4e3fd7da90..de9acee241 100755
  	/etc/init.d/passwall reload
  }
 
-From ad1b6663d929bd6bca3ef69a19b002e1f84d329a Mon Sep 17 00:00:00 2001
+From c27fbda9b5ef7dc15f34fd558d5c4d76d378891e Mon Sep 17 00:00:00 2001
 From: xiaorouji <60100640+xiaorouji@users.noreply.github.com>
 Date: Mon, 24 Jul 2023 02:58:31 +0800
 Subject: [PATCH 2/2] luci: testing
