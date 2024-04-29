@@ -43,6 +43,10 @@ jobs:
           bash $GITHUB_WORKSPACE/.github/diy/convert_translation.sh
           bash $GITHUB_WORKSPACE/.github/diy/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/Modify.sh
+
+          # download patch
+          curl https://github.com/xiaorouji/openwrt-passwall/compare/main...luci-smartdns-dev.patch -o $GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages/${{ matrix.target }}/luci-smartdns-dev.patch
+
           find "$GITHUB_WORKSPACE/.github/diy/patches/openwrt-packages/${{ matrix.target }}" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
 
       - name: 提交代码
