@@ -87,11 +87,14 @@ checkout_partial_code() {
     exit 1
   fi
 
+  # 删除./*/po/zh_Hans
+  rm -rfv $temp_dir/*/po/zh_Hans
+
   # 提取指定子目录到目标运行目录或当前目录，若文件夹不存在则报错并退出
   for dir in "${@}"; do
     if [ "$dir" != "--repo" ] && [ "$dir" != "-r" ] && [ "$dir" != "--branch" ] && [ "$dir" != "-b" ]; then
         if ! cp -r $temp_dir/$dir .;then
-          echo "错误：$dir 文件夹不存在于仓库中" 
+          echo "错误：$dir 文件夹不存在于仓库中"
           exit 1
         fi
     fi
