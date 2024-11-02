@@ -124,7 +124,7 @@ format_git_clone_output -r https://github.com/hyy-666/luci-theme-Butterfly-dark
 format_git_clone_output -r https://github.com/apollo-ng/luci-theme-darkmatter
 format_git_clone_output -r https://github.com/jerrykuku/luci-theme-argon -b 18.06
 format_git_clone_output -r https://github.com/thinktip/luci-theme-neobird
-checkout_partial_code -r https://github.com/lynxnexy/packages luci-theme-tano
+# checkout_partial_code -r https://github.com/lynxnexy/packages luci-theme-tano #missing
 # svn co https://github.com/Carseason/openwrt-themedog/trunk/luci/luci-themedog luci-theme-dog
 # svn co https://github.com/koshev-msk/modemfeed/trunk/luci/themes && mvdir themes
 # format_git_clone_output -r https://github.com/kiddin9/luci-theme-edge
