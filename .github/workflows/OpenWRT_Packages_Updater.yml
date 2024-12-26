@@ -40,7 +40,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           chmod +x .github/diy/openwrt-packages/*.sh
-          git clone -b ${{matrix.target}} https://github.com/FlawShatter/openwrt-packages.git ${{matrix.target}}
+          git clone -b ${{matrix.target}} https://github.com/solarflows/openwrt-packages.git ${{matrix.target}}
           cd ${{matrix.target}}
           git rm -r --cache * >/dev/null 2>&1 &
           # 删除除diy目录以外的文件夹
@@ -81,7 +81,7 @@ jobs:
             # 提交更改
             git commit -m "$commit_message"
             echo "Commit successful. Pushing changes to the repository."
-            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/openwrt-packages.git" HEAD:${{matrix.target}}
+            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/openwrt-packages.git" HEAD:${{matrix.target}}
           else
             echo "No changes to commit. Skipping the push step."
           fi

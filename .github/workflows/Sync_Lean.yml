@@ -14,7 +14,7 @@ on:
 
 jobs:
   sync_lede:
-    name: 同步 lede 仓库
+    name: 同步 lean 仓库
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     runs-on: ubuntu-latest
     env:
@@ -34,7 +34,7 @@ jobs:
       - name: 克隆仓库并设置上游
         run: |
           cd $GITHUB_WORKSPACE
-          git clone --quiet --depth=1 https://github.com/FlawShatter/lede.git temp_rep
+          git clone --quiet --depth=1 https://github.com/solarflows/lede.git temp_rep
           cd temp_rep
 
           index=1
@@ -77,14 +77,14 @@ jobs:
             fi
 
             if [[ $target == "lean" ]]; then
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:master
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:master
             else
               if [ -d .github ]; then
                   rm -rf .github
                   git add .
                   git commit -m "Removing workflows files."
               fi
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/lede.git" -f HEAD:$target
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:$target
             fi
 
           done
@@ -111,7 +111,7 @@ jobs:
       - name: 克隆仓库并设置上游
         run: |
           cd $GITHUB_WORKSPACE
-          git clone --quiet --depth=1 https://github.com/FlawShatter/luci.git temp_rep
+          git clone --quiet --depth=1 https://github.com/solarflows/luci.git temp_rep
           cd temp_rep
 
           index=1
@@ -149,14 +149,14 @@ jobs:
             fi
 
             if [[ $target == "lean" ]]; then
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:master
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:master
             else
               if [ -d .github ]; then
                   rm -rf .github
                   git add .
                   git commit -m "Removing workflows files."
               fi
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:$target
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:$target
             fi
           done
 
@@ -183,7 +183,7 @@ jobs:
               git commit -m "Removing workflows files."
           fi
 
-          git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/luci.git" -f HEAD:hanwckf
+          git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:hanwckf
 
   sync_packages:
     name: 同步 Packages 仓库
@@ -207,7 +207,7 @@ jobs:
       - name: 克隆仓库并设置上游
         run: |
           cd $GITHUB_WORKSPACE
-          git clone --quiet --depth=1 https://github.com/FlawShatter/packages.git temp_rep
+          git clone --quiet --depth=1 https://github.com/solarflows/packages.git temp_rep
           cd temp_rep
 
           index=1
@@ -244,14 +244,14 @@ jobs:
             fi
 
             if [[ $target == "lean" ]]; then
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:master
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:master
             else
               if [ -d .github ]; then
                   rm -rf .github
                   git add .
                   git commit -m "Removing workflows files."
               fi
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:$target
+              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:$target
             fi
 
           done
@@ -279,7 +279,7 @@ jobs:
               git commit -m "Removing workflows files."
           fi
 
-          git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/FlawShatter/packages.git" -f HEAD:hanwckf
+          git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:hanwckf
 
   del_runs:
     name: 删除旧运行记录
