@@ -76,16 +76,23 @@ jobs:
               done
             fi
 
-            if [[ $target == "lean" ]]; then
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:master
-            else
-              if [ -d .github ]; then
-                  rm -rf .github
-                  git add .
-                  git commit -m "Removing workflows files."
-              fi
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:$target
+            # if [[ $target == "lean" ]]; then
+            #   git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:master
+            # else
+            #   if [ -d .github ]; then
+            #       rm -rf .github
+            #       git add .
+            #       git commit -m "Removing workflows files."
+            #   fi
+            #   git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:$target
+            # fi
+
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
             fi
+            git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:$target
 
           done
 
