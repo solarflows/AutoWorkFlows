@@ -114,6 +114,17 @@ function mvdir() {
 
 # Applications
 
+# D
+# dnsfilter         基于dnsmasq的去广告程序
+format_git_clone_output -r https://github.com/kiddin9/luci-app-dnsfilter
+
+# lucky             大吉多种功能结合体
+checkout_partial_code -r https://github.com/gdy666/luci-app-lucky luci-app-lucky lucky
+
+# M
+# # MosDNS            插件化可定制的DNS转发器
+checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app-mosdns mosdns v2dat
+
 # P
 # PassWall1&2       科学上网
 format_git_clone_output -r https://github.com/xiaorouji/openwrt-passwall-packages && mvdir openwrt-passwall-packages
