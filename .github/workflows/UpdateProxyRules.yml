@@ -51,8 +51,9 @@ jobs:
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@||/' >> $output_file
 
           # 添加标题和描述
-          sed -i '1i! Title: AutoProxy Rulues' $output_file
-          sed -i '2i! Description: UnCN as primary rules, CN exceptions and IPs' $output_file
+          sed -i '1i![AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: AutoProxy Rulues' $output_file
+          sed -i '3i! Description: UnCN as primary rules, CN exceptions and IPs' $output_file
 
       - name: Generate autoproxy_lite
         id: generate_autoproxy_lite
@@ -71,7 +72,8 @@ jobs:
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@||/' >> $output_file
 
           # 添加标题和描述
-          sed -i '1i! Title: AutoProxy Rulues' $output_file
+          sed -i '1i![AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: AutoProxy Rulues' $output_file
           sed -i '2i! Description: GFW as primary rules, CN exceptions' $output_file
 
       - name: Generate whitelist
@@ -92,7 +94,8 @@ jobs:
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@||/' >> $output_file
 
           # 添加标题和描述
-          sed -i '1i! Title: Whitelist Rules' $output_file
+          sed -i '1i![AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: Whitelist Rules' $output_file
           sed -i '2i! Description: Only CN domains and IPs' $output_file
 
       - name: Generate blacklist
@@ -107,7 +110,8 @@ jobs:
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
 
           # 添加标题和描述
-          sed -i '1i! Title: Blacklist Rules' $output_file
+          sed -i '1i![AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: Blacklist Rules' $output_file
           sed -i '2i! Description: Only UnCN domains.' $output_file
 
       - name: Generate gfwlist
@@ -122,7 +126,8 @@ jobs:
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
 
           # 添加标题和描述
-          sed -i '1i! Title: GFWList Rules' $output_file
+          sed -i '1i![AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: GFWList Rules' $output_file
           sed -i '2i! Description: Only GFWList domains.' $output_file
 
       - name: Get current timestamp
