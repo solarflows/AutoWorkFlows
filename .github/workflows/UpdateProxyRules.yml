@@ -1,0 +1,116 @@
+﻿name: Generate Rules sets
+
+on:
+  schedule:
+    - cron: "1 30 * * *"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  generate-rules:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Create temporary directory
+        run: mkdir -p /tmp/rule/publish
+
+      - name: Download geoview binary
+        run: |
+          wget https://github.com/snowie2000/geoview/releases/latest/download/geoview -O /tmp/rule/geoview
+          chmod +x /tmp/rule/geoview
+
+      - name: Download geoip and geosite files
+        run: |
+          wget https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geoip.dat -O /tmp/rule/geoip.dat
+          wget https://cdn.jsdelivr.net/gh/Loyalsoldier/v2ray-rules-dat@release/geosite.dat -O /tmp/rule/geosite.dat
+
+      - name: Generate autoproxy
+        id: generate_autoproxy
+        run: |
+          # 创建或清空 autoproxy 文件
+          output_file="/tmp/rule/publish/autoproxy"
+          > $output_file
+
+          # 输出 GFW 域名
+          echo "## GFW Domains" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
+
+          # 输出 CN 域名例外
+          echo "" >> $output_file
+          echo "## CN Domain Exceptions" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@||/' >> $output_file
+
+          # 输出 CN IP 范围
+          echo "" >> $output_file
+          echo "## CN IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@||/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i! Title: AutoProxy Rulues' $output_file
+          sed -i '2i! Description: GFWList as primary rules, CN exceptions and IPs' $output_file
+
+      - name: Generate whitelist
+        id: generate_whitelist
+        run: |
+          # 创建或清空 Whitelist 文件
+          output_file="/tmp/rule/publish/whitelist"
+          > $output_file
+
+          # 输出 CN 域名例外
+          echo "" >> $output_file
+          echo "## CN Domain Exceptions" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@||/' >> $output_file
+
+          # 输出 CN IP 范围
+          echo "" >> $output_file
+          echo "## CN IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@||/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i! Title: Whitelist Rules' $output_file
+          sed -i '2i! Description: Only CN domains and IPs' $output_file
+
+      - name: Generate blacklist
+        id: generate_blacklist
+        run: |
+          # 创建或清空 Blacklist 文件
+          output_file="/tmp/rule/publish/blacklist"
+          > $output_file
+
+          # 输出 非CN 域名
+          echo "## GFW Domains" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i! Title: Blacklist Rules' $output_file
+          sed -i '2i! Description: Only UnCN domains.' $output_file
+
+      - name: Get current timestamp
+        id: timestamp
+        run: echo "version=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
+
+      - name: Release and upload assets
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          release_name: ${{ env.version }}
+          tag: ${{ env.version }}
+          file_glob: true
+          file: /tmp/rule/publish/*
+
+      - name: Git push assets to "release" branch
+        run: |
+          cd /tmp/rule/publish || exit 1
+          git init
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b release
+          git add .
+          git commit -m "${{ env.RELEASE_NAME }}"
+          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push -f -u origin release
