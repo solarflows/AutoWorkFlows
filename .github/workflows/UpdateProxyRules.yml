@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Create temporary directory
-        run: mkdir -p /tmp/rule/unencode
+        run: mkdir -p /tmp/rule/publish
 
       - name: Download geoview binary
         run: |
@@ -33,7 +33,7 @@ jobs:
         id: generate_autoproxy
         run: |
           # 创建或清空 autoproxy 文件
-          output_file="/tmp/rule/unencode/autoproxy"
+          output_file="/tmp/rule/publish/autoproxy"
           > $output_file
 
           # 输出 GFW 域名
@@ -58,7 +58,7 @@ jobs:
         id: generate_autoproxy_lite
         run: |
           # 创建或清空 autoproxy_lite 文件
-          output_file="/tmp/rule/unencode/autoproxy_lite"
+          output_file="/tmp/rule/publish/autoproxy_lite"
           > $output_file
 
           # 输出 GFW 域名
@@ -78,7 +78,7 @@ jobs:
         id: generate_whitelist
         run: |
           # 创建或清空 Whitelist 文件
-          output_file="/tmp/rule/unencode/whitelist"
+          output_file="/tmp/rule/publish/whitelist"
           > $output_file
 
           # 输出 CN 域名例外
@@ -99,7 +99,7 @@ jobs:
         id: generate_blacklist
         run: |
           # 创建或清空 Blacklist 文件
-          output_file="/tmp/rule/unencode/blacklist"
+          output_file="/tmp/rule/publish/blacklist"
           > $output_file
 
           # 输出 非CN 域名
@@ -114,7 +114,7 @@ jobs:
         id: generate_gfwlist
         run: |
           # 创建或清空 Blacklist 文件
-          output_file="/tmp/rule/unencode/gfwlist"
+          output_file="/tmp/rule/publish/gfwlist"
           > $output_file
 
           # 输出 gfw 域名
@@ -124,13 +124,6 @@ jobs:
           # 添加标题和描述
           sed -i '1i! Title: GFWList Rules' $output_file
           sed -i '2i! Description: Only GFWList domains.' $output_file
-
-      - name: Encode files to Base64
-        run: |
-          mkdir -p /tmp/rule/publish  # 创建存放编码后文件的目录
-          for file in /tmp/rule/unencode/*; do
-            base64 "$file" > "/tmp/rule/publish/$(basename "$file")"
-          done
 
       - name: Get current timestamp
         id: timestamp
