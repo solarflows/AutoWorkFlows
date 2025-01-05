@@ -124,6 +124,7 @@ format_git_clone_output -r https://github.com/hyy-666/luci-theme-Butterfly-dark
 format_git_clone_output -r https://github.com/apollo-ng/luci-theme-darkmatter
 format_git_clone_output -r https://github.com/jerrykuku/luci-theme-argon -b 18.06
 format_git_clone_output -r https://github.com/thinktip/luci-theme-neobird
+format_git_clone_output -r https://github.com/derisamedia/luci-theme-alpha
 # checkout_partial_code -r https://github.com/lynxnexy/packages luci-theme-tano #missing
 # svn co https://github.com/Carseason/openwrt-themedog/trunk/luci/luci-themedog luci-theme-dog
 # svn co https://github.com/koshev-msk/modemfeed/trunk/luci/themes && mvdir themes
@@ -280,7 +281,7 @@ checkout_partial_code -r https://github.com/immortalwrt/luci -b openwrt-18.06 ap
 # tasks             定时任务
 checkout_partial_code -r https://github.com/jjm2473/openwrt-apps luci-app-tasks
 # luci-app-tailscaler 异地组网
-checkout_partial_code -r https://github.com/zijieKwok/luci-app-tailscale luci-app-tailscaler
+checkout_partial_code -r https://github.com/zijieKwok/luci-app-tailscale1 luci-app-tailscaler
 # tencentcloud_ddns 腾讯云DDNS
 checkout_partial_code -r https://github.com/Tencent-Cloud-Plugins/tencentcloud-openwrt-plugin-ddns tencentcloud_ddns && mv tencentcloud_ddns luci-app-tencentddns
 # tcpdump           抓包工具
