@@ -135,6 +135,15 @@ jobs:
           sed -i '3i! Description: Only GFWList domains.' $output_file
           echo "!---------------------EOF-----------------------" >> $output_file
 
+      - name: Generate base64 encoded files
+        run: |
+          for file in /tmp/rule/publish/*.txt; do
+            # 获取无扩展名的文件名
+            base_name=$(basename "$file" .txt)
+            # 生成 Base64 编码文件并输出到同一目录
+            base64 "$file" > "/tmp/rule/publish/${base_name}"
+          done
+
       - name: Get current timestamp
         id: timestamp
         run: echo "version=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
