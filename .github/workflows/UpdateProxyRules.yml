@@ -2,7 +2,7 @@
 
 on:
   schedule:
-    - cron: "1 30 * * *"
+    - cron: "0 23 * * *"
   push:
     branches:
       - main
@@ -111,6 +111,6 @@ jobs:
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b release
           git add .
-          git commit -m "${{ env.RELEASE_NAME }}"
+          git commit -m "${{ env.version }}"
           git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
           git push -f -u origin release
