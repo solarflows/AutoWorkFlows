@@ -1,0 +1,443 @@
+diff --git a/lang/golang/golang-build.sh b/lang/golang/golang-build.sh
+index e0e4ea637..01df4aa42 100644
+--- a/lang/golang/golang-build.sh
++++ b/lang/golang/golang-build.sh
+@@ -1,4 +1,10 @@
+ #!/bin/sh
++#
++# Copyright (C) 2020, 2022 Jeffery To
++#
++# This is free software, licensed under the GNU General Public License v2.
++# See /LICENSE for more information.
++#
+ 
+ nl="
+ "
+@@ -114,7 +120,7 @@ build() {
+ 	if [ "$GO_GO_GENERATE" = 1 ]; then
+ 		log "Calling go generate"
+ 		# shellcheck disable=SC2086
+-		GOOS='' GOARCH='' GO386='' GOARM='' GOMIPS='' GOMIPS64='' \
++		GOOS='' GOARCH='' GO386='' GOARM='' GOARM64='' GOMIPS='' GOMIPS64='' GORISCV64=''\
+ 		go generate -v $targets
+ 		log
+ 	fi
+diff --git a/lang/golang/golang-compiler.mk b/lang/golang/golang-compiler.mk
+index 8f9c9a380..44defed7b 100644
+--- a/lang/golang/golang-compiler.mk
++++ b/lang/golang/golang-compiler.mk
+@@ -1,5 +1,5 @@
+ #
+-# Copyright (C) 2018, 2020 Jeffery To
++# Copyright (C) 2018, 2020-2021, 2023 Jeffery To
+ #
+ # This is free software, licensed under the GNU General Public License v2.
+ # See /LICENSE for more information.
+@@ -19,14 +19,11 @@ define GoCompiler/Default/CheckHost
+ endef
+ 
+ # $(1) source go root
+-# $(2) destination prefix
+-# $(3) go version id
+-# $(4) additional environment variables (optional)
++# $(2) additional environment variables (optional)
+ define GoCompiler/Default/Make
+ 	( \
+ 		cd "$(1)/src" ; \
+-		$(if $(2),GOROOT_FINAL="$(2)/lib/go-$(3)") \
+-		$(4) \
++		$(2) \
+ 		$(BASH) make.bash \
+ 		$(if $(findstring s,$(OPENWRT_VERBOSE)),-v) \
+ 		--no-banner \
+@@ -60,9 +57,10 @@ define GoCompiler/Default/Install/Bin
+ 
+ 	$(call GoCompiler/Default/Install/install-share-data,$(1),$(2),$(3),api)
+ 
++	$(INSTALL_DATA) -p "$(1)/go.env" "$(2)/lib/go-$(3)/"
+ 	$(INSTALL_DATA) -p "$(1)/VERSION" "$(2)/lib/go-$(3)/"
+ 
+-	for file in AUTHORS CONTRIBUTING.md CONTRIBUTORS LICENSE PATENTS README.md SECURITY.md; do \
++	for file in CONTRIBUTING.md LICENSE PATENTS README.md SECURITY.md; do \
+ 		if [ -f "$(1)/$$$$file" ]; then \
+ 			$(INSTALL_DATA) -p "$(1)/$$$$file" "$(2)/share/go-$(3)/" ; \
+ 		fi ; \
+@@ -76,8 +74,10 @@ define GoCompiler/Default/Install/Bin
+ 	$(INSTALL_BIN) -p "$(1)/bin/$(4)"/* "$(2)/lib/go-$(3)/bin/"
+   endif
+ 
+-	$(INSTALL_DIR) "$(2)/lib/go-$(3)/pkg"
+-	$(CP) "$(1)/pkg/$(4)$(if $(5),_$(5))" "$(2)/lib/go-$(3)/pkg/"
++	if [ -d "$(1)/pkg/$(4)$(if $(5),_$(5))" ]; then \
++		$(INSTALL_DIR) "$(2)/lib/go-$(3)/pkg" ; \
++		$(CP) "$(1)/pkg/$(4)$(if $(5),_$(5))" "$(2)/lib/go-$(3)/pkg/" ; \
++	fi
+ 
+ 	$(INSTALL_DIR) "$(2)/lib/go-$(3)/pkg/tool/$(4)"
+ 	$(INSTALL_BIN) -p "$(1)/pkg/tool/$(4)"/* "$(2)/lib/go-$(3)/pkg/tool/$(4)/"
+@@ -153,7 +153,7 @@ define GoCompiler/AddProfile
+ 
+   # $$(1) additional environment variables (optional)
+   define GoCompiler/$(1)/Make
+-	$$(call GoCompiler/Default/Make,$(2),$(3),$(4),$$(1))
++	$$(call GoCompiler/Default/Make,$(2),$$(1))
+   endef
+ 
+   # $$(1) override install prefix (optional)
+diff --git a/lang/golang/golang-host-build.mk b/lang/golang/golang-host-build.mk
+index 4b9e29873..7c7551fd1 100644
+--- a/lang/golang/golang-host-build.mk
++++ b/lang/golang/golang-host-build.mk
+@@ -1,5 +1,5 @@
+ #
+-# Copyright (C) 2020 Jeffery To
++# Copyright (C) 2020, 2022 Jeffery To
+ #
+ # This is free software, licensed under the GNU General Public License v2.
+ # See /LICENSE for more information.
+diff --git a/lang/golang/golang-package.mk b/lang/golang/golang-package.mk
+index 20a993726..cc0050536 100644
+--- a/lang/golang/golang-package.mk
++++ b/lang/golang/golang-package.mk
+@@ -1,5 +1,5 @@
+ #
+-# Copyright (C) 2018-2020 Jeffery To
++# Copyright (C) 2018-2022 Jeffery To
+ #
+ # This is free software, licensed under the GNU General Public License v2.
+ # See /LICENSE for more information.
+@@ -215,7 +215,8 @@ GO_PKG_BUILD_VARS= \
+ 	GOPATH="$(GO_PKG_BUILD_DIR)" \
+ 	GOCACHE="$(GO_BUILD_CACHE_DIR)" \
+ 	GOMODCACHE="$(GO_MOD_CACHE_DIR)" \
+-	GOENV=off
++	GOENV=off \
++	GOTOOLCHAIN=local
+ 
+ GO_PKG_VARS= \
+ 	$(GO_PKG_TARGET_VARS) \
+diff --git a/lang/golang/golang-values.mk b/lang/golang/golang-values.mk
+index 2cd656dad..d57de5f32 100644
+--- a/lang/golang/golang-values.mk
++++ b/lang/golang/golang-values.mk
+@@ -1,5 +1,5 @@
+ #
+-# Copyright (C) 2018, 2020 Jeffery To
++# Copyright (C) 2018-2023 Jeffery To
+ #
+ # This is free software, licensed under the GNU General Public License v2.
+ # See /LICENSE for more information.
+@@ -29,6 +29,7 @@ unexport \
+   GOOS \
+   GOPATH \
+   GOROOT \
++  GOTOOLCHAIN \
+   GOTMPDIR \
+   GOWORK
+ # Unmodified:
+@@ -58,13 +59,19 @@ unexport \
+ # Architecture-specific environment variables:
+ unexport \
+   GOARM \
++  GOARM64 \
+   GO386 \
+   GOAMD64 \
+   GOMIPS \
+   GOMIPS64 \
+   GOPPC64 \
++  GORISCV64 \
+   GOWASM
+ 
++# Environment variables for use with code coverage:
++unexport \
++  GOCOVERDIR
++
+ # Special-purpose environment variables:
+ unexport \
+   GCCGOTOOLDIR \
+@@ -123,10 +130,11 @@ unexport \
+ go_arch=$(subst \
+   aarch64,arm64,$(subst \
+   i386,386,$(subst \
++  loongarch64,loong64,$(subst \
+   mipsel,mipsle,$(subst \
+   mips64el,mips64le,$(subst \
+   powerpc64,ppc64,$(subst \
+-  x86_64,amd64,$(1)))))))
++  x86_64,amd64,$(1))))))))
+ 
+ GO_OS:=linux
+ GO_ARCH:=$(call go_arch,$(ARCH))
+@@ -197,17 +205,16 @@ endif
+ 
+ # Target Go
+ 
+-GO_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||mips||mips64||mips64el||mipsel||powerpc64||x86_64)
++GO_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||loongarch64||mips||mips64||mips64el||mipsel||powerpc64||riscv64||x86_64)
+ 
+ 
+ # ASLR/PIE
+ 
+-# From https://go.dev/src/cmd/internal/sys/supported.go
++# From https://go.dev/src/internal/platform/supported.go
+ GO_PIE_SUPPORTED_OS_ARCH:= \
+   android_386  android_amd64  android_arm  android_arm64 \
+   linux_386    linux_amd64    linux_arm    linux_arm64 \
+-  \
+-  windows_386  windows_amd64  windows_arm \
++  windows_386  windows_amd64  windows_arm  windows_arm64 \
+   \
+   darwin_amd64 darwin_arm64 \
+   ios_amd64    ios_arm64 \
+@@ -216,10 +223,10 @@ GO_PIE_SUPPORTED_OS_ARCH:= \
+   \
+   aix_ppc64 \
+   \
+-  linux_ppc64le linux_riscv64 linux_s390x
++  linux_loong64 linux_ppc64le linux_riscv64 linux_s390x
+ 
+ # From https://go.dev/src/cmd/go/internal/work/init.go
+-go_pie_install_suffix=$(if $(filter $(1),aix_ppc64 windows_386 windows_amd64 windows_arm),,shared)
++go_pie_install_suffix=$(if $(filter $(1),aix_ppc64 windows_386 windows_amd64 windows_arm windows_arm64),,shared)
+ 
+ ifneq ($(filter $(GO_HOST_OS_ARCH),$(GO_PIE_SUPPORTED_OS_ARCH)),)
+   GO_HOST_PIE_SUPPORTED:=1
+diff --git a/lang/golang/golang/Makefile b/lang/golang/golang/Makefile
+index 9f37fb64c..cae136eee 100644
+--- a/lang/golang/golang/Makefile
++++ b/lang/golang/golang/Makefile
+@@ -1,5 +1,5 @@
+ #
+-# Copyright (C) 2018, 2020 Jeffery To
++# Copyright (C) 2018-2023 Jeffery To
+ #
+ # This is free software, licensed under the GNU General Public License v2.
+ # See /LICENSE for more information.
+@@ -7,8 +7,8 @@
+ 
+ include $(TOPDIR)/rules.mk
+ 
+-GO_VERSION_MAJOR_MINOR:=1.19
+-GO_VERSION_PATCH:=13
++GO_VERSION_MAJOR_MINOR:=1.23
++GO_VERSION_PATCH:=4
+ 
+ PKG_NAME:=golang
+ PKG_VERSION:=$(GO_VERSION_MAJOR_MINOR)$(if $(GO_VERSION_PATCH),.$(GO_VERSION_PATCH))
+@@ -21,7 +21,7 @@ GO_SOURCE_URLS:=https://dl.google.com/go/ \
+ 
+ PKG_SOURCE:=go$(PKG_VERSION).src.tar.gz
+ PKG_SOURCE_URL:=$(GO_SOURCE_URLS)
+-PKG_HASH:=ccf36b53fb0024a017353c3ddb22c1f00bc7a8073c6aac79042da24ee34434d3
++PKG_HASH:=ad345ac421e90814293a9699cca19dd5238251c3f687980bbcae28495b263531
+ 
+ PKG_MAINTAINER:=Jeffery To <jeffery.to@gmail.com>
+ PKG_LICENSE:=BSD-3-Clause
+@@ -31,11 +31,10 @@ PKG_CPE_ID:=cpe:/a:golang:go
+ PKG_BUILD_DEPENDS:=golang/host
+ PKG_BUILD_DIR:=$(BUILD_DIR)/go-$(PKG_VERSION)
+ PKG_BUILD_PARALLEL:=1
+-PKG_USE_MIPS16:=0
++PKG_BUILD_FLAGS:=no-mips16
+ 
+ PKG_GO_PREFIX:=/usr
+ PKG_GO_VERSION_ID:=$(GO_VERSION_MAJOR_MINOR)
+-PKG_GO_ROOT:=$(PKG_GO_PREFIX)/lib/go-$(PKG_GO_VERSION_ID)
+ 
+ HOST_BUILD_DIR:=$(BUILD_DIR_HOST)/go-$(PKG_VERSION)
+ HOST_BUILD_PARALLEL:=1
+@@ -63,6 +62,10 @@ HOST_GO_VALID_OS_ARCH:= \
+   \
+   aix_ppc64 \
+   js_wasm \
++  wasip1_wasm \
++  \
++  freebsd_riscv64 \
++  openbsd_riscv64 \
+   \
+   linux_ppc64 linux_ppc64le \
+   linux_mips linux_mipsle linux_mips64 linux_mips64le \
+@@ -87,6 +90,18 @@ BOOTSTRAP_GO_VALID_OS_ARCH:= \
+                  solaris_amd64 \
+   windows_386    windows_amd64
+ 
++BOOTSTRAP_1_17_SOURCE:=go1.17.13.src.tar.gz
++BOOTSTRAP_1_17_SOURCE_URL:=$(GO_SOURCE_URLS)
++BOOTSTRAP_1_17_HASH:=a1a48b23afb206f95e7bbaa9b898d965f90826f6f1d1fc0c1d784ada0cd300fd
++
++BOOTSTRAP_1_17_BUILD_DIR:=$(HOST_BUILD_DIR)/.go_bootstrap_1.17
++
++BOOTSTRAP_1_20_SOURCE:=go1.20.14.src.tar.gz
++BOOTSTRAP_1_20_SOURCE_URL:=$(GO_SOURCE_URLS)
++BOOTSTRAP_1_20_HASH:=1aef321a0e3e38b7e91d2d7eb64040666cabdcc77d383de3c9522d0d69b67f4e
++
++BOOTSTRAP_1_20_BUILD_DIR:=$(HOST_BUILD_DIR)/.go_bootstrap_1.20
++
+ include $(INCLUDE_DIR)/host-build.mk
+ include $(INCLUDE_DIR)/package.mk
+ include ../golang-compiler.mk
+@@ -95,6 +110,8 @@ include ../golang-package.mk
+ PKG_UNPACK:=$(HOST_TAR) -C "$(PKG_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(PKG_SOURCE)"
+ HOST_UNPACK:=$(HOST_TAR) -C "$(HOST_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(PKG_SOURCE)"
+ BOOTSTRAP_UNPACK:=$(HOST_TAR) -C "$(BOOTSTRAP_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(BOOTSTRAP_SOURCE)"
++BOOTSTRAP_1_17_UNPACK:=$(HOST_TAR) -C "$(BOOTSTRAP_1_17_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(BOOTSTRAP_1_17_SOURCE)"
++BOOTSTRAP_1_20_UNPACK:=$(HOST_TAR) -C "$(BOOTSTRAP_1_20_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(BOOTSTRAP_1_20_SOURCE)"
+ 
+ # don't strip ELF executables in test data
+ RSTRIP:=:
+@@ -182,8 +199,7 @@ ifeq ($(BOOTSTRAP_ROOT_DIR),)
+   $(eval $(call Download,golang-bootstrap))
+ 
+   define Bootstrap/Prepare
+-	mkdir -p "$(BOOTSTRAP_BUILD_DIR)"
+-	$(BOOTSTRAP_UNPACK)
++	mkdir -p "$(BOOTSTRAP_BUILD_DIR)" && $(BOOTSTRAP_UNPACK) ;
+   endef
+   Hooks/HostPrepare/Post+=Bootstrap/Prepare
+ 
+@@ -191,6 +207,39 @@ ifeq ($(BOOTSTRAP_ROOT_DIR),)
+ endif
+ 
+ 
++# Bootstrap 1.17
++
++define Download/golang-bootstrap-1.17
++  FILE:=$(BOOTSTRAP_1_17_SOURCE)
++  URL:=$(BOOTSTRAP_1_17_SOURCE_URL)
++  HASH:=$(BOOTSTRAP_1_17_HASH)
++endef
++$(eval $(call Download,golang-bootstrap-1.17))
++
++define Bootstrap-1.17/Prepare
++	mkdir -p "$(BOOTSTRAP_1_17_BUILD_DIR)" && $(BOOTSTRAP_1_17_UNPACK) ;
++endef
++Hooks/HostPrepare/Post+=Bootstrap-1.17/Prepare
++
++$(eval $(call GoCompiler/AddProfile,Bootstrap-1.17,$(BOOTSTRAP_1_17_BUILD_DIR),,bootstrap-1.17,$(GO_HOST_OS_ARCH)))
++
++
++# Bootstrap 1.20
++
++define Download/golang-bootstrap-1.20
++  FILE:=$(BOOTSTRAP_1_20_SOURCE)
++  URL:=$(BOOTSTRAP_1_20_SOURCE_URL)
++  HASH:=$(BOOTSTRAP_1_20_HASH)
++endef
++$(eval $(call Download,golang-bootstrap-1.20))
++
++define Bootstrap-1.20/Prepare
++	mkdir -p "$(BOOTSTRAP_1_20_BUILD_DIR)" && $(BOOTSTRAP_1_20_UNPACK) ;
++endef
++Hooks/HostPrepare/Post+=Bootstrap-1.20/Prepare
++
++$(eval $(call GoCompiler/AddProfile,Bootstrap-1.20,$(BOOTSTRAP_1_20_BUILD_DIR),,bootstrap-1.20,$(GO_HOST_OS_ARCH)))
++
+ # Host
+ 
+ ifeq ($(GO_HOST_PIE_SUPPORTED),1)
+@@ -221,8 +270,18 @@ define Host/Compile
+ 		$(HOST_GO_VARS) \
+ 	)
+ 
+-	$(call GoCompiler/Host/Make, \
++	$(call GoCompiler/Bootstrap-1.17/Make, \
+ 		GOROOT_BOOTSTRAP="$(BOOTSTRAP_ROOT_DIR)" \
++		$(HOST_GO_VARS) \
++	)
++
++	$(call GoCompiler/Bootstrap-1.20/Make, \
++		GOROOT_BOOTSTRAP="$(BOOTSTRAP_1_17_BUILD_DIR)" \
++		$(HOST_GO_VARS) \
++	)
++
++	$(call GoCompiler/Host/Make, \
++		GOROOT_BOOTSTRAP="$(BOOTSTRAP_1_20_BUILD_DIR)" \
+ 		$(if $(HOST_GO_ENABLE_PIE),GO_LDFLAGS="-buildmode pie") \
+ 		$(HOST_GO_VARS) \
+ 	)
+@@ -267,7 +326,7 @@ $(eval $(call GoCompiler/AddProfile,Package,$(PKG_BUILD_DIR),$(PKG_GO_PREFIX),$(
+ PKG_GO_ZBOOTSTRAP_MODS:= \
+ 	s/defaultGO386 = `[^`]*`/defaultGO386 = `$(or $(GO_386),sse2)`/; \
+ 	s/defaultGOAMD64 = `[^`]*`/defaultGOAMD64 = `$(or $(GO_AMD64),v1)`/; \
+-	s/defaultGOARM = `[^`]*`/defaultGOARM = `$(or $(GO_ARM),5)`/; \
++	s/defaultGOARM = `[^`]*`/defaultGOARM = `$(or $(GO_ARM),7)`/; \
+ 	s/defaultGOMIPS = `[^`]*`/defaultGOMIPS = `$(or $(GO_MIPS),hardfloat)`/; \
+ 	s/defaultGOMIPS64 = `[^`]*`/defaultGOMIPS64 = `$(or $(GO_MIPS64),hardfloat)`/; \
+ 	s/defaultGOPPC64 = `[^`]*`/defaultGOPPC64 = `$(or $(GO_PPC64),power8)`/;
+@@ -336,7 +395,6 @@ define Build/Compile
+ 		cd "$(PKG_BUILD_DIR)/bin" ; \
+ 		export $(GO_PKG_TARGET_VARS) ; \
+ 		$(CP) go go-host ; \
+-		GOROOT_FINAL="$(PKG_GO_ROOT)" \
+ 		GO_GCC_HELPER_CC="$(TARGET_CC)" \
+ 		GO_GCC_HELPER_CXX="$(TARGET_CXX)" \
+ 		$(PKG_GO_VARS) \
+diff --git a/lang/golang/golang/files/go-gcc-helper b/lang/golang/golang/files/go-gcc-helper
+index b396e302c..b21457b55 100644
+--- a/lang/golang/golang/files/go-gcc-helper
++++ b/lang/golang/golang/files/go-gcc-helper
+@@ -1,4 +1,10 @@
+ #!/bin/sh
++#
++# Copyright (C) 2018, 2020 Jeffery To
++#
++# This is free software, licensed under the GNU General Public License v2.
++# See /LICENSE for more information.
++#
+ 
+ me=go-gcc-helper
+ name="${0##*/}"
+diff --git a/lang/golang/golang/patches/001-cmd-link-use-gold-on-ARM-ARM64-only-if-gold-is-available.patch b/lang/golang/golang/patches/001-cmd-link-use-gold-on-ARM-ARM64-only-if-gold-is-available.patch
+deleted file mode 100644
+index 57d108c1b..000000000
+--- a/lang/golang/golang/patches/001-cmd-link-use-gold-on-ARM-ARM64-only-if-gold-is-available.patch
++++ /dev/null
+@@ -1,48 +0,0 @@
+-From 5ccf9f47bf4f5ba53e0ab7338a7fd4626714cfb2 Mon Sep 17 00:00:00 2001
+-From: Jeffery To <jeffery.to@gmail.com>
+-Date: Tue, 23 Nov 2021 15:05:37 +0800
+-Subject: [PATCH] cmd/link: use gold on ARM/ARM64 only if gold is available
+-
+-COPY relocation handling on ARM/ARM64 has been fixed in recent versions
+-of the GNU linker. This switches to gold only if gold is available.
+-
+-Fixes #22040.
+----
+- src/cmd/link/internal/ld/lib.go | 19 +++++++------------
+- 1 file changed, 7 insertions(+), 12 deletions(-)
+-
+---- a/src/cmd/link/internal/ld/lib.go
+-+++ b/src/cmd/link/internal/ld/lib.go
+-@@ -1515,25 +1515,20 @@ func (ctxt *Link) hostlink() {
+- 		}
+- 
+- 		if ctxt.Arch.InFamily(sys.ARM, sys.ARM64) && buildcfg.GOOS == "linux" {
+--			// On ARM, the GNU linker will generate COPY relocations
+--			// even with -znocopyreloc set.
+-+			// On ARM, older versions of the GNU linker will generate
+-+			// COPY relocations even with -znocopyreloc set.
+- 			// https://sourceware.org/bugzilla/show_bug.cgi?id=19962
+- 			//
+--			// On ARM64, the GNU linker will fail instead of
+--			// generating COPY relocations.
+-+			// On ARM64, older versions of the GNU linker will fail
+-+			// instead of generating COPY relocations.
+- 			//
+--			// In both cases, switch to gold.
+--			altLinker = "gold"
+--
+--			// If gold is not installed, gcc will silently switch
+--			// back to ld.bfd. So we parse the version information
+--			// and provide a useful error if gold is missing.
+-+			// In both cases, switch to gold if gold is available.
+- 			name, args := flagExtld[0], flagExtld[1:]
+- 			args = append(args, "-fuse-ld=gold", "-Wl,--version")
+- 			cmd := exec.Command(name, args...)
+- 			if out, err := cmd.CombinedOutput(); err == nil {
+--				if !bytes.Contains(out, []byte("GNU gold")) {
+--					log.Fatalf("ARM external linker must be gold (issue #15696), but is not: %s", out)
+-+				if bytes.Contains(out, []byte("GNU gold")) {
+-+					altLinker = "gold"
+- 				}
+- 			}
+- 		}
