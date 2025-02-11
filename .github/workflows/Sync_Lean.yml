@@ -6,9 +6,9 @@ on:
   push:
       paths:
         - '.github/workflows/Sync_Lean.yml'
-        - '.github/diy/patches/lede/*/*.patch'
-        - '.github/diy/patches/luci/*/*.patch'
-        - '.github/diy/patches/packages/*/*.patch'  # 当workflow文件有改变时触发
+        - '.github/diy/lede/patches/*/*.patch'
+        - '.github/diy/luci/patches/*/*.patch'
+        - '.github/diy/packages/patches/*/*.patch'  # 当workflow文件有改变时触发
   watch:
     types: [started]
 
