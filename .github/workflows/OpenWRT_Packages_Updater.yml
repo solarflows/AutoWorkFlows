@@ -7,7 +7,7 @@ on:
     paths:
       - '.github/diy/Update.sh'
       - '.github/workflows/OpenWRT_Packages_Updater.yml'
-      - '.github/diy/patches/openwrt-packages/*/*.patch'
+      - '.github/diy/*/patches/*/*.patch'
       - '.github/diy/openwrt-packages/*.sh'
   watch:
     types: started
