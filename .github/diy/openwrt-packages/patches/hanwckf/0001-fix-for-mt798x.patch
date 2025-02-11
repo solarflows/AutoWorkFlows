@@ -1,0 +1,144 @@
+﻿diff --git a/luci-app-smartdns/Makefile b/luci-app-smartdns/Makefile
+index 667baf5..f079ae9 100644
+--- a/luci-app-smartdns/Makefile
++++ b/luci-app-smartdns/Makefile
+@@ -21,6 +21,6 @@ help
+ 	Version: $(PKG_VERSION)-$(PKG_RELEASE)
+ endef
+ 
+-include ../../luci.mk
++include $(TOPDIR)/feeds/luci/luci.mk
+ 
+ # call BuildPackage - OpenWrt buildroot signature
+diff --git a/lucky/Makefile b/lucky/Makefile
+index 8ea3ea1..0d90651 100644
+--- a/lucky/Makefile
++++ b/lucky/Makefile
+@@ -4,7 +4,7 @@
+ include $(TOPDIR)/rules.mk
+ 
+ PKG_NAME:=lucky
+-PKG_VERSION:=2.14.0
++PKG_VERSION:=2.15.3
+ PKG_RELEASE:=1
+ PKGARCH:=all 
+ 
+@@ -77,7 +77,7 @@ rm -rf /etc/config/lucky.daji
+ endef 
+ 
+ define Build/Prepare
+-	[ ! -f $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz ] && wget https://github.com/gdy666/lucky/releases/download/v$(PKG_VERSION)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz -O $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz
++	[ ! -f $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz ] && wget https://6.66666.host:66/files/$(PKG_VERSION)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz -O $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz
+ 	tar -xzvf $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz -C $(PKG_BUILD_DIR)
+ endef
+ 
+diff --git a/shadowsocks-rust/Makefile b/shadowsocks-rust/Makefile
+index 212a716..7a2d5d4 100644
+--- a/shadowsocks-rust/Makefile
++++ b/shadowsocks-rust/Makefile
+@@ -1,7 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ #
+ # Copyright (C) 2017-2020 Yousong Zhou <yszhou4tech@gmail.com>
+-# Copyright (C) 2021-2023 ImmortalWrt.org
++# Copyright (C) 2021 ImmortalWrt.org
+ 
+ include $(TOPDIR)/rules.mk
+ 
+@@ -9,21 +9,49 @@ PKG_NAME:=shadowsocks-rust
+ PKG_VERSION:=1.22.0
+ PKG_RELEASE:=1
+ 
+-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+-PKG_SOURCE_URL:=https://codeload.github.com/shadowsocks/shadowsocks-rust/tar.gz/v$(PKG_VERSION)?
+-PKG_HASH:=2857372667b66aa7f8ef2d27a8a19209cbf3e5da2e6d1d1d493411d72d173861
++PKG_SOURCE_HEADER:=shadowsocks-v$(PKG_VERSION)
++PKG_SOURCE_BODY:=unknown-linux-musl
++PKG_SOURCE_FOOTER:=tar.xz
++PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-rust/releases/download/v$(PKG_VERSION)/
++
++ifeq ($(ARCH),aarch64)
++  PKG_SOURCE:=$(PKG_SOURCE_HEADER).aarch64-$(PKG_SOURCE_BODY).$(PKG_SOURCE_FOOTER)
++  PKG_HASH:=skip
++else ifeq ($(ARCH),arm)
++  # Referred to golang/golang-values.mk
++  ARM_CPU_FEATURES:=$(word 2,$(subst +,$(space),$(call qstrip,$(CONFIG_CPU_TYPE))))
++  ifeq ($(ARM_CPU_FEATURES),)
++    PKG_SOURCE:=$(PKG_SOURCE_HEADER).arm-$(PKG_SOURCE_BODY)eabi.$(PKG_SOURCE_FOOTER)
++    PKG_HASH:=skip
++  else
++    PKG_SOURCE:=$(PKG_SOURCE_HEADER).arm-$(PKG_SOURCE_BODY)eabihf.$(PKG_SOURCE_FOOTER)
++    PKG_HASH:=skip
++  endif
++else ifeq ($(ARCH),i386)
++  PKG_SOURCE:=$(PKG_SOURCE_HEADER).i686-$(PKG_SOURCE_BODY).$(PKG_SOURCE_FOOTER)
++  PKG_HASH:=skip
++else ifeq ($(ARCH),mips)
++  PKG_SOURCE:=$(PKG_SOURCE_HEADER).mips-$(PKG_SOURCE_BODY).$(PKG_SOURCE_FOOTER)
++  PKG_HASH:=skip
++else ifeq ($(ARCH),mipsel)
++  PKG_SOURCE:=$(PKG_SOURCE_HEADER).mipsel-$(PKG_SOURCE_BODY).$(PKG_SOURCE_FOOTER)
++  PKG_HASH:=skip
++else ifeq ($(ARCH),x86_64)
++  PKG_SOURCE:=$(PKG_SOURCE_HEADER).x86_64-$(PKG_SOURCE_BODY).$(PKG_SOURCE_FOOTER)
++  PKG_HASH:=skip
++# Set the default value to make OpenWrt Package Checker happy
++else
++  PKG_SOURCE:=dummy
++  PKG_HASH:=dummy
++endif
+ 
+ PKG_MAINTAINER:=Tianling Shen <cnsztl@immortalwrt.org>
+ PKG_LICENSE:=MIT
+ PKG_LICENSE_FILES:=LICENSE
+ 
+-PKG_BUILD_DEPENDS:=rust/host
+-PKG_BUILD_PARALLEL:=1
+-
+-RUST_PKG_FEATURES:=local-redir
+-
+ include $(INCLUDE_DIR)/package.mk
+-include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
++
++TAR_CMD:=$(HOST_TAR) -C $(PKG_BUILD_DIR) $(TAR_OPTIONS)
+ 
+ define Package/shadowsocks-rust/Default
+   define Package/shadowsocks-rust-$(1)
+@@ -32,12 +60,12 @@ define Package/shadowsocks-rust/Default
+     SUBMENU:=Web Servers/Proxies
+     TITLE:=shadowsocks-rust $(1)
+     URL:=https://github.com/shadowsocks/shadowsocks-rust
+-    DEPENDS:=$$(RUST_ARCH_DEPENDS)
++    DEPENDS:=@USE_MUSL @(aarch64||arm||i386||mips||mipsel||x86_64) @!(TARGET_x86_geode||TARGET_x86_legacy)
+   endef
+ 
+   define Package/shadowsocks-rust-$(1)/install
+ 	$$(INSTALL_DIR) $$(1)/usr/bin
+-	$$(INSTALL_BIN) $$(PKG_INSTALL_DIR)/bin/$(1) $$(1)/usr/bin/
++	$$(INSTALL_BIN) $$(PKG_BUILD_DIR)/$(1) $$(1)/usr/bin
+   endef
+ endef
+ 
+@@ -49,6 +77,9 @@ define shadowsocks-rust/templates
+ endef
+ $(eval $(call shadowsocks-rust/templates))
+ 
++define Build/Compile
++endef
++
+ $(foreach component,$(SHADOWSOCKS_COMPONENTS), \
+   $(eval $(call BuildPackage,shadowsocks-rust-$(component))) \
+ )
+diff --git a/sing-box/Makefile b/sing-box/Makefile
+index fbb6776..7a3f9c9 100644
+--- a/sing-box/Makefile
++++ b/sing-box/Makefile
+@@ -11,7 +11,7 @@ PKG_RELEASE:=1
+ 
+ PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+ PKG_SOURCE_URL:=https://codeload.github.com/SagerNet/sing-box/tar.gz/v$(PKG_VERSION)?
+-PKG_HASH:=26d46dfdefb141f569d13b34a298528721e7471dfcd39192d49772ce2c9a23aa
++PKG_HASH:=51b189549395c132dce781e1c70315e4bb8386c207e171c07124759b45481d97
+ 
+ PKG_LICENSE:=GPL-3.0-or-later
+ PKG_LICENSE_FILES:=LICENSE

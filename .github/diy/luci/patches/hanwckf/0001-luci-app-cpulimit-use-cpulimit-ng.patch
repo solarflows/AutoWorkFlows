@@ -1,0 +1,13 @@
+﻿diff --git a/applications/luci-app-cpulimit/Makefile b/applications/luci-app-cpulimit/Makefile
+index 6606d62..c6cd053 100644
+--- a/applications/luci-app-cpulimit/Makefile
++++ b/applications/luci-app-cpulimit/Makefile
+@@ -7,7 +7,7 @@
+ include $(TOPDIR)/rules.mk
+ 
+ LUCI_TITLE:=cpulimit configuration module
+-LUCI_DEPENDS:=+cpulimit
++LUCI_DEPENDS:=+cpulimit-ng
+ 
+ include ../../luci.mk
+ 

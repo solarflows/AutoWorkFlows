@@ -1,0 +1,13 @@
+﻿diff --git a/utils/cpulimit-ng/Makefile b/utils/cpulimit-ng/Makefile
+index ae1b27e..c236ef2 100644
+--- a/utils/cpulimit-ng/Makefile
++++ b/utils/cpulimit-ng/Makefile
+@@ -29,7 +29,7 @@ endef
+ 
+ define Package/cpulimit-ng/install
+ 	$(INSTALL_DIR) $(1)/usr/bin/
+-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/src/cpulimit-ng $(1)/usr/bin/
++	$(INSTALL_BIN) $(PKG_BUILD_DIR)/src/cpulimit-ng $(1)/usr/bin/cpulimit
+ endef
+ 
+ $(eval $(call BuildPackage,cpulimit-ng))
