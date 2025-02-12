@@ -1,0 +1,46 @@
+FROM golang:1.20 as BUILDER
+
+WORKDIR /app/
+
+COPY atv-cli ./
+
+RUN go build
+
+FROM haroldli/alist:hostmode
+
+LABEL MAINTAINER="Husky"
+
+ENV INSTALL=native-host
+
+VOLUME /opt/atv/data/
+
+WORKDIR /opt/atv/
+
+COPY config/config-host.json /opt/alist/data/config.json
+
+COPY --from=BUILDER /app/atv-cli /
+
+COPY index.sh /
+
+COPY init.sh /
+COPY movie.sh /
+COPY entrypoint-native.sh /entrypoint.sh
+
+COPY target/atv ./
+
+COPY data/update.sql /
+COPY data/countries.json /
+COPY data/tvbox.zip /
+COPY data/index.share.zip /
+COPY data/cat.zip /
+COPY data/pg.zip /
+COPY data/data.zip /
+COPY data/base_version /
+
+COPY data/version data/app_version
+
+EXPOSE 4567 5678
+
+ENTRYPOINT ["/entrypoint.sh"]
+
+CMD ["5233", "--spring.profiles.active=production,xiaoya,native,host"]

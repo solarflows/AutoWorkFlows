@@ -1,0 +1,5 @@
+FROM haroldli/xiaoya-tvbox:native-host
+
+RUN ln -sv /config/alist-tvbox/data /data
+
+VOLUME /config

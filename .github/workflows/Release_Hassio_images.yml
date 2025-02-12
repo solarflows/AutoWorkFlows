@@ -1,0 +1,90 @@
+﻿name: 'Release Container GHCR'
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/Release_Hassio_images.yml'
+      - 'HomeAssistant-Add-ons/alist-tvbox/app_version'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to GitHub Container Registry (ghcr)
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.HASS_TOKEN }}
+
+      - name: Set app version
+        run: |
+            version=$(cat HomeAssistant-Add-ons/alist-tvbox/app_version)
+            echo "APP_VERSION=$version" >> $GITHUB_ENV
+
+      - name: Build Docker and push to ghcr
+        uses: docker/build-push-action@v5.3.0
+        with:
+          context: .
+          file: HomeAssistant-Add-ons/alist-tvbox/Dockerfile-xiaoya
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/xiaoya-tvbox:latest,ghcr.io/${{ github.repository_owner }}/xiaoya-tvbox:${{ env.APP_VERSION}}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # - name: Build host mode Docker and push to ghcr
+      #   uses: docker/build-push-action@v5.3.0
+      #   with:
+      #     context: .
+      #     file: HomeAssistant-Add-ons/alist-tvbox/Dockerfile-host
+      #     platforms: linux/amd64,linux/arm64
+      #     push: true
+      #     tags: ghcr.io/${{ github.repository_owner }}/xiaoya-tvbox:hostmode,ghcr.io/${{ github.repository_owner }}/xiaoya-tvbox:hostmode-${{ env.APP_VERSION}}
+      #     cache-from: type=gha
+      #     cache-to: type=gha,mode=max
+
+      - name: Build standalone Docker and push to ghcr
+        uses: docker/build-push-action@v5.3.0
+        with:
+          context: .
+          file: HomeAssistant-Add-ons/alist-tvbox/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/alist-tvbox:latest,ghcr.io/${{ github.repository_owner }}/alist-tvbox:${{ env.APP_VERSION}}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # - name: Build native Docker and push to ghcr
+      #   uses: docker/build-push-action@v5.3.0
+      #   with:
+      #     context: .
+      #     file: HomeAssistant-Add-ons/alist-tvbox/Dockerfile-native
+      #     platforms: linux/amd64
+      #     push: true
+      #     tags: ghcr.io/${{ github.repository_owner }}/xiaoya-tvbox:native,ghcr.io/${{ github.repository_owner }}/xiaoya-tvbox:native-${{ env.APP_VERSION}}
+      #     cache-from: type=gha
+      #     cache-to: type=gha,mode=max
+
+      # - name: Build host native Docker and push to ghcr
+      #   uses: docker/build-push-action@v5.3.0
+      #   with:
+      #     context: .
+      #     file: HomeAssistant-Add-ons/alist-tvbox/Dockerfile-native-host
+      #     platforms: linux/amd64
+      #     push: true
+      #     tags: ghcr.io/${{ github.repository_owner }}/xiaoya-tvbox:native-host,ghcr.io/${{ github.repository_owner }}/xiaoya-tvbox:native-host-${{ env.APP_VERSION}}
+      #     cache-from: type=gha
+      #     cache-to: type=gha,mode=max

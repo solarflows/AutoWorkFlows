@@ -1,0 +1,25 @@
+ARG TAG=latest
+
+FROM ghcr.io/solarflows/alist-tvbox-java:17 as corretto-jdk
+
+FROM haroldli/alist:${TAG}
+
+LABEL MAINTAINER="Husky"
+
+ENV JAVA_HOME=/jre
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+COPY data/update.sql /
+COPY data/countries.json /
+
+COPY --from=corretto-jdk /jre $JAVA_HOME
+
+VOLUME /opt/atv/data/
+
+WORKDIR /opt/atv/
+
+COPY index.sh /
+
+COPY target/dependencies/ ./
+COPY target/snapshot-dependencies/ ./
+COPY target/spring-boot-loader/ ./

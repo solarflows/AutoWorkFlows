@@ -1,0 +1,38 @@
+FROM golang:1.20 as BUILDER
+
+WORKDIR /app/
+
+COPY atv-cli ./
+
+RUN go build
+
+FROM ghcr.io/solarflows/alist-base-new:hostmode
+
+LABEL MAINTAINER="Husky"
+
+ENV MEM_OPT="-Xmx512M"
+
+COPY config/config-host.json /opt/alist/data/config.json
+
+COPY --from=BUILDER /app/atv-cli /
+
+COPY init.sh /
+COPY movie.sh /
+COPY entrypoint.sh /
+
+COPY target/application/ ./
+
+COPY data/tvbox.zip /
+COPY data/index.share.zip /
+COPY data/cat.zip /
+COPY data/data.zip /
+COPY data/pg.zip /
+COPY data/base_version /
+
+COPY data/version data/app_version
+
+EXPOSE 4567 5678
+
+ENTRYPOINT ["/entrypoint.sh"]
+
+CMD ["5233", "--spring.profiles.active=production,xiaoya,host"]
