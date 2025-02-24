@@ -33,9 +33,26 @@ jobs:
         run: |
             version=$(cat HomeAssistant-Add-ons/alist-tvbox/app_version)
             echo "APP_VERSION=$version" >> $GITHUB_ENV
+            # 获取远程版本（忽略 curl 错误，失败时版本设为空）
+            REMOTE_VERSION=$(curl -fsSL http://d.har01d.cn/app_version | head -n 1 || echo ${{ env.APP_VERSION }})
+            # 对比本地和远程版本
+            if [ "$REMOTE_VERSION" != "${{ env.APP_VERSION }}" ]; then
+              echo "New version detected: $REMOTE_VERSION"
+              echo "APP_VERSION=$REMOTE_VERSION" >> $GITHUB_ENV
+              rm HomeAssistant-Add-ons/alist-tvbox/app_version
+              touch HomeAssistant-Add-ons/alist-tvbox/app_version
+              echo $REMOTE_VERSION > HomeAssistant-Add-ons/alist-tvbox/app_version
+              echo "changed=true" >> $GITHUB_OUTPUT
+              git add HomeAssistant-Add-ons/alist-tvbox/app_version
+              git commit -m "Update app_version to $REMOTE_VERSION"
+            else
+              echo "Version unchanged: ${{ env.APP_VERSION }}"
+              echo "changed=false" >> $GITHUG_OUTPUT
+            fi
 
       - name: Build Docker and push to ghcr
         uses: docker/build-push-action@v5.3.0
+        if: steps.check-version.outputs.changed == 'true'
         with:
           context: .
           file: HomeAssistant-Add-ons/alist-tvbox/Dockerfile-xiaoya
@@ -58,6 +75,7 @@ jobs:
 
       - name: Build standalone Docker and push to ghcr
         uses: docker/build-push-action@v5.3.0
+        if: steps.check-version.outputs.changed == 'true'
         with:
           context: .
           file: HomeAssistant-Add-ons/alist-tvbox/Dockerfile
