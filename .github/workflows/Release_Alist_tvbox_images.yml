@@ -3,11 +3,11 @@
 on:
   workflow_dispatch:
   push:
-    branches:
-      - master
     paths:
-      - '.github/workflows/Release_Hassio_images.yml'
+      - '.github/workflows/Release_Alist_tvbox_images.yml'
       - 'HomeAssistant-Add-ons/alist-tvbox/app_version'
+  schedule:
+    - cron: '0 */6 * * *'  # 每12小时运行一次
 
 jobs:
   release:
