@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Set app version
+        id: check-version
         run: |
             version=$(cat HomeAssistant-Add-ons/alist-tvbox/app_version)
             echo "APP_VERSION=$version" >> $GITHUB_ENV
