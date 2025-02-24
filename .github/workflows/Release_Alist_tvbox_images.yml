@@ -16,24 +16,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Login to GitHub Container Registry (ghcr)
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.HASS_TOKEN }}
-
       - name: Set app version
         run: |
             version=$(cat HomeAssistant-Add-ons/alist-tvbox/app_version)
             echo "APP_VERSION=$version" >> $GITHUB_ENV
-            # 获取远程版本（忽略 curl 错误，失败时版本设为空）
+            # 获取远程版本（忽略 curl 错误，失败时版本为app_version）
             REMOTE_VERSION=$(curl -fsSL http://d.har01d.cn/app_version | head -n 1 || echo ${{ env.APP_VERSION }})
             # 对比本地和远程版本
             if [ "$REMOTE_VERSION" != "${{ env.APP_VERSION }}" ]; then
@@ -43,12 +30,32 @@ jobs:
               touch HomeAssistant-Add-ons/alist-tvbox/app_version
               echo $REMOTE_VERSION > HomeAssistant-Add-ons/alist-tvbox/app_version
               echo "changed=true" >> $GITHUB_OUTPUT
+              # 提交版本更新
+              git config --local user.name "github-actions[bot]"
+              git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
               git add HomeAssistant-Add-ons/alist-tvbox/app_version
               git commit -m "Update app_version to $REMOTE_VERSION"
+              git push "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:main
             else
               echo "Version unchanged: ${{ env.APP_VERSION }}"
               echo "changed=false" >> $GITHUG_OUTPUT
             fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        if: steps.check-version.outputs.changed == 'true'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        if: steps.check-version.outputs.changed == 'true'
+
+      - name: Login to GitHub Container Registry (ghcr)
+        uses: docker/login-action@v2
+        if: steps.check-version.outputs.changed == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.HASS_TOKEN }}
 
       - name: Build Docker and push to ghcr
         uses: docker/build-push-action@v5.3.0
