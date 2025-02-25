@@ -21,28 +21,32 @@ jobs:
       - name: Set app version
         id: check-version
         run: |
-            version=$(cat HomeAssistant-Add-ons/alist-tvbox/app_version)
-            echo "APP_VERSION=$version" >> $GITHUB_ENV
-            # 获取远程版本（忽略 curl 错误，失败时版本为app_version）
-            REMOTE_VERSION=$(curl -fsSL http://d.har01d.cn/app_version | head -n 1 || echo ${{ env.APP_VERSION }})
-            # 对比本地和远程版本
-            if [ "$REMOTE_VERSION" != "${{ env.APP_VERSION }}" ]; then
-              echo "New version detected: $REMOTE_VERSION"
-              echo "APP_VERSION=$REMOTE_VERSION" >> $GITHUB_ENV
-              rm HomeAssistant-Add-ons/alist-tvbox/app_version
-              touch HomeAssistant-Add-ons/alist-tvbox/app_version
-              echo $REMOTE_VERSION > HomeAssistant-Add-ons/alist-tvbox/app_version
-              echo "changed=true" >> $GITHUB_OUTPUT
-              # 提交版本更新
-              git config --local user.name "github-actions[bot]"
-              git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              git add HomeAssistant-Add-ons/alist-tvbox/app_version
-              git commit -m "Update app_version to $REMOTE_VERSION"
-              git push "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:main
-            else
-              echo "Version unchanged: ${{ env.APP_VERSION }}"
-              echo "changed=false" >> $GITHUG_OUTPUT
-            fi
+          # 读取本地版本（去除首尾空白/换行符）
+          version=$(cat HomeAssistant-Add-ons/alist-tvbox/app_version | xargs echo -n)
+          echo "APP_VERSION=$version" >> $GITHUB_ENV
+
+          # 获取远程版本（去除空白/换行符，失败时使用本地版本）
+          REMOTE_VERSION=$(curl -fsSL http://d.har01d.cn/app_version | head -n 1 | xargs echo -n || echo "$version")
+          echo "Local Version: '$version'"
+          echo "Remote Version: '$REMOTE_VERSION'"
+
+          # 严格比较版本
+          if [ "$REMOTE_VERSION" != "$version" ]; then
+            echo "New version detected: $REMOTE_VERSION"
+            echo "$REMOTE_VERSION" > HomeAssistant-Add-ons/alist-tvbox/app_version
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "APP_VERSION=$REMOTE_VERSION" >> $GITHUB_ENV
+
+            # 提交修改
+            git config --local user.name "github-actions[bot]"
+            git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add HomeAssistant-Add-ons/alist-tvbox/app_version
+            git commit -m "Update app_version to $REMOTE_VERSION"
+            git push "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:main
+          else
+            echo "Version unchanged: $version"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
