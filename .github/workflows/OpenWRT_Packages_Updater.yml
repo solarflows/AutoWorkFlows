@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [main, qt6 , mt798x]
+        target: [main,qt6,mt798x,mt798x-23.05]
 
     name: 更新 ${{ matrix.target }} 分支
 

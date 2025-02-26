@@ -10,28 +10,6 @@ index 667baf5..f079ae9 100644
 +include $(TOPDIR)/feeds/luci/luci.mk
  
  # call BuildPackage - OpenWrt buildroot signature
-diff --git a/lucky/Makefile b/lucky/Makefile
-index 8ea3ea1..0d90651 100644
---- a/lucky/Makefile
-+++ b/lucky/Makefile
-@@ -4,7 +4,7 @@
- include $(TOPDIR)/rules.mk
- 
- PKG_NAME:=lucky
--PKG_VERSION:=2.14.0
-+PKG_VERSION:=2.15.3
- PKG_RELEASE:=1
- PKGARCH:=all 
- 
-@@ -77,7 +77,7 @@ rm -rf /etc/config/lucky.daji
- endef 
- 
- define Build/Prepare
--	[ ! -f $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz ] && wget https://github.com/gdy666/lucky/releases/download/v$(PKG_VERSION)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz -O $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz
-+	[ ! -f $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz ] && wget https://6.66666.host:66/files/$(PKG_VERSION)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz -O $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz
- 	tar -xzvf $(PKG_BUILD_DIR)/$(PKG_NAME)_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz -C $(PKG_BUILD_DIR)
- endef
- 
 diff --git a/shadowsocks-rust/Makefile b/shadowsocks-rust/Makefile
 index 212a716..7a2d5d4 100644
 --- a/shadowsocks-rust/Makefile
