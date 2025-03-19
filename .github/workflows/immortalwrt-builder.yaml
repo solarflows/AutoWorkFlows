@@ -1,0 +1,107 @@
+﻿name: 🐳 ImmortalWrt Builder CI/CD
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/immortalwrt-builder.yml'
+      - '.github/docker/immortalwrt-builder/*'
+  schedule:
+    - cron: '0 3 * * 1' # 每周一 UTC 时间 3 点自动更新
+  workflow_dispatch: # 添加手动触发选项
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.actor }}/immortalwrt-builder
+  DOCKER_DIR: .github/docker/immortalwrt-builder
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: 🛎 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Verify Context Files
+        run: |
+          echo "当前工作目录: ${{ github.workspace }}"
+          ls -la ${{ env.DOCKER_DIR }}
+          [ -f "${{ env.DOCKER_DIR }}/Dockerfile" ] || exit 1
+          [ -f "${{ env.DOCKER_DIR }}/entrypoint.sh" ] || exit 1
+
+      - name: 🏗 Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:master
+          platforms: ${{ matrix.platforms }}
+
+      - name: 🔑 Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🗄 Cache Docker Layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('**/Dockerfile') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: 📄 Extract Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: 🚀 Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.DOCKER_DIR }}
+          file: ${{ env.DOCKER_DIR }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          secrets: |
+            CUSTOM_PASS=${{ secrets.BUILDER_PASS }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # - name: 🚨 Notify Slack
+      #   if: always()
+      #   uses: slackapi/slack-github-action@v2
+      #   with:
+      #     payload: |
+      #       {
+      #         "blocks": [
+      #           {
+      #             "type": "section",
+      #             "text": {
+      #               "type": "mrkdwn",
+      #               "text": "🚀 *ImmortalWrt Builder Update* \n\n*Status*: ${{ job.status }} \n*Version*: `${{ github.sha }}` \n*Registry*: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}`"
+      #             }
+      #           }
+      #         ]
+      #       }
+      #   env:
+      #     SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # cleanup:
+  #   runs-on: ubuntu-latest
+  #   needs: build-and-push
+  #   steps:
+  #     - name: 🗑 Clean Old Images
+  #       uses: docker/build-push-action@v5
+  #       with:
+  #         context: ${{ env.DOCKER_DIR }}
+  #         push: false
+  #         load: false
+  #         targets: prune
