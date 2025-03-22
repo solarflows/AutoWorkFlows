@@ -29,7 +29,7 @@ index 212a716..7a2d5d4 100644
  
 -PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 -PKG_SOURCE_URL:=https://codeload.github.com/shadowsocks/shadowsocks-rust/tar.gz/v$(PKG_VERSION)?
--PKG_HASH:=2857372667b66aa7f8ef2d27a8a19209cbf3e5da2e6d1d1d493411d72d173861
+-PKG_HASH:=13307594159cfe23f91e69c8b08ba7a41a17a2f36a4bfb3821476026f7518cac
 +PKG_SOURCE_HEADER:=shadowsocks-v$(PKG_VERSION)
 +PKG_SOURCE_BODY:=unknown-linux-musl
 +PKG_SOURCE_FOOTER:=tar.xz
