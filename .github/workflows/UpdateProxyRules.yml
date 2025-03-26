@@ -33,7 +33,7 @@ jobs:
           output_file="/tmp/rule/publish/autoproxy.txt"
           > $output_file
 
-          # 输出 GFW 域名
+          # 输出 CN 以外的域名
           echo "!## GFW Domains" >> $output_file
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
 
@@ -46,6 +46,7 @@ jobs:
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -62,16 +63,21 @@ jobs:
 
           # 输出 GFW 域名
           echo "!## GFW Domains" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
 
           # 输出 CN 域名例外
           echo "" >> $output_file
           echo "!## CN Domain Exceptions" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-cn | sed 's/^/@@||/' >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## CN IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: AutoProxy Rulues' $output_file
+          sed -i '2i! Title: AutoProxy Lite Rulues' $output_file
           sed -i '3i! Description: GFW as primary rules, CN exceptions' $output_file
           echo "!---------------------EOF-----------------------" >> $output_file
 
@@ -91,6 +97,7 @@ jobs:
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -109,6 +116,11 @@ jobs:
           echo "!## GFW Domains" >> $output_file
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
 
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## CN IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
+
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
           sed -i '2i! Title: Blacklist Rules' $output_file
@@ -125,6 +137,11 @@ jobs:
           # 输出 gfw 域名
           echo "!## GFW Domains" >> $output_file
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## CN IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
