@@ -117,7 +117,7 @@ jobs:
           > $output_file
 
           # 输出 非CN 域名
-          echo "!## GFW Domains" >> $output_file
+          echo "!## unCN Domains" >> $output_file
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
 
           # 输出私有 IP 范围
@@ -134,7 +134,7 @@ jobs:
       - name: Generate gfwlist
         id: generate_gfwlist
         run: |
-          # 创建或清空 Blacklist 文件
+          # 创建或清空 gfwlist 文件
           output_file="/tmp/rule/publish/gfwlist.txt"
           > $output_file
 
