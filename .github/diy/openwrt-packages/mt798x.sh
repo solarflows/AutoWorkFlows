@@ -121,6 +121,7 @@ checkout_partial_code -r https://github.com/linkease/nas-packages-luci luci/luci
 checkout_partial_code -r https://github.com/linkease/nas-packages network/services/ddnsto
 
 checkout_partial_code -r https://github.com/openwrt/packages/ net/tailscale lang/golang
+checkout_partial_code -r https://github.com/padavanonly/immortalwrt-mt798x-24.10 package/mtk/applications/luci-app-mwan3helper-chinaroute package/mtk/applications/luci-app-upnp-mtk-adjust package/mtk/applications/luci-app-wrtbwmon package/mtk/applications/miniupnpd-mtk-adjust package/mtk/applications/wrtbwmon
 
 # L
 # lucky             大吉多种功能结合体
@@ -140,6 +141,11 @@ checkout_partial_code -r https://github.com/xiaorouji/openwrt-passwall2 luci-app
 # SmartDNS
 checkout_partial_code -r https://github.com/immortalwrt/packages net/smartdns
 format_git_clone_output -r https://github.com/pymumu/luci-app-smartdns -b master
+
+# T
+# TaskPlan         定时任务计划管理器
+checkout_partial_code -r https://github.com/sirpdboy/luci-app-taskplan luci-app-taskplan
+format_git_clone_output -r https://github.com/jerrykuku/luci-theme-argon
 
 # Z
 # ZeroTier
