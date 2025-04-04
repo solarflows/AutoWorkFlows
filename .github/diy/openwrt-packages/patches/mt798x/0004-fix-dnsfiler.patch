@@ -1,0 +1,25 @@
+﻿diff --git a/luci-app-dnsfilter/root/etc/init.d/dnsfilter b/luci-app-dnsfilter/root/etc/init.d/dnsfilter
+index 5efe7748..6535932a 100755
+--- a/luci-app-dnsfilter/root/etc/init.d/dnsfilter
++++ b/luci-app-dnsfilter/root/etc/init.d/dnsfilter
+@@ -3,7 +3,7 @@ START=99
+ STOP=10
+ B=0
+ CRON_FILE=/etc/crontabs/root
+-D=/tmp/dnsmasq.dnsfilter
++D=/tmp/dnsmasq.d/dnsmasq.dnsfilter
+ E="date +'%Y-%m-%d %H:%M:%S'"
+ L=/etc/dnsfilter
+ P=/usr/share/dnsfilter
+@@ -40,8 +40,10 @@ add_dns(){
+ 		if [ $flash = 1 ];then
+ 			ln -sf $L/rules/rules.conf $T/rules.conf
+ 			ln -sf $L/rules/url $T/url
++ 			cp -f $L/rules/rules.conf $D/rules.conf
++ 		else
++ 			mv -f $T/rules.conf $D/rules.conf
+ 		fi
+-		ln -sf $T/rules.conf $D/rules.conf
+ 	fi
+ 	[ $block_ios = 1 ] && echo 'mesu.apple.com' > $D/black.conf
+ 	if [ $block_cnshort = 1 ];then
