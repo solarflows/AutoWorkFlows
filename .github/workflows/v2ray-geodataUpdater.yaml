@@ -1,0 +1,76 @@
+﻿name: v2ray-geodata Updater
+
+on:
+  schedule:
+    - cron: '6 6 * * 6'
+  repository_dispatch:
+
+jobs:
+  update:
+    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Fetch latest version and hashes
+        id: fetch_data
+        run: |
+          import os
+          import requests
+          import hashlib
+
+          response = requests.get('https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest')
+          response.raise_for_status()
+          release_data = response.json()
+
+          version = release_data['tag_name']
+          assets = {asset['name']: asset['browser_download_url'] for asset in release_data['assets']}
+          geosite_url = assets.get('geosite.dat')
+          geoip_url = assets.get('geoip.dat')
+
+          if not geosite_url or not geoip_url:
+              raise ValueError("Required assets (geosite.dat or geoip.dat) are missing in the release.")
+
+          def get_file_hash(url):
+              file_response = requests.get(url)
+              file_response.raise_for_status()
+              return hashlib.sha256(file_response.content).hexdigest()
+
+          geosite_hash = get_file_hash(geosite_url)
+          geoip_hash = get_file_hash(geoip_url)
+
+          with open(os.environ['GITHUB_ENV'], 'a') as env_file:
+              env_file.write(f"version={version}\n")
+              env_file.write(f"geosite_hash={geosite_hash}\n")
+              env_file.write(f"geoip_hash={geoip_hash}\n")
+
+      - name: Update patch files
+        run: |
+          echo "Version: ${{ env.version }}"
+          echo "Geosite Hash: ${{ env.geosite_hash }}"
+          echo "GeoIP Hash: ${{ env.geoip_hash }}"
+
+          # Update the patch file with the new version and hashes using specific line numbers
+          sed -i "s/^GEO_VER=.*/GEO_VER=${{ env.version }}/" .github/diy/openwrt-packages/patches/add-v2ray-geodata.patch
+          sed -i "10s/.*/HASH:=${{ env.geosite_hash }}/" .github/diy/openwrt-packages/patches/add-v2ray-geodata.patch
+          sed -i "15s/.*/HASH:=${{ env.geoip_hash }}/" .github/diy/openwrt-packages/patches/aadd-v2ray-geodata.patch
+
+          # Commit and push the changes
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/diy/openwrt-packages/patches/mt798x/0005-add-v2ray-geodata.patch
+          git commit -m "Update v2ray-geodata to ${{ env.version }}"
+          git push
+
