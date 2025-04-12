@@ -22,7 +22,7 @@ jobs:
 
       - name: Download geoview binary
         run: |
-          wget https://github.com/snowie2000/geoview/releases/latest/download/geoview_linux_amd64 -O /tmp/rule/geoview
+          wget https://github.com/snowie2000/geoview/releases/latest/download/geoview -O /tmp/rule/geoview
           chmod +x /tmp/rule/geoview
 
       - name: Download geoip and geosite files
