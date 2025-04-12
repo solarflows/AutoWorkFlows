@@ -27,34 +27,36 @@ jobs:
       - name: Fetch latest version and hashes
         id: fetch_data
         run: |
+          python - <<EOF
           import os
           import requests
           import hashlib
-
+      
           response = requests.get('https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest')
           response.raise_for_status()
           release_data = response.json()
-
+      
           version = release_data['tag_name']
           assets = {asset['name']: asset['browser_download_url'] for asset in release_data['assets']}
           geosite_url = assets.get('geosite.dat')
           geoip_url = assets.get('geoip.dat')
-
+      
           if not geosite_url or not geoip_url:
               raise ValueError("Required assets (geosite.dat or geoip.dat) are missing in the release.")
-
+      
           def get_file_hash(url):
               file_response = requests.get(url)
               file_response.raise_for_status()
               return hashlib.sha256(file_response.content).hexdigest()
-
+      
           geosite_hash = get_file_hash(geosite_url)
           geoip_hash = get_file_hash(geoip_url)
-
+      
           with open(os.environ['GITHUB_ENV'], 'a') as env_file:
               env_file.write(f"version={version}\n")
               env_file.write(f"geosite_hash={geosite_hash}\n")
               env_file.write(f"geoip_hash={geoip_hash}\n")
+          EOF
 
       - name: Update patch files
         run: |
