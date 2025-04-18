@@ -1,0 +1,24 @@
+﻿diff --git a/smartdns/Makefile b/smartdns/Makefile
+index 4ce1c9c6e6..fd01457285 100644
+--- a/smartdns/Makefile
++++ b/smartdns/Makefile
+@@ -5,13 +5,13 @@
+ include $(TOPDIR)/rules.mk
+ 
+ PKG_NAME:=smartdns
+-PKG_VERSION:=46.1
+-PKG_RELEASE:=1
++PKG_VERSION:=1.2025.46.2
++PKG_RELEASE:=3
+ 
+-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+-PKG_SOURCE_URL:=https://codeload.github.com/pymumu/smartdns/tar.gz/Release$(PKG_VERSION)?
+-PKG_HASH:=6307503fa409b9c6b87556d1b1f8eaf99c7be5b06a9d479ec3589c875391a6b3
+-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-Release$(PKG_VERSION)
++PKG_SOURCE_PROTO:=git
++PKG_SOURCE_URL:=https://www.github.com/pymumu/smartdns.git
++PKG_SOURCE_VERSION:=b7a47962d33657dbd102e4f4918564ada4c83a46
++PKG_MIRROR_HASH:=29b32ee0c275a4b845b28c53a2597b43f4d3f04676e04b9c53aae5ecaf3c6f94
+ 
+ PKG_MAINTAINER:=Nick Peng <pymumu@gmail.com>
+ PKG_LICENSE:=GPL-3.0-or-later
