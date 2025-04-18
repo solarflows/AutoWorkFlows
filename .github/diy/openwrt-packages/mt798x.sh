@@ -139,8 +139,7 @@ checkout_partial_code -r https://github.com/xiaorouji/openwrt-passwall2 luci-app
 
 # S
 # SmartDNS
-# checkout_partial_code -r https://github.com/immortalwrt/packages net/smartdns
-format_git_clone_output -r https://github.com/pymumu/openwrt-smartdns -b master
+checkout_partial_code -r https://github.com/immortalwrt/packages net/smartdns
 format_git_clone_output -r https://github.com/pymumu/luci-app-smartdns -b master
 
 # T
