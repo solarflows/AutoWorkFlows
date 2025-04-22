@@ -73,8 +73,8 @@ jobs:
 
           # 仅更新 HASH 值（保留行首内容）
           sed -i "31s/\(GEO_VER:=\)[0-9a-f]*/\1${{ env.version }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          sed -i "37s/\(HASH:=\)[0-9a-f]*/\1${{ env.geosite_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          sed -i "45s/\(HASH:=\)[0-9a-f]*/\1${{ env.geoip_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          sed -i "37s/\(HASH:=\)[0-9a-f]*/\1${{ env.geoip_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          sed -i "45s/\(HASH:=\)[0-9a-f]*/\1${{ env.geosite_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
 
           # 提交并推送更改
           git config user.name "github-actions[bot]"
