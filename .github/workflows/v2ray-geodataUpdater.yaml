@@ -72,8 +72,7 @@ jobs:
           echo "GeoIP Hash: ${{ env.geoip_hash }}"
 
           # 仅更新 HASH 值（保留行首内容）
-          sed -i "s/^GEO_VER:=.*/GEO_VER:=${{ env.version }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          sed -i "37s/\(HASH:=\)[0-9a-f]*/\1${{ env.geosite_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          sed -i "31s/\(GEO_VER:=\)[0-9a-f]*/\1${{ env.version }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
           sed -i "37s/\(HASH:=\)[0-9a-f]*/\1${{ env.geosite_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
           sed -i "45s/\(HASH:=\)[0-9a-f]*/\1${{ env.geoip_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
 
