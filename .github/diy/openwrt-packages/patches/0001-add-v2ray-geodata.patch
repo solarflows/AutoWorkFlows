@@ -7,12 +7,12 @@ Subject: [PATCH] add v2ray-geodata.
  v2ray-geodata/Makefile | 138 +++++++++++++++++++++++++++++++++++++++++
  1 file changed, 138 insertions(+)
  create mode 100644 v2ray-geodata/Makefile
-HASH:=6f91feec58bd787189e2d435f1ab61ae6381d6ad43783c5714f001fab79bad3d
+
 diff --git a/v2ray-geodata/Makefile b/v2ray-geodata/Makefile
 new file mode 100644
 index 00000000..8f1334c9
 --- /dev/null
-HASH:=3a12beaa33c81b6751b45833a0a942b9462420d91182e7fa1d768b418e604049
++++ b/v2ray-geodata/Makefile
 @@ -0,0 +1,138 @@
 +# SPDX-License-Identifier: GPL-3.0-only
 +#
