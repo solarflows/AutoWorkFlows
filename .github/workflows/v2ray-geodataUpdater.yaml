@@ -68,15 +68,14 @@ jobs:
           echo "Geosite Hash: ${{ env.geosite_hash }}"
           echo "GeoIP Hash: ${{ env.geoip_hash }}"
 
-          # Update the patch file with the new version and hashes using specific line numbers
+          # 仅更新 HASH 值（保留行首内容）
           sed -i "s/^GEO_VER=.*/GEO_VER=${{ env.version }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          sed -i "10s/.*/HASH:=${{ env.geosite_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          sed -i "15s/.*/HASH:=${{ env.geoip_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          sed -i "37s/\(HASH:=\)[0-9a-f]*/\1${{ env.geosite_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          sed -i "45s/\(HASH:=\)[0-9a-f]*/\1${{ env.geoip_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
 
-          # Commit and push the changes
+          # 提交并推送更改
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          git commit -m "Update v2ray-geodata to ${{ env.version }}"
+          git commit -m "Update v2ray-geodata hashes to ${{ env.version }}"
           git push
-
