@@ -55,6 +55,9 @@ jobs:
 
           geosite_hash = get_file_hash(geosite_url)
           geoip_hash = get_file_hash(geoip_url)
+          print(f"Version: {version}")
+          print(f"Geosite Hash: {geosite_hash}")
+          print(f"GeoIP Hash: {geoip_hash}")
 
           with open(os.environ['GITHUB_ENV'], 'a') as env_file:
               env_file.write(f"version={version}\n")
