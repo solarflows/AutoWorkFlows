@@ -12,11 +12,11 @@ on:
       - '.github/diy/openwrt-packages/*.sh'
   watch:
     types: started
-  repository_dispatch:
+  workflow_dispatch:
 
 jobs:
   update:
-    if: github.event.repository.owner.id == github.event.sender.id || github.event.sender.type == 'Bot'
+    # if: github.event.repository.owner.id == github.event.sender.id || github.event.sender.type == 'Bot'
     runs-on: ubuntu-latest
 
     strategy:

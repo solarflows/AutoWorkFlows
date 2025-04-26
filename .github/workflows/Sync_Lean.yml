@@ -11,6 +11,8 @@ on:
         - '.github/diy/packages/patches/*/*.patch'  # 当workflow文件有改变时触发
   watch:
     types: [started]
+  workflow_dispatch:
+  # 手动触发
 
 jobs:
   sync_lede:
