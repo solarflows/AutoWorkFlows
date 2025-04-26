@@ -1,0 +1,174 @@
+﻿From 0e0d730938c1cd22251929509488f8ac76e1745f Mon Sep 17 00:00:00 2001
+From: lwb1978 <86697442+lwb1978@users.noreply.github.com>
+Date: Sun, 13 Apr 2025 01:57:40 +0800
+Subject: [PATCH] luci: optimize node list automatic detection delay
+
+related issues: https://github.com/xiaorouji/openwrt-passwall2/issues/798
+---
+ .../model/cbi/passwall/client/node_list.lua   | 39 +++++++++++++++----
+ .../view/passwall/node_list/node_list.htm     |  5 +--
+ luci-app-passwall/po/zh-cn/passwall.po        |  3 ++
+ 3 files changed, 36 insertions(+), 11 deletions(-)
+
+diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
+index 33587b183b..61dd830f99 100644
+--- a/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
++++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
+@@ -14,6 +14,7 @@ o = s:option(ListValue, "auto_detection_time", translate("Automatic detection de
+ o:value("0", translate("Close"))
+ o:value("icmp", "Ping")
+ o:value("tcping", "TCP Ping")
++o.description = translate("To optimize performance, auto-detection is disabled when there are more than 30 nodes.")
+ 
+ o = s:option(Flag, "show_node_info", translate("Show server address and port"))
+ o.default = "0"
+@@ -23,6 +24,24 @@ s:append(Template(appname .. "/node_list/link_add_node"))
+ 
+ local auto_detection_time = m:get("@global_other[0]", "auto_detection_time") or "0"
+ local show_node_info = m:get("@global_other[0]", "show_node_info") or "0"
++if auto_detection_time ~= "0" then
++	local node_count = 0
++	for k, e in ipairs(api.get_valid_nodes()) do
++		if e.protocol ~= "_shunt" and e.protocol ~= "_balancing" and e.protocol ~= "_urltest" and e.protocol ~= "_iface" then
++			node_count = node_count + 1
++		end
++	end
++	if node_count > 30 then auto_detection_time = "0" end
++end
++
++-- Pass the auto_detection_time global variable to the webpage
++local o = s:option(DummyValue, "_auto_detection_time")
++o.rawhtml = true
++o.default = string.format([[
++	<script>
++		window.auto_detection_time = "%s";
++	</script>
++]], auto_detection_time)
+ 
+ -- [[ Node List ]]--
+ s = m:section(TypedSection, "nodes")
+@@ -149,13 +168,15 @@ o = s:option(DummyValue, "ping", "Ping")
+ o.width = "8%"
+ o.rawhtml = true
+ o.cfgvalue = function(t, n)
+-	local result = "---"
++	local protocol = m:get(n, "protocol")
++	if protocol == "_shunt" or protocol == "_balancing" or protocol == "_urltest" or protocol == "_iface" then
++		return string.format('<span class="ping_value" cbiid="%s">---</span>', n)
++	end
+ 	if auto_detection_time ~= "icmp" then
+-		result = string.format('<span class="ping"><a href="javascript:void(0)" onclick="javascript:ping_node(\'%s\', this, \'icmp\')">%s</a></span>', n, translate("Test"))
++		return string.format('<span class="ping"><a href="javascript:void(0)" onclick="javascript:ping_node(\'%s\', this, \'icmp\')">%s</a></span>', n, translate("Test"))
+ 	else
+-		result = string.format('<span class="ping_value" cbiid="%s">---</span>', n)
++		return string.format('<span class="ping_value" cbiid="%s">---</span>', n)
+ 	end
+-	return result
+ end
+ 
+ ---- TCP Ping
+@@ -163,13 +184,15 @@ o = s:option(DummyValue, "tcping", "TCPing")
+ o.width = "8%"
+ o.rawhtml = true
+ o.cfgvalue = function(t, n)
+-	local result = "---"
++	local protocol = m:get(n, "protocol")
++	if protocol == "_shunt" or protocol == "_balancing" or protocol == "_urltest" or protocol == "_iface" then
++		return string.format('<span class="tcping_value" cbiid="%s">---</span>', n)
++	end
+ 	if auto_detection_time ~= "tcping" then
+-		result = string.format('<span class="ping"><a href="javascript:void(0)" onclick="javascript:ping_node(\'%s\', this, \'tcping\')">%s</a></span>', n, translate("Test"))
++		return  string.format('<span class="ping"><a href="javascript:void(0)" onclick="javascript:ping_node(\'%s\', this, \'tcping\')">%s</a></span>', n, translate("Test"))
+ 	else
+-		result = string.format('<span class="tcping_value" cbiid="%s">---</span>', n)
++		return  string.format('<span class="tcping_value" cbiid="%s">---</span>', n)
+ 	end
+-	return result
+ end
+ 
+ o = s:option(DummyValue, "_url_test", translate("URL Test"))
+diff --git a/luci-app-passwall/luasrc/view/passwall/node_list/node_list.htm b/luci-app-passwall/luasrc/view/passwall/node_list/node_list.htm
+index ef64abace0..d944168020 100644
+--- a/luci-app-passwall/luasrc/view/passwall/node_list/node_list.htm
++++ b/luci-app-passwall/luasrc/view/passwall/node_list/node_list.htm
+@@ -46,8 +46,7 @@
+ 
+ <script type="text/javascript">
+ 	//<![CDATA[
+-	let auto_detection_time = "<%=api.uci_get_type("@global_other[0]", "auto_detection_time", "0")%>"
+-	
++
+ 	var node_list = {};
+ 	var node_count = 0;
+ 
+@@ -314,7 +313,7 @@
+ 
+ 	/* 自动Ping */
+ 	function pingAllNodes() {
+-		if (auto_detection_time == "icmp" || auto_detection_time == "tcping") {
++		if (window.auto_detection_time == "icmp" || window.auto_detection_time == "tcping") {
+ 			var nodes = [];
+ 			const ping_value = document.getElementsByClassName(auto_detection_time == "tcping" ? 'tcping_value' : 'ping_value');
+ 			for (var i = 0; i < ping_value.length; i++) {
+diff --git a/luci-app-passwall/po/zh-cn/passwall.po b/luci-app-passwall/po/zh-cn/passwall.po
+index d08c7d937e..cee07d8865 100644
+--- a/luci-app-passwall/po/zh-cn/passwall.po
++++ b/luci-app-passwall/po/zh-cn/passwall.po
+@@ -628,6 +628,9 @@ msgstr "延迟"
+ msgid "Automatic detection delay"
+ msgstr "自动检测延迟"
+ 
++msgid "To optimize performance, auto-detection is disabled when there are more than 30 nodes."
++msgstr "为优化性能，超过 30 个节点不自动检测。"
++
+ msgid "Show server address and port"
+ msgstr "显示服务器地址和端口"
+ 
+From ace83350834e7ab409154fa4f95e0f8a811863f1 Mon Sep 17 00:00:00 2001
+From: lwb1978 <86697442+lwb1978@users.noreply.github.com>
+Date: Fri, 18 Apr 2025 22:26:03 +0800
+Subject: [PATCH] luci: optimize node list
+
+---
+ .../luasrc/model/cbi/passwall/client/node_list.lua | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
+index 61dd830f99..208f7e3621 100644
+--- a/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
++++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/node_list.lua
+@@ -27,7 +27,7 @@ local show_node_info = m:get("@global_other[0]", "show_node_info") or "0"
+ if auto_detection_time ~= "0" then
+ 	local node_count = 0
+ 	for k, e in ipairs(api.get_valid_nodes()) do
+-		if e.protocol ~= "_shunt" and e.protocol ~= "_balancing" and e.protocol ~= "_urltest" and e.protocol ~= "_iface" then
++		if e.node_type == "normal" then
+ 			node_count = node_count + 1
+ 		end
+ 	end
+@@ -168,8 +168,10 @@ o = s:option(DummyValue, "ping", "Ping")
+ o.width = "8%"
+ o.rawhtml = true
+ o.cfgvalue = function(t, n)
+-	local protocol = m:get(n, "protocol")
+-	if protocol == "_shunt" or protocol == "_balancing" or protocol == "_urltest" or protocol == "_iface" then
++	local type = m:get(n, "type") or ""
++	local protocol = m:get(n, "protocol") or ""
++	if (type == "sing-box" or type == "Xray") and
++	   (protocol == "_shunt" or protocol == "_balancing" or protocol == "_urltest" or protocol == "_iface") then
+ 		return string.format('<span class="ping_value" cbiid="%s">---</span>', n)
+ 	end
+ 	if auto_detection_time ~= "icmp" then
+@@ -184,8 +186,10 @@ o = s:option(DummyValue, "tcping", "TCPing")
+ o.width = "8%"
+ o.rawhtml = true
+ o.cfgvalue = function(t, n)
+-	local protocol = m:get(n, "protocol")
+-	if protocol == "_shunt" or protocol == "_balancing" or protocol == "_urltest" or protocol == "_iface" then
++	local type = m:get(n, "type") or ""
++	local protocol = m:get(n, "protocol") or ""
++	if (type == "sing-box" or type == "Xray") and
++	   (protocol == "_shunt" or protocol == "_balancing" or protocol == "_urltest" or protocol == "_iface") then
+ 		return string.format('<span class="tcping_value" cbiid="%s">---</span>', n)
+ 	end
+ 	if auto_detection_time ~= "tcping" then
