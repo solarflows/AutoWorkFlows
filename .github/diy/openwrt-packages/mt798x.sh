@@ -121,7 +121,7 @@ checkout_partial_code -r https://github.com/linkease/nas-packages-luci luci/luci
 checkout_partial_code -r https://github.com/linkease/nas-packages network/services/ddnsto
 
 checkout_partial_code -r https://github.com/openwrt/packages/ net/tailscale lang/golang
-checkout_partial_code -r https://github.com/padavanonly/immortalwrt-mt798x-24.10 package/mtk/applications/luci-app-mwan3helper-chinaroute package/mtk/applications/luci-app-upnp-mtk-adjust package/mtk/applications/luci-app-wrtbwmon package/mtk/applications/miniupnpd-mtk-adjust package/mtk/applications/wrtbwmon
+checkout_partial_code -r https://github.com/padavanonly/immortalwrt-mt798x-24.10 package/mtk/applications/luci-app-mwan3helper-chinaroute package/mtk/applications/luci-app-wrtbwmon package/mtk/applications/wrtbwmon
 
 # L
 # lucky             大吉多种功能结合体
