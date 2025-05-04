@@ -43,9 +43,9 @@ index 9ceb78d5cd..e0e810c318 100644
 @@ -20,7 +20,7 @@ end
  
  function act_status()
-        local e = {}
--       e.running = luci.sys.call("[ -s /tmp/dnsmasq.dnsfilter/rules.conf ]") == 0
-+       e.running = luci.sys.call("[ -s /tmp/dnsmasq.d/dnsmasq.dnsfilter/rules.conf ]") == 0
-        luci.http.prepare_content("application/json")
-        luci.http.write_json(e)
+ 	local e = {}
+-	e.running = luci.sys.call("[ -s /tmp/dnsmasq.dnsfilter/rules.conf ]") == 0
++	e.running = luci.sys.call("[ -s /tmp/dnsmasq.d/dnsmasq.dnsfilter/rules.conf ]") == 0
+ 	luci.http.prepare_content("application/json")
+ 	luci.http.write_json(e)
  end
