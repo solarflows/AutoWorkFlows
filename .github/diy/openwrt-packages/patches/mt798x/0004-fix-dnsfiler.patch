@@ -1,4 +1,17 @@
-﻿diff --git a/luci-app-dnsfilter/root/etc/init.d/dnsfilter b/luci-app-dnsfilter/root/etc/init.d/dnsfilter
+﻿diff --git a/luci-app-dnsfilter/Makefile b/luci-app-dnsfilter/Makefile
+index 4080a42a4d..0ecec61413 100644
+--- a/luci-app-dnsfilter/Makefile
++++ b/luci-app-dnsfilter/Makefile
+@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
+ 
+ PKG_NAME:=luci-app-dnsfilter
+ PKG_VERSION:=1.0
+-PKG_RELEASE:=14
++PKG_RELEASE:=15
+ 
+ PKG_LICENSE:=GPLv2
+ PKG_MAINTAINER:=small_5 kiddin9
+diff --git a/luci-app-dnsfilter/root/etc/init.d/dnsfilter b/luci-app-dnsfilter/root/etc/init.d/dnsfilter
 index 5efe7748..6535932a 100755
 --- a/luci-app-dnsfilter/root/etc/init.d/dnsfilter
 +++ b/luci-app-dnsfilter/root/etc/init.d/dnsfilter
@@ -23,3 +36,16 @@ index 5efe7748..6535932a 100755
  	fi
  	[ $block_ios = 1 ] && echo 'mesu.apple.com' > $D/black.conf
  	if [ $block_cnshort = 1 ];then
+diff --git a/luci-app-dnsfilter/luasrc/controller/dnsfilter.lua b/luci-app-dnsfilter/luasrc/controller/dnsfilter.lua
+index 9ceb78d5cd..e0e810c318 100644
+--- a/luci-app-dnsfilter/luasrc/controller/dnsfilter.lua
++++ b/luci-app-dnsfilter/luasrc/controller/dnsfilter.lua
+@@ -20,7 +20,7 @@ end
+ 
+ function act_status()
+        local e = {}
+-       e.running = luci.sys.call("[ -s /tmp/dnsmasq.dnsfilter/rules.conf ]") == 0
++       e.running = luci.sys.call("[ -s /tmp/dnsmasq.d/dnsmasq.dnsfilter/rules.conf ]") == 0
+        luci.http.prepare_content("application/json")
+        luci.http.write_json(e)
+ end
