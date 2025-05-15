@@ -49,8 +49,8 @@ jobs:
           # 输出 CN IP 范围
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@||/' >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -77,7 +77,7 @@ jobs:
           # 输出私有 IP 范围
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -100,8 +100,8 @@ jobs:
           # 输出 CN IP 范围
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/||/' >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -124,8 +124,8 @@ jobs:
           # 输出 CN IP 范围
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/||/' >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -147,7 +147,7 @@ jobs:
           # 输出私有 IP 范围
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -169,7 +169,7 @@ jobs:
           # 输出私有 IP 范围
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@||/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -186,6 +186,7 @@ jobs:
             # 生成 Base64 编码文件并输出到同一目录
             base64 "$file" > "/tmp/rule/release/${base_name}"
           done
+          cp /tmp/rule/release/* /tmp/rule/publish/
 
       - name: Get current timestamp
         id: timestamp
@@ -202,7 +203,7 @@ jobs:
 
       - name: Git push assets to "release" branch
         run: |
-          cd /tmp/rule/release || exit 1
+          cd /tmp/rule/publish || exit 1
           git init
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
