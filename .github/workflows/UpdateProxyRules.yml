@@ -188,18 +188,18 @@ jobs:
           done
           cp /tmp/rule/release/* /tmp/rule/publish/
 
-      - name: Get current timestamp
-        id: timestamp
-        run: echo "version=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
+      # - name: Get current timestamp
+      #   id: timestamp
+      #   run: echo "version=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
 
-      - name: Release and upload assets
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          release_name: ${{ env.version }}
-          tag: ${{ env.version }}
-          file_glob: true
-          file: /tmp/rule/release/*
+      # - name: Release and upload assets
+      #   uses: svenstaro/upload-release-action@v2
+      #   with:
+      #     repo_token: ${{ secrets.GITHUB_TOKEN }}
+      #     release_name: ${{ env.version }}
+      #     tag: ${{ env.version }}
+      #     file_glob: true
+      #     file: /tmp/rule/release/*
 
       - name: Git push assets to "release" branch
         run: |
