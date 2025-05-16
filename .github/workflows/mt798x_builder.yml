@@ -1,0 +1,90 @@
+﻿name: OpenWrt CI
+
+on:
+  workflow_dispatch: # 添加手动触发选项
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Environment Prepare
+        run: |
+          docker rmi `docker images -q`
+          sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
+          sudo -E apt-mark hold grub-efi-amd64-signed
+          sudo -E apt update
+          sudo -E apt -y purge azure-cli* docker* ghc* zulu* llvm* firefox google* dotnet* powershell* openjdk* mysql* php* mongodb* dotnet* snap*
+          sudo -E apt -y full-upgrade
+          sudo -E apt -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang clangd cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
+            g++-multilib git gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev \
+            libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5 libncursesw5-dev libreadline-dev \
+            libssl-dev libtool lld lldb lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 \
+            python3 python3-pip python3-ply python3-docutils qemu-utils re2c rsync scons squashfs-tools subversion swig \
+            texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout ImmortalWrt
+        uses: actions/checkout@v4
+        with:
+          repository: solarflows/immortalwrt-mt798x
+          ref: test
+          path: openwrt
+
+      - name: Update feeds
+        run: |
+          cd openwrt
+          git clone --depth=1 https://github.com/solarflows/openwrt-packages.git -b mt798x\
+            package/custom
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Apply Configuration
+        run: |
+          cd openwrt
+          cp defconfig/mt798x.config .config
+          make defconfig
+
+      - name: Build Firmware
+        run: |
+          cd openwrt
+          make -j$(($(nproc) + 1)) || make -j1 V=s
+
+      - name: Prepare Artifacts
+        run: |
+          cd openwrt/bin/targets/mediatek/mt7981
+          # 创建版本目录
+          mkdir -p openwrt_release
+          # 收集固件文件
+          cp * openwrt_release/
+          # 打包额外文件
+          tar czvf openwrt_release/base.tgz -C bin/packages/aarch64_cortex-a53/base .
+          tar czvf openwrt_release/luci.tgz -C bin/packages/aarch64_cortex-a53/luci .
+          tar czvf openwrt_release/packages.tgz -C bin/packages/aarch64_cortex-a53/packages .
+
+      - name: Generate Release Tag
+        id: set_date
+        run: echo "RELEASE_DATE=R$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.set_date.outputs.RELEASE_DATE }}
+          name: OpenWRT ${{ steps.set_date.outputs.RELEASE_DATE }}
+          files: |
+            openwrt/bin/targets/mediatek/mt7981/openwrt_release/*
