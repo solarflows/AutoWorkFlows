@@ -188,9 +188,9 @@ jobs:
           done
           cp /tmp/rule/release/* /tmp/rule/publish/
 
-      # - name: Get current timestamp
-      #   id: timestamp
-      #   run: echo "version=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
+      - name: Get current timestamp
+        id: timestamp
+        run: echo "version=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
 
       # - name: Release and upload assets
       #   uses: svenstaro/upload-release-action@v2
