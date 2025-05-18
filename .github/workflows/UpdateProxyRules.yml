@@ -109,6 +109,30 @@ jobs:
           sed -i '3i! Description: Only CN domains and IPs' $output_file
           echo "!---------------------EOF-----------------------" >> $output_file
 
+      - name: Generate SmartProxy whitelist
+        id: generate_smartproxy_whitelist
+        run: |
+          # 创建或清空 SmartProxy Whitelist 文件
+          output_file="/tmp/rule/publish/smartproxy_whitelist.txt"
+          > $output_file
+
+          # 输出 CN 域名
+          echo "" >> $output_file
+          echo "!## CN Domain Exceptions" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@/' >> $output_file
+
+          # 输出 CN IP 范围
+          echo "" >> $output_file
+          echo "!## CN IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: Whitelist Rules For SmartProxy' $output_file
+          sed -i '3i! Description: Only CN domains and IPs' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
       - name: Generate whitelist_lite
         id: generate_whitelist_lite
         run: |
