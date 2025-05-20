@@ -1,7 +1,24 @@
-﻿name: OpenWrt CI
+﻿name: Build MT798X immortalWrt
 
 on:
-  workflow_dispatch: # 添加手动触发选项
+  workflow_dispatch:
+    inputs:
+      release:
+        description: '是否发布到Release'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      use_ccache:
+        description: '是否使用ccache'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 env:
   TZ: Asia/Shanghai
@@ -13,6 +30,8 @@ jobs:
 
     steps:
       - name: Environment Prepare
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           docker rmi `docker images -q`
           sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
@@ -40,6 +59,9 @@ jobs:
           large-packages: true
           swap-storage: true
 
+      - name: Check space usage
+        run: df -hT
+
       - name: Checkout ImmortalWrt
         uses: actions/checkout@v4
         with:
@@ -47,13 +69,15 @@ jobs:
           ref: test
           path: openwrt
 
+      - name: Cache
+        if: github.event.inputs.use_ccache == 'true'
+        uses: klever1988/cachewrtbuild@main
+        with:
+          ccache: 'true'
+          prefix: ${{ github.workspace }}/openwrt
+
       - name: Update feeds
-        run: |
-          cd openwrt
-          git clone --depth=1 https://github.com/solarflows/openwrt-packages.git -b mt798x\
-            package/custom
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+        run: cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a
 
       - name: Apply Configuration
         run: |
@@ -61,31 +85,56 @@ jobs:
           cp defconfig/mt798x.config .config
           make defconfig
 
+      - name: Download package
+        id: package
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
       - name: Build Firmware
         run: |
           cd openwrt
           make -j$(($(nproc) + 1)) || make -j1 V=s
+          echo "======================="
+          echo "Space usage:"
+          echo "======================="
+          df -h
+          echo "======================="
+          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
+          du -h --max-depth=1 ./build_dir
+          du -h --max-depth=1 ./bin
 
-      - name: Prepare Artifacts
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt_release
+          path: |
+            openwrt/bin/targets/mediatek/mt7981/*.bin
+
+      - name: Prepare Release
         run: |
-          cd openwrt/bin/targets/mediatek/mt7981
+          cd openwrt
           # 创建版本目录
           mkdir -p openwrt_release
           # 收集固件文件
-          cp * openwrt_release/
+          cp bin/targets/mediatek/mt7981/*.bin openwrt_release/
           # 打包额外文件
           tar czvf openwrt_release/base.tgz -C bin/packages/aarch64_cortex-a53/base .
           tar czvf openwrt_release/luci.tgz -C bin/packages/aarch64_cortex-a53/luci .
           tar czvf openwrt_release/packages.tgz -C bin/packages/aarch64_cortex-a53/packages .
 
       - name: Generate Release Tag
+        if: github.event.inputs.release == 'true'
         id: set_date
         run: echo "RELEASE_DATE=R$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Create Release
+        if: github.event.inputs.release == 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.set_date.outputs.RELEASE_DATE }}
           name: OpenWRT ${{ steps.set_date.outputs.RELEASE_DATE }}
           files: |
-            openwrt/bin/targets/mediatek/mt7981/openwrt_release/*
+            openwrt/openwrt_release/*
