@@ -111,9 +111,10 @@ jobs:
         with:
           name: openwrt_release
           path: |
-            openwrt/bin/targets/mediatek/mt7981/*.bin
+            openwrt/bin/targets/mediatek/mt7981/*squashfs-sysupgrade.bin
 
       - name: Prepare Release
+        if: github.event.inputs.release == 'true'
         run: |
           cd openwrt
           # 创建版本目录
