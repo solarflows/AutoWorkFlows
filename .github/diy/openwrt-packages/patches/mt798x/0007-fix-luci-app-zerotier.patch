@@ -11,3 +11,25 @@ index 338e9db2..93cc51f8 100644
  
  # call BuildPackage - OpenWrt buildroot signature
  
+diff --git a/zerotier/Makefile b/zerotier/Makefile
+index fa89f840..69de0cb7 100644
+--- a/zerotier/Makefile
++++ b/zerotier/Makefile
+@@ -6,13 +6,13 @@
+ include $(TOPDIR)/rules.mk
+ 
+ PKG_NAME:=zerotier
+-PKG_VERSION:=1.14.1
+-PKG_RELEASE:=9
++PKG_VERSION:=1.14.2
++PKG_RELEASE:=1
+ 
+ PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+ PKG_SOURCE_URL:=https://codeload.github.com/zerotier/ZeroTierOne/tar.gz/$(PKG_VERSION)?
+-PKG_HASH:=4f9f40b27c5a78389ed3f3216c850921f6298749e5819e9f2edabb2672ce9ca0
+-PKG_BUILD_DIR:=$(BUILD_DIR)/ZeroTierOne-$(PKG_VERSION)
++PKG_HASH:=c2f64339fccf5148a7af089b896678d655fbfccac52ddce7714314a59d7bddbb
++PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+ 
+ PKG_MAINTAINER:=Moritz Warning <moritzwarning@web.de>
+ PKG_LICENSE:=BSL 1.1
