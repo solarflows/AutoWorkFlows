@@ -150,7 +150,8 @@ format_git_clone_output -r https://github.com/jerrykuku/luci-app-argon-config
 
 # Z
 # ZeroTier
-checkout_partial_code -r https://github.com/immortalwrt/packages net/zerotier
-checkout_partial_code -r https://github.com/immortalwrt/luci applications/luci-app-zerotier
+checkout_partial_code -r https://github.com/coolsnowwolf/packages net/zerotier
+format_git_clone_output -r https://github.com/zhengmz/luci-app-zerotier
+# checkout_partial_code -r https://github.com/immortalwrt/luci applications/luci-app-zerotier
 
 exit 0

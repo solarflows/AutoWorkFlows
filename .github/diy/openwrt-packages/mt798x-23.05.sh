@@ -144,6 +144,6 @@ format_git_clone_output -r https://github.com/pymumu/luci-app-smartdns -b master
 # Z
 # ZeroTier
 checkout_partial_code -r https://github.com/coolsnowwolf/packages net/zerotier
-checkout_partial_code -r https://github.com/immortalwrt/luci applications/luci-app-zerotier
+# checkout_partial_code -r https://github.com/immortalwrt/luci applications/luci-app-zerotier
 
 exit 0
