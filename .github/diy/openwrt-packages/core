@@ -1,4 +1,6 @@
-﻿# 脚本核心文件
+﻿#
+# 脚本核心文件
+#
 
 # 执行 git clone 命令，并将输出重定向到指定文件
 format_git_clone_output() {
@@ -94,7 +96,7 @@ checkout_partial_code() {
   # 提取指定子目录到目标运行目录或当前目录，若文件夹不存在则报错并退出
   for dir in "${@}"; do
     if [ "$dir" != "--repo" ] && [ "$dir" != "-r" ] && [ "$dir" != "--branch" ] && [ "$dir" != "-b" ]; then
-        if ! rsync -av --copy-links --progress $temp_dir/$dir .;then
+        if ! rsync -av --copy-links $temp_dir/$dir .;then
           echo "错误：$dir 文件夹不存在于仓库中"
           exit 1
         fi
