@@ -1,0 +1,13 @@
+﻿diff --git a/smartdns/Makefile b/smartdns/Makefile
+index dfaa84c..a891d3d 100644
+--- a/smartdns/Makefile
++++ b/smartdns/Makefile
+@@ -30,7 +30,7 @@ PKG_BUILD_PARALLEL:=1
+ # PACKAGE_smartdns-ui:node/host
+ PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:rust/host 
+
+-include ../../lang/rust/rust-package.mk
++include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
+ include $(INCLUDE_DIR)/package.mk
+ 
+ MAKE_VARS += VER=$(PKG_VERSION)
