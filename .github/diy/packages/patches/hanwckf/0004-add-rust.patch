@@ -125,7 +125,7 @@ index 000000000..15f79a08e
 +	( \
 +		cd $(HOST_BUILD_DIR)/build/dist ; \
 +		for targz in *.tar.gz; do \
-+			$(STAGING_DIR_HOST)/bin/gzip -dc "$$$$targz" | tar -xf - ; \
++			$(STAGING_DIR_HOST)/bin/libdeflate-gzip -dc "$$$$targz" | tar -xf - ; \
 +		done ; \
 +		find . -mindepth 2 -maxdepth 2 -type f -name install.sh \
 +			-execdir bash '{}' --prefix=$(STAGING_DIR)/host --disable-ldconfig \; ; \
