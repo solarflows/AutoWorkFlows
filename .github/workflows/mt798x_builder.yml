@@ -43,6 +43,8 @@ jobs:
           sudo -E apt-get -qq clean
           sudo -E apt-get -qq install libfuse-dev
           sudo timedatectl set-timezone "$TZ"
+          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          sudo -E apt-get -qq install nodejs
 
       - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
