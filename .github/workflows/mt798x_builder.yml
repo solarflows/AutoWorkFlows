@@ -89,7 +89,7 @@ jobs:
       - name: Apply Configuration
         run: |
           cd openwrt
-          cp ../AutoWorkFlows/openwrt-configs/immortalwrt-mt798x/mt798x.config .config
+          cp ../AutoWorkFlows/openwrt-configs/immortalwrt-mt798x/mt798x.conf .config
           make defconfig
 
       - name: Download package
