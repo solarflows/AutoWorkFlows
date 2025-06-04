@@ -1,0 +1,13 @@
+﻿diff --git a/luci-app-wechatpush/Makefile b/luci-app-wechatpush/Makefile
+index e9689eac..fc98f5e4 100755
+--- a/luci-app-wechatpush/Makefile
++++ b/luci-app-wechatpush/Makefile
+@@ -12,7 +12,7 @@ PKG_CONFIG_DEPENDS:= \
+ 
+ LUCI_TITLE:=LuCI support for wechatpush
+ LUCI_PKGARCH:=all
+-LUCI_DEPENDS:=+iputils-arping +curl +jq +bash +luci-lua-runtime \
++LUCI_DEPENDS:=+iputils-arping +curl +jq +bash \
+         +PACKAGE_$(PKG_NAME)_Enable_Traffic_Monitoring:wrtbwmon \
+         +PACKAGE_$(PKG_NAME)_Enable_Local_Disk_Information_Detection:lsblk \
+         +PACKAGE_$(PKG_NAME)_Enable_Local_Disk_Information_Detection:smartmontools \
