@@ -49,6 +49,10 @@ checkout_partial_code -r https://github.com/sirpdboy/luci-app-taskplan luci-app-
 format_git_clone_output -r https://github.com/jerrykuku/luci-theme-argon
 format_git_clone_output -r https://github.com/jerrykuku/luci-app-argon-config
 
+# W
+# wechatpush          全能推送
+format_git_clone_output -r https://github.com/tty228/luci-app-wechatpush
+
 # Z
 # ZeroTier
 checkout_partial_code -r https://github.com/coolsnowwolf/packages net/zerotier

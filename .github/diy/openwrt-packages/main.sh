@@ -151,8 +151,6 @@ checkout_partial_code -r https://github.com/xiaorouji/openwrt-passwall2 luci-app
 checkout_partial_code -r https://github.com/ykxVK8yL5L/pikpak-webdav/ openwrt/*
 # poweroff          关机插件
 format_git_clone_output -r https://github.com/esirplayground/luci-app-poweroff
-# pushbot           全能推送
-format_git_clone_output -r https://github.com/zzsj0928/luci-app-pushbot
 
 # R
 # rtorrent          OpenWRT的rTorrent客户端
@@ -188,6 +186,8 @@ format_git_clone_output -r https://github.com/KFERMercer/luci-app-tcpdump
 format_git_clone_output -r https://github.com/muink/luci-app-tinyfilemanager
 
 # W
+# wechatpush          全能推送
+format_git_clone_output -r https://github.com/tty228/luci-app-wechatpush
 # wifidog           WIFIDOG的luci管理界面WIFI认证
 format_git_clone_output -r https://github.com/walkingsky/luci-wifidog && mv luci-wifidog luci-app-wifidog
 
