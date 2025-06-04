@@ -60,11 +60,11 @@ jobs:
           large-packages: true
           swap-storage: true
 
-      - name: Checkout ImmortalWrt
+      - name: Checkout AutoWorkflows
         uses: actions/checkout@v4
         with:
-          repository: solarflows/AutoWorkflows
-          path: AutoWorkflows
+          repository: solarflows/AutoWorkFlows
+          path: AutoWorkFlows
 
       - name: Checkout ImmortalWrt
         uses: actions/checkout@v4
@@ -89,7 +89,7 @@ jobs:
       - name: Apply Configuration
         run: |
           cd openwrt
-          cp ../AutoWorkflows/.github/openwrt-builder/immortalwrt-mt798x/mt798x.config .config
+          cp ../AutoWorkFlows/openwrt-configs/immortalwrt-mt798x/mt798x.config .config
           make defconfig
 
       - name: Download package
