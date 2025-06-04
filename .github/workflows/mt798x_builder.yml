@@ -63,6 +63,12 @@ jobs:
       - name: Checkout ImmortalWrt
         uses: actions/checkout@v4
         with:
+          repository: solarflows/AutoWorkflows
+          path: AutoWorkflows
+
+      - name: Checkout ImmortalWrt
+        uses: actions/checkout@v4
+        with:
           repository: solarflows/immortalwrt-mt798x
           ref: test
           path: openwrt
@@ -83,7 +89,7 @@ jobs:
       - name: Apply Configuration
         run: |
           cd openwrt
-          cp defconfig/mt798x.config .config
+          cp AutoWorkflows/.github/openwrt-builder/immortalwrt-mt798x/mt798x.config .config
           make defconfig
 
       - name: Download package
