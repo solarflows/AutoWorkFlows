@@ -31,6 +31,20 @@ jobs:
     name: Build and Release
     runs-on: ubuntu-22.04
     steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
       - name: Environment Prepare
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -48,20 +62,6 @@ jobs:
           sudo timedatectl set-timezone "$TZ"
           curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo -E apt-get -qq install nodejs
-
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: true
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
 
       - name: Checkout AutoWorkflows
         uses: actions/checkout@v4
