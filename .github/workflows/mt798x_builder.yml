@@ -19,6 +19,9 @@ on:
         options:
           - 'true'
           - 'false'
+  schedule:
+    - cron: '0 3 * * 1' # 每周一 UTC 时间 3 点自动更新
+
 
 env:
   TZ: Asia/Shanghai
@@ -33,10 +36,10 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           docker rmi `docker images -q`
-          sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
-          sudo -E apt-mark hold grub-efi-amd64-signed
+          # sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
+          # sudo -E apt-mark hold grub-efi-amd64-signed
           sudo -E apt update
-          sudo -E apt -y purge azure-cli* docker* ghc* zulu* llvm* firefox google* dotnet* powershell* openjdk* mysql* php* mongodb* dotnet* snap*
+          # sudo -E apt -y purge azure-cli* docker* ghc* zulu* llvm* firefox google* dotnet* powershell* openjdk* mysql* php* mongodb* dotnet* snap*
           sudo -E apt -y full-upgrade
           sudo bash -c 'bash <(curl -s -L https://build-scripts.immortalwrt.eu.org/init_build_environment.sh)'
           sudo -E apt-get -qq autoremove --purge
