@@ -49,7 +49,11 @@ jobs:
           # 输出 CN IP 范围
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
@@ -69,14 +73,9 @@ jobs:
           echo "!## GFW Domains" >> $output_file
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
 
-          # 输出 CN 域名
-          echo "" >> $output_file
-          echo "!## geolocation CN Exceptions" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-cn | sed 's/^/@@||/' >> $output_file
-
           # 输出私有 IP 范围
           echo "" >> $output_file
-          echo "!## CN IP Ranges" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
@@ -101,35 +100,15 @@ jobs:
           echo "" >> $output_file
           echo "!## CN IP Ranges" >> $output_file
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
 
-          # 添加标题和描述
-          sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: Whitelist Rules' $output_file
-          sed -i '3i! Description: Only CN domains and IPs' $output_file
-          echo "!---------------------EOF-----------------------" >> $output_file
-
-      - name: Generate SmartProxy whitelist
-        id: generate_smartproxy_whitelist
-        run: |
-          # 创建或清空 SmartProxy Whitelist 文件
-          output_file="/tmp/rule/publish/smartproxy_whitelist.txt"
-          > $output_file
-
-          # 输出 CN 域名
+          # 输出私有 IP 范围
           echo "" >> $output_file
-          echo "!## CN Domain Exceptions" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@/' >> $output_file
-
-          # 输出 CN IP 范围
-          echo "" >> $output_file
-          echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@/' >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: Whitelist Rules For SmartProxy' $output_file
+          sed -i '2i! Title: Whitelist Rules' $output_file
           sed -i '3i! Description: Only CN domains and IPs' $output_file
           echo "!---------------------EOF-----------------------" >> $output_file
 
@@ -145,11 +124,10 @@ jobs:
           echo "!## geolocation CN Domain Exceptions" >> $output_file
           /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-cn | sed 's/^/||/' >> $output_file
 
-          # 输出 CN IP 范围
+          # 输出私有 IP 范围
           echo "" >> $output_file
-          echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -170,7 +148,7 @@ jobs:
 
           # 输出私有 IP 范围
           echo "" >> $output_file
-          echo "!## CN IP Ranges" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
@@ -179,11 +157,11 @@ jobs:
           sed -i '3i! Description: Only UnCN domains.' $output_file
           echo "!---------------------EOF-----------------------" >> $output_file
 
-      - name: Generate gfwlist
-        id: generate_gfwlist
+      - name: Generate blacklist_lite
+        id: generate_blacklist_lite
         run: |
-          # 创建或清空 gfwlist 文件
-          output_file="/tmp/rule/publish/gfwlist.txt"
+          # 创建或清空 blacklist_lite 文件
+          output_file="/tmp/rule/publish/blacklist_lite.txt"
           > $output_file
 
           # 输出 gfw 域名
@@ -192,13 +170,36 @@ jobs:
 
           # 输出私有 IP 范围
           echo "" >> $output_file
-          echo "!## CN IP Ranges" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
           /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: GFWList Rules' $output_file
+          sed -i '2i! Title: blacklist_lite Rules' $output_file
           sed -i '3i! Description: Only GFWList domains.' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
+      - name: Generate SmartProxy whitelist
+        id: generate_smartproxy_whitelist
+        run: |
+          # 创建或清空 SmartProxy Whitelist 文件
+          output_file="/tmp/rule/publish/smartproxy_whitelist.txt"
+          > $output_file
+
+          # 输出 CN 域名
+          echo "" >> $output_file
+          echo "!## CN Domain Exceptions" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@/' >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: Whitelist Rules For SmartProxy' $output_file
+          sed -i '3i! Description: Only CN domains and IPs' $output_file
           echo "!---------------------EOF-----------------------" >> $output_file
 
       - name: Generate base64 encoded files
