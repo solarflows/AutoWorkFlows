@@ -6,7 +6,7 @@ on:
       release:
         description: '是否发布到Release'
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options:
           - 'true'
