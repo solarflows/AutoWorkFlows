@@ -104,7 +104,7 @@ jobs:
           # 输出私有 IP 范围
           echo "" >> $output_file
           echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
@@ -127,7 +127,7 @@ jobs:
           # 输出私有 IP 范围
           echo "" >> $output_file
           echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
 
           # 添加标题和描述
           sed -i '1i[AutoProxy 0.2.9]' $output_file
