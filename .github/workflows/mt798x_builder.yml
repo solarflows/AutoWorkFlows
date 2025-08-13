@@ -20,7 +20,7 @@ on:
           - 'true'
           - 'false'
   schedule:
-    - cron: '0 3 * * 1' # 每周一 UTC 时间 3 点自动更新
+    - cron: '0 3 * * 1,4' # 每周一 UTC 时间 3 点自动更新
 
 
 env:
