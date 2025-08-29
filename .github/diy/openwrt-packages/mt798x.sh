@@ -46,7 +46,7 @@ format_git_clone_output -r https://github.com/pymumu/luci-app-smartdns -b master
 # T
 # TaskPlan         定时任务计划管理器
 checkout_partial_code -r https://github.com/sirpdboy/luci-app-taskplan luci-app-taskplan
-format_git_clone_output -r https://github.com/jerrykuku/luci-theme-argon
+format_git_clone_output -r https://github.com/solarflows/luci-theme-argon -b 21.02
 format_git_clone_output -r https://github.com/jerrykuku/luci-app-argon-config
 
 # W

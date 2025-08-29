@@ -7,8 +7,7 @@ on:
     paths:
       - '.github/diy/Update.sh'
       - '.github/workflows/OpenWRT_Packages_Updater.yml'
-      - '.github/diy/openwrt-packages/patches/*/*.patch'
-      - '.github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch'
+      - '.github/diy/openwrt-packages/patches/**/*.patch'
       - '.github/diy/openwrt-packages/core'
       - '.github/diy/openwrt-packages/*.sh'
   watch:
