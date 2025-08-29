@@ -27,6 +27,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq wget git
+          mkdir -p /tmp/rule/publish
+          mkdir -p /tmp/rule/release
 
       - name: Fetch and parse data
         id: geo-data
