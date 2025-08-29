@@ -94,7 +94,7 @@ jobs:
           wget https://github.com/snowie2000/geoview/releases/latest/download/geoview-linux-amd64 -O /tmp/rule/geoview
           chmod +x /tmp/rule/geoview
           wget ${{ env.GEOIP_URL }} -O /tmp/rule/geoip.dat
-          wget ${{ env.GEOSITE_SHA }} -O /tmp/rule/geosite.dat
+          wget ${{ env.GEOSITE_URL }} -O /tmp/rule/geosite.dat
 
       - name: Generate autoproxy
         id: generate_autoproxy
