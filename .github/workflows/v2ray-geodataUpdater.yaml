@@ -25,60 +25,259 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install requests
+          sudo apt-get update
+          sudo apt-get install -y jq wget git
 
-      - name: Fetch latest version and hashes
-        id: fetch_data
+      - name: Fetch and parse data
+        id: geo-data
         run: |
-          python - <<EOF
-          import os
-          import requests
-          import hashlib
+          # 获取并解析数据
+          JSON=$(curl -sL https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest)
 
-          response = requests.get('https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest')
-          response.raise_for_status()
-          release_data = response.json()
+          # 提取版本号
+          VERSION=$(echo "$JSON" | jq -r '.tag_name')
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-          version = release_data['tag_name']
-          assets = {asset['name']: asset['browser_download_url'] for asset in release_data['assets']}
-          geosite_url = assets.get('geosite.dat')
-          geoip_url = assets.get('geoip.dat')
+          # 提取geoip.dat信息
+          GEOIP_URL=$(echo "$JSON" | jq -r '.assets[] | select(.name=="geoip.dat") | .browser_download_url')
+          GEOIP_SHA=$(echo "$JSON" | jq -r '.assets[] | select(.name=="geoip.dat") | .digest | split(":")[1]')
+          echo "GEOIP_URL=$GEOIP_URL" >> $GITHUB_ENV
+          echo "GEOIP_SHA=$GEOIP_SHA" >> $GITHUB_ENV
 
-          if not geosite_url or not geoip_url:
-              raise ValueError("Required assets (geosite.dat or geoip.dat) are missing in the release.")
+          # 提取geosite.dat信息
+          GEOSITE_URL=$(echo "$JSON" | jq -r '.assets[] | select(.name=="geosite.dat") | .browser_download_url')
+          GEOSITE_SHA=$(echo "$JSON" | jq -r '.assets[] | select(.name=="geosite.dat") | .digest | split(":")[1]')
+          echo "GEOSITE_URL=$GEOSITE_URL" >> $GITHUB_ENV
+          echo "GEOSITE_SHA=$GEOSITE_SHA" >> $GITHUB_ENV
 
-          def get_file_hash(url):
-              file_response = requests.get(url)
-              file_response.raise_for_status()
-              return hashlib.sha256(file_response.content).hexdigest()
-
-          geosite_hash = get_file_hash(geosite_url)
-          geoip_hash = get_file_hash(geoip_url)
-          print(f"Version: {version}")
-          print(f"Geosite Hash: {geosite_hash}")
-          print(f"GeoIP Hash: {geoip_hash}")
-
-          with open(os.environ['GITHUB_ENV'], 'a') as env_file:
-              env_file.write(f"version={version}\n")
-              env_file.write(f"geosite_hash={geosite_hash}\n")
-              env_file.write(f"geoip_hash={geoip_hash}\n")
-          EOF
+      - name: Display results
+        run: |
+          echo "版本号: $VERSION"
+          echo "GeoIP URL: $GEOIP_URL"
+          echo "GeoIP SHA256: $GEOIP_SHA"
+          echo "GeoSite URL: $GEOSITE_URL"
+          echo "GeoSite SHA256: $GEOSITE_SHA"
 
       - name: Update patch files
         run: |
-          echo "Version: ${{ env.version }}"
-          echo "Geosite Hash: ${{ env.geosite_hash }}"
-          echo "GeoIP Hash: ${{ env.geoip_hash }}"
 
           # 仅更新 HASH 值（保留行首内容）
-          sed -i "31s/\(GEO_VER:=\)[0-9a-f]*/\1${{ env.version }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          sed -i "37s/\(HASH:=\)[0-9a-f]*/\1${{ env.geoip_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          sed -i "45s/\(HASH:=\)[0-9a-f]*/\1${{ env.geosite_hash }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          sed -i "31s/\(GEO_VER:=\)[0-9a-f]*/\1${{ env.VERSION }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          sed -i "37s/\(HASH:=\)[0-9a-f]*/\1${{ env.GEOIP_SHA }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          sed -i "45s/\(HASH:=\)[0-9a-f]*/\1${{ env.GEOSITE_SHA }}/" .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
 
           # 提交并推送更改
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          git commit -m "Update v2ray-geodata hashes to ${{ env.version }}"
+          git commit -m "Update v2ray-geodata hashes to ${{ env.VERSION }}"
           git push
+
+      - name: Download files
+        run: |
+          wget https://github.com/snowie2000/geoview/releases/latest/download/geoview-linux-amd64 -O /tmp/rule/geoview
+          chmod +x /tmp/rule/geoview
+          wget ${{ env.GEOIP_URL }} -O /tmp/rule/geoip.dat
+          wget ${{ env.GEOSITE_SHA }} -O /tmp/rule/geosite.dat
+
+      - name: Generate autoproxy
+        id: generate_autoproxy
+        run: |
+          # 创建或清空 autoproxy 文件
+          output_file="/tmp/rule/publish/autoproxy.txt"
+          > $output_file
+
+          # 输出 CN 以外的域名
+          echo "!## UnCN Domains" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
+
+          # 输出 CN 域名
+          echo "" >> $output_file
+          echo "!## CN Domain Exceptions" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@||/' >> $output_file
+
+          # 输出 CN IP 范围
+          echo "" >> $output_file
+          echo "!## CN IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: AutoProxy Rulues' $output_file
+          sed -i '3i! Description: UnCN as primary rules,CN exceptions and IPs' $output_file
+          sed -i '4i! Version: ${{env.VERSION}}' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
+      - name: Generate autoproxy_lite
+        id: generate_autoproxy_lite
+        run: |
+          # 创建或清空 autoproxy_lite 文件
+          output_file="/tmp/rule/publish/autoproxy_lite.txt"
+          > $output_file
+
+          # 输出 GFW 域名
+          echo "!## GFW Domains" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: AutoProxy Lite Rulues' $output_file
+          sed -i '3i! Description: GFW as primary rules,geolocation CN exceptions' $output_file
+          sed -i '4i! Version: ${{env.VERSION}}' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
+      - name: Generate whitelist
+        id: generate_whitelist
+        run: |
+          # 创建或清空 Whitelist 文件
+          output_file="/tmp/rule/publish/whitelist.txt"
+          > $output_file
+
+          # 输出 CN 域名
+          echo "" >> $output_file
+          echo "!## CN Domain Exceptions" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/||/' >> $output_file
+
+          # 输出 CN IP 范围
+          echo "" >> $output_file
+          echo "!## CN IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: Whitelist Rules' $output_file
+          sed -i '3i! Description: Only CN domains and IPs' $output_file
+          sed -i '4i! Version: ${{env.VERSION}}' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
+      - name: Generate whitelist_lite
+        id: generate_whitelist_lite
+        run: |
+          # 创建或清空 Whitelist 文件
+          output_file="/tmp/rule/publish/whitelist_lite.txt"
+          > $output_file
+
+          # 输出 CN 域名
+          echo "" >> $output_file
+          echo "!## geolocation CN Domain Exceptions" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-cn | sed 's/^/||/' >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: Whitelist Lite Rules' $output_file
+          sed -i '3i! Description: Only geolocation CN domains and IPs' $output_file
+          sed -i '4i! Version: ${{env.VERSION}}' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
+      - name: Generate blacklist
+        id: generate_blacklist
+        run: |
+          # 创建或清空 Blacklist 文件
+          output_file="/tmp/rule/publish/blacklist.txt"
+          > $output_file
+
+          # 输出 非CN 域名
+          echo "!## unCN Domains" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: Blacklist Rules' $output_file
+          sed -i '3i! Description: Only UnCN domains.' $output_file
+          sed -i '4i! Version: ${{env.VERSION}}' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
+      - name: Generate blacklist_lite
+        id: generate_blacklist_lite
+        run: |
+          # 创建或清空 blacklist_lite 文件
+          output_file="/tmp/rule/publish/blacklist_lite.txt"
+          > $output_file
+
+          # 输出 gfw 域名
+          echo "!## GFW Domains" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: blacklist_lite Rules' $output_file
+          sed -i '3i! Description: Only GFWList domains.' $output_file
+          sed -i '4i! Version: ${{env.VERSION}}' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
+      - name: Generate SmartProxy whitelist
+        id: generate_smartproxy_whitelist
+        run: |
+          # 创建或清空 SmartProxy Whitelist 文件
+          output_file="/tmp/rule/publish/smartproxy_whitelist.txt"
+          > $output_file
+
+          # 输出 CN 域名
+          echo "" >> $output_file
+          echo "!## CN Domain Exceptions" >> $output_file
+          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@/' >> $output_file
+
+          # 输出私有 IP 范围
+          echo "" >> $output_file
+          echo "!## Privite IP Ranges" >> $output_file
+          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
+
+          # 添加标题和描述
+          sed -i '1i[AutoProxy 0.2.9]' $output_file
+          sed -i '2i! Title: Whitelist Rules For SmartProxy' $output_file
+          sed -i '3i! Description: Only CN domains and IPs' $output_file
+          sed -i '4i! Version: ${{env.VERSION}}' $output_file
+          echo "!---------------------EOF-----------------------" >> $output_file
+
+      - name: Generate base64 encoded files
+        run: |
+          mkdir -vp /tmp/rule/release
+          for file in /tmp/rule/publish/*.txt; do
+            # 获取无扩展名的文件名
+            base_name=$(basename "$file" .txt)
+            # 生成 Base64 编码文件并输出到同一目录
+            base64 "$file" > "/tmp/rule/release/${base_name}"
+          done
+          cp /tmp/rule/release/* /tmp/rule/publish/
+
+      - name: Git push assets to "release" branch
+        run: |
+          cd /tmp/rule/publish || exit 1
+          git init
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b release
+          git add .
+          git commit -m "${{ env.VERSION }}"
+          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push -f -u origin release
