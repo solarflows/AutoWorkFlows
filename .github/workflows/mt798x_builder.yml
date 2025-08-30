@@ -116,12 +116,36 @@ jobs:
           du -h --max-depth=1 ./build_dir
           du -h --max-depth=1 ./bin
 
-      - name: Upload Artifacts
+      - name: Upload images
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt_release
+          name: firmware-images
           path: |
-            openwrt/bin/targets/mediatek/mt7981/*squashfs-sysupgrade.bin
+            openwrt/bin/targets/mediatek/mt7981/*.bin
+            openwrt/bin/targets/mediatek/mt7981/sha256sums
+            openwrt/bin/targets/mediatek/mt7981/config.buildinfo
+          compression-level: 0
+
+      - name: Upload base
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-packages
+          path: |
+            openwrt/bin/packages/aarch64_cortex-a53/base/*.ipk
+
+      - name: Upload luci
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-packages
+          path: |
+            openwrt/bin/packages/aarch64_cortex-a53/luci/*.ipk
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: extra-packages
+          path: |
+            openwrt/bin/packages/aarch64_cortex-a53/packages/*.ipk
 
       - name: Prepare Release
         if: github.event.inputs.release == 'true'
@@ -149,3 +173,18 @@ jobs:
           name: OpenWRT ${{ steps.set_date.outputs.RELEASE_DATE }}
           files: |
             openwrt/openwrt_release/*
+
+      - name: Upload passwall to branch
+        run: |
+          cd openwrt
+          mkdir -p ../passwall
+          cp -r openwrt/bin/packages/aarch64_cortex-a53/base/*passwall*.ipk passwall
+          cd passwall || exit 1
+          git init
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b passwall
+          git add .
+          git commit -m "${{ env.VERSION }}"
+          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push -f -u origin passwall
