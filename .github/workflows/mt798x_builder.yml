@@ -124,7 +124,7 @@ jobs:
             openwrt/bin/targets/mediatek/mt7981/*.bin
             openwrt/bin/targets/mediatek/mt7981/sha256sums
             openwrt/bin/targets/mediatek/mt7981/config.buildinfo
-          compression-level: 0
+          compression-level: 9
 
       - name: Upload base
         uses: actions/upload-artifact@v4
@@ -178,7 +178,7 @@ jobs:
         run: |
           cd openwrt
           mkdir -p ../passwall
-          cp -r openwrt/bin/packages/aarch64_cortex-a53/base/*passwall*.ipk passwall
+          cp -r bin/packages/aarch64_cortex-a53/base/*passwall*.ipk passwall
           cd passwall || exit 1
           git init
           git config --local user.name "github-actions[bot]"
