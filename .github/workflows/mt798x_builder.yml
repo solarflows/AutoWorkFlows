@@ -178,8 +178,8 @@ jobs:
         run: |
           cd openwrt
           mkdir -p ../passwall
-          cp -r bin/packages/aarch64_cortex-a53/base/*passwall*.ipk passwall
-          cd passwall || exit 1
+          cp -r bin/packages/aarch64_cortex-a53/base/*passwall*.ipk ../passwall
+          cd ../passwall || exit 1
           git init
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
