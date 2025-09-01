@@ -185,6 +185,6 @@ jobs:
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b passwall
           git add .
-          git commit -m "${{ env.VERSION }}"
+          git commit -m "${{ steps.set_date.outputs.RELEASE_DATE }}"
           git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
           git push -f -u origin passwall
