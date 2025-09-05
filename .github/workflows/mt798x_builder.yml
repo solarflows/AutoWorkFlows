@@ -77,7 +77,7 @@ jobs:
           path: openwrt
 
       - name: Cache
-        if: github.event.inputs.use_ccache == 'true'
+        if: (github.event.inputs.use_ccache != 'false') || (github.event_name == 'schedule')
         uses: klever1988/cachewrtbuild@main
         with:
           ccache: 'true'
@@ -147,8 +147,18 @@ jobs:
           path: |
             openwrt/bin/packages/aarch64_cortex-a53/packages/*.ipk
 
+      - name: Generate Release Tag
+        id: set_date
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "RELEASE_TITLE=schedule build R$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          else
+            echo "RELEASE_TITLE=OpenWRT R$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          fi
+          echo "RELEASE_DATE=R$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
       - name: Prepare Release
-        if: github.event.inputs.release == 'true'
+        if: (github.event.inputs.release != 'false') || (github.event_name == 'schedule')
         run: |
           cd openwrt
           # 创建版本目录
@@ -159,32 +169,49 @@ jobs:
           tar czvf openwrt_release/base.tgz -C bin/packages/aarch64_cortex-a53/base .
           tar czvf openwrt_release/luci.tgz -C bin/packages/aarch64_cortex-a53/luci .
           tar czvf openwrt_release/packages.tgz -C bin/packages/aarch64_cortex-a53/packages .
+          # 准备branch文件
+          mkdir -p ../passwall
+          cp -r bin/packages/aarch64_cortex-a53/base/*passwall*.ipk ../passwall
+          # 复制核心依赖
+          DEPS=(
+            "chinadns-ng"
+            "dns2socks"
+            "geoview"
+            "hysteria"
+            "ipt2socks"
+            "microsocks"
+            "naiveproxy"
+            "shadowsocksr*"
+            "simple-obfs"
+            "sing-box"
+            "tcping"
+            "microsocks"
+            "xray-core"
+          )
 
-      - name: Generate Release Tag
-        if: github.event.inputs.release == 'true'
-        id: set_date
-        run: echo "RELEASE_DATE=R$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          for dep in "${DEPS[@]}"; do
+            find bin/packages/aarch64_cortex-a53/base -name "*${dep}*.ipk" -exec cp {} ../passwall \;
+          done
 
       - name: Create Release
-        if: github.event.inputs.release == 'true'
+        if: (github.event.inputs.release != 'false') || (github.event_name == 'schedule')
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.set_date.outputs.RELEASE_DATE }}
-          name: OpenWRT ${{ steps.set_date.outputs.RELEASE_DATE }}
+          name: ${{ steps.set_date.outputs.RELEASE_TITLE }}
+          prerelease: ${{ github.event_name == 'schedule' }}
           files: |
             openwrt/openwrt_release/*
 
       - name: Upload passwall to branch
+        if: (github.event.inputs.release != 'false') || (github.event_name == 'schedule')
         run: |
-          cd openwrt
-          mkdir -p ../passwall
-          cp -r bin/packages/aarch64_cortex-a53/base/*passwall*.ipk ../passwall
-          cd ../passwall || exit 1
+          cd passwall || exit 1
           git init
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b passwall
           git add .
-          git commit -m "${{ steps.set_date.outputs.RELEASE_DATE }}"
+          git commit -m "Passwall Compile Version: ${{ steps.set_date.outputs.RELEASE_DATE }}"
           git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
           git push -f -u origin passwall
