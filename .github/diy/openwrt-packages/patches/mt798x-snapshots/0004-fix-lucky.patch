@@ -196,7 +196,7 @@ index fbf2b52..5a44d63 100644
 -            "type": "view",
 -            "path": "lucky"
 -        },
-+        "order": 57,
++       "order": 57,
 +		"action": {
 +			"type": "firstchild"
 +		},

@@ -42,6 +42,10 @@ checkout_partial_code -r https://github.com/xiaorouji/openwrt-passwall2 luci-app
 checkout_partial_code -r https://github.com/immortalwrt/packages net/smartdns
 format_git_clone_output -r https://github.com/pymumu/luci-app-smartdns -b master
 
+# T
+format_git_clone_output -r https://github.com/jerrykuku/luci-theme-argon
+format_git_clone_output -r https://github.com/jerrykuku/luci-app-argon-config
+
 # Z
 # ZeroTier
 checkout_partial_code -r https://github.com/coolsnowwolf/packages net/zerotier
