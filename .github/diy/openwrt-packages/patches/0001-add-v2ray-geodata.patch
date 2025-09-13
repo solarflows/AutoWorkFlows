@@ -28,13 +28,13 @@ index 00000000..8f1334c9
 +
 +include $(INCLUDE_DIR)/package.mk
 +
-+GEO_VER:=202509052212
++GEO_VER:=202509122211
 +GEOIP_FULL_FILE:=geoip.dat.$(GEO_VER)
 +define Download/geoip-full
 +  URL:=https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/$(GEO_VER)/
 +  URL_FILE:=geoip.dat
 +  FILE:=$(GEOIP_FULL_FILE)
-+  HASH:=2dea9374371ee651b15705293ebd25076cc62948eb8fb8121d69e25db5e1add8
++  HASH:=ad6899f399a008d10e5d2759c42a385f37eefc091c6eb63b65766dcbee9bb7ee
 +endef
 +
 +GEOSITE_FULL_FILE:=geosite.dat.$(GEO_VER)
@@ -42,7 +42,7 @@ index 00000000..8f1334c9
 +  URL:=https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/$(GEO_VER)/
 +  URL_FILE:=geosite.dat
 +  FILE:=$(GEOSITE_FULL_FILE)
-+  HASH:=2cec7bf8009b7c58b441d3780f964e77fedc0e9ea800ab6247919c1b26d19a3d
++  HASH:=b301ee15d74fff2f52ccc4c1c4d3d8063ae2b26fa9c6ff8abae3b5bf8ddfb959
 +endef
 +
 +GEOIP_LITE_FILE:=geoip-lite.dat.$(GEO_VER)
