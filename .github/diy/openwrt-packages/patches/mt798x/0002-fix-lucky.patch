@@ -1,7 +1,17 @@
 ﻿diff --git a/luci-app-lucky/Makefile b/luci-app-lucky/Makefile
-index 8ee4d30..a3a1b46 100644
+index 8ee4d30..ba8ce7e 100644
 --- a/luci-app-lucky/Makefile
 +++ b/luci-app-lucky/Makefile
+@@ -1,7 +1,7 @@
+ # SPDX-License-Identifier: GPL-3.0-only
+ #
+-# Copyright (C) 2022-2023  gdy  
+-# 
++# Copyright (C) 2022-2023  gdy
++#
+ # This is free software, licensed under the Apache License, Version 2.0 .
+ #
+ include $(TOPDIR)/rules.mk
 @@ -10,18 +10,14 @@ PKG_NAME:=luci-app-lucky
  PKG_VERSION:=2.2.2
  PKG_RELEASE:=1
@@ -23,199 +33,328 @@ index 8ee4d30..a3a1b46 100644
 -
  # call BuildPackage - OpenWrt buildroot signature
 diff --git a/luci-app-lucky/luasrc/controller/lucky.lua b/luci-app-lucky/luasrc/controller/lucky.lua
-index c40ceaf..e0ee0e4 100644
+index c40ceaf..38cc281 100644
 --- a/luci-app-lucky/luasrc/controller/lucky.lua
 +++ b/luci-app-lucky/luasrc/controller/lucky.lua
-@@ -6,17 +6,17 @@ function index()
- 		return
- 	end
+@@ -1,147 +1,123 @@
+-
+ module("luci.controller.lucky", package.seeall)
  
+ function index()
+-	if not nixio.fs.access("/etc/config/lucky") then
+-		return
+-	end
+-
 -	entry({"admin",  "services", "lucky"}, alias("admin", "services", "lucky", "setting"),_("Lucky"), 57).dependent = true
 -	entry({"admin", "services", "lucky", "setting"}, cbi("lucky/lucky"), _("Base Setting"), 20).leaf=true
-+	-- entry({"admin",  "services", "lucky"}, firstchild(),"Lucky", 57).dependent = true
-+	local page = entry({"admin", "services", "lucky"}, firstchild(), _("Lucky"), 57)
-+	page.dependent = false
-+	page.acl_depends = { "luci-app-lucky" }
-+	entry({"admin", "services", "lucky", "lucky"}, cbi("lucky/lucky"), _("Base Setting"), 20).leaf=true
- 	entry({"admin", "services", "lucky_status"}, call("act_status"))
- 	entry({"admin", "services", "lucky_info"}, call("lucky_info"))
- 	entry({"admin", "services", "lucky_set_config"}, call("lucky_set_config"))
- 	entry({"admin", "services", "lucky_service"}, call("lucky_service"))
+-	entry({"admin", "services", "lucky_status"}, call("act_status"))
+-	entry({"admin", "services", "lucky_info"}, call("lucky_info"))
+-	entry({"admin", "services", "lucky_set_config"}, call("lucky_set_config"))
+-	entry({"admin", "services", "lucky_service"}, call("lucky_service"))
++    if not nixio.fs.access("/etc/config/lucky") then
++        return
++    end
++
++    -- 直接指向设置页面，不再使用alias和二级菜单
++    entry({"admin", "services", "lucky"}, cbi("lucky"), _("Lucky"), 57)
++    entry({"admin", "services", "lucky_status"}, call("act_status"))
++    entry({"admin", "services", "lucky_info"}, call("lucky_info"))
++    entry({"admin", "services", "lucky_set_config"}, call("lucky_set_config"))
++    entry({"admin", "services", "lucky_service"}, call("lucky_service"))
  end
  
 -
 -
 -
  function act_status()
- 	local sys  = require "luci.sys"
- 	local e = { }
-@@ -25,15 +25,10 @@ function act_status()
- 	luci.http.write_json(e)
+-	local sys  = require "luci.sys"
+-	local e = { }
+-	e.running = sys.call("pgrep -f 'lucky -c' >/dev/null") == 0
+-	luci.http.prepare_content("application/json")
+-	luci.http.write_json(e)
++    local sys  = require "luci.sys"
++    local e = { }
++    e.running = sys.call("pgrep -f 'lucky -c' >/dev/null") == 0
++    luci.http.prepare_content("application/json")
++    luci.http.write_json(e)
  end
  
--
--
--
--function lucky_info()	
 +function lucky_info()
- 	local e = { }
--	
--
--	
- 	local luckyInfo = luci.sys.exec("/usr/bin/lucky -info")
-+
- 	if (luckyInfo~=nil)
- 	then
- 		e.luckyInfo = luckyInfo
-@@ -42,22 +37,19 @@ function lucky_info()
- 		then
- 			e.LuckyBaseConfigure = configObj["BaseConfigure"]
- 		end
--
- 	end
- 	e.luckyArch = luci.sys.exec("/usr/bin/luckyarch")
- 	--e.runStatus = luci.sys.call("pidof lucky >/dev/null") == 0
--	
++    local e = { }
++    local luckyInfo = luci.sys.exec("/usr/bin/lucky -info")
  
- 	luci.http.prepare_content("application/json")
++    if (luckyInfo~=nil)
++    then
++        e.luckyInfo = luckyInfo
++        local configObj = GetLuckyConfigureObj()
++        if (configObj~=nil)
++        then
++            e.LuckyBaseConfigure = configObj["BaseConfigure"]
++        end
+ 
++    end
++    e.luckyArch = luci.sys.exec("/usr/bin/luckyarch")
+ 
+-function lucky_info()	
+-	local e = { }
+-	
+-
+-	
+-	local luckyInfo = luci.sys.exec("/usr/bin/lucky -info")
+-	if (luckyInfo~=nil)
+-	then
+-		e.luckyInfo = luckyInfo
+-		local configObj = GetLuckyConfigureObj()
+-		if (configObj~=nil)
+-		then
+-			e.LuckyBaseConfigure = configObj["BaseConfigure"]
+-		end
+-
+-	end
+-	e.luckyArch = luci.sys.exec("/usr/bin/luckyarch")
+-	--e.runStatus = luci.sys.call("pidof lucky >/dev/null") == 0
+-	
+-
+-	luci.http.prepare_content("application/json")
 -	luci.http.write_json(e) 
 -end 
 -
-+	luci.http.write_json(e)
++    luci.http.prepare_content("application/json")
++    luci.http.write_json(e)
 +end
  
  function lucky_set_config()
 -	local key = luci.http.formvalue("key") 
 -	local value = luci.http.formvalue("value") 
 -
-+	local key = luci.http.formvalue("key")
-+	local value = luci.http.formvalue("value")
- 	local e = { }
-+
- 	e.ret = 1
- 	if (key == "admin_http_port")
- 	then
-@@ -81,16 +73,13 @@ function lucky_set_config()
- 		e.ret =setLuckyConf("AllowInternetaccess",value)
- 	end
- 
+-	local e = { }
+-	e.ret = 1
+-	if (key == "admin_http_port")
+-	then
+-		e.ret =setLuckyConf("AdminWebListenPort",value)
+-	end
+-
+-	if(key=="admin_safe_url")
+-	then
+-		e.ret =setLuckyConf("SetSafeURL",value)
+-	end
+-
+-	if(key=="reset_auth_info")
+-	then
+-		setLuckyConf("AdminAccount","666")
+-		setLuckyConf("AdminPassword","666")
+-		luci.sys.exec("/etc/init.d/lucky restart")
+-		e.ret=0
+-	end
+-	if(key=="switch_Internetaccess")
+-	then
+-		e.ret =setLuckyConf("AllowInternetaccess",value)
+-	end
 -
 -
 -
- 	luci.http.prepare_content("application/json")
+-
+-	luci.http.prepare_content("application/json")
 -	luci.http.write_json(e) 
-+	luci.http.write_json(e)
++    local key = luci.http.formvalue("key")
++    local value = luci.http.formvalue("value")
++    local e = { }
++    e.ret = 1
++    if (key == "admin_http_port")
++    then
++        e.ret = setLuckyConf("AdminWebListenPort", value)
++    end
++
++    if(key == "admin_safe_url")
++    then
++        e.ret = setLuckyConf("SetSafeURL", value)
++    end
++
++    if(key == "reset_auth_info")
++    then
++        setLuckyConf("AdminAccount", "666")
++        setLuckyConf("AdminPassword", "666")
++        luci.sys.exec("/etc/init.d/lucky restart")
++        e.ret = 0
++    end
++    if(key == "switch_Internetaccess")
++    then
++        e.ret = setLuckyConf("AllowInternetaccess", value)
++    end
++
++    luci.http.prepare_content("application/json")
++    luci.http.write_json(e)
  end
  
 -
  function lucky_service()
 -	local action = luci.http.formvalue("action") 
-+	local action = luci.http.formvalue("action")
+-	if (action=="restart")
+-	then
+-		luci.sys.exec("uci set  lucky.@lucky[0].enabled=1")
+-		luci.sys.exec("uci commit")
+-		luci.sys.exec("/etc/init.d/lucky restart")
+-	end
+-
+-	if (action=="start")
+-	then
+-		luci.sys.exec("uci set  lucky.@lucky[0].enabled=1")
+-		luci.sys.exec("uci commit")
+-		luci.sys.exec("/etc/init.d/lucky start")
+-	end
+-
+-	if (action=="stop")
+-	then
+-		luci.sys.exec("uci set  lucky.@lucky[0].enabled=0")
+-		luci.sys.exec("uci commit")
+-		luci.sys.exec("/etc/init.d/lucky stop")
+-	end
+-
++    local action = luci.http.formvalue("action")
++    if (action == "restart")
++    then
++        luci.sys.exec("uci set lucky.@lucky[0].enabled=1")
++        luci.sys.exec("uci commit")
++        luci.sys.exec("/etc/init.d/lucky restart")
++    end
 +
- 	if (action=="restart")
- 	then
- 		luci.sys.exec("uci set  lucky.@lucky[0].enabled=1")
-@@ -114,12 +103,10 @@ function lucky_service()
- 
++    if (action == "start")
++    then
++        luci.sys.exec("uci set lucky.@lucky[0].enabled=1")
++        luci.sys.exec("uci commit")
++        luci.sys.exec("/etc/init.d/lucky start")
++    end
++
++    if (action == "stop")
++    then
++        luci.sys.exec("uci set lucky.@lucky[0].enabled=0")
++        luci.sys.exec("uci commit")
++        luci.sys.exec("/etc/init.d/lucky stop")
++    end
  end
  
 -
  function trim(s)
- 	return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
+-	return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
++    return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
  end
  
 -
  function GetLuckyConfigureObj()
- 	configPath = trim(luci.sys.exec("uci get lucky.@lucky[0].configdir"))
- 	local configContent = luci.sys.exec("lucky -baseConfInfo -cd "..configPath)
-@@ -129,19 +116,15 @@ function GetLuckyConfigureObj()
+-	configPath = trim(luci.sys.exec("uci get lucky.@lucky[0].configdir"))
+-	local configContent = luci.sys.exec("lucky -baseConfInfo -cd "..configPath)
++    configPath = trim(luci.sys.exec("uci get lucky.@lucky[0].configdir"))
++    local configContent = luci.sys.exec("lucky -baseConfInfo -cd "..configPath)
+ 
+-	configObj = luci.jsonc.parse(trim(configContent))
+-	return configObj
++    configObj = luci.jsonc.parse(trim(configContent))
++    return configObj
  end
  
++function setLuckyConf(key, value)
++    configPath = trim(luci.sys.exec("uci get lucky.@lucky[0].configdir"))
  
--
- function setLuckyConf(key,value)
- 	configPath = trim(luci.sys.exec("uci get lucky.@lucky[0].configdir"))
--
- 	cmd = "/usr/bin/lucky ".." -setconf ".."-key "..key.." -value "..value.." -cd "..configPath
-+
- 	if (value=="")
- 	then
- 		cmd = "/usr/bin/lucky ".." -setconf ".."-key "..key.." -cd "..configPath
- 	end
++    cmd = "/usr/bin/lucky ".." -setconf ".."-key "..key.." -value "..value.." -cd "..configPath
++    if (value == "")
++    then
++        cmd = "/usr/bin/lucky ".." -setconf ".."-key "..key.." -cd "..configPath
++    end
  
+-function setLuckyConf(key,value)
+-	configPath = trim(luci.sys.exec("uci get lucky.@lucky[0].configdir"))
++    luci.sys.exec(cmd)
+ 
+-	cmd = "/usr/bin/lucky ".." -setconf ".."-key "..key.." -value "..value.." -cd "..configPath
+-	if (value=="")
+-	then
+-		cmd = "/usr/bin/lucky ".." -setconf ".."-key "..key.." -cd "..configPath
+-	end
 -
- 	luci.sys.exec(cmd)
+-
+-	luci.sys.exec(cmd)
 -	
 -
- 	return 0
+-	return 0
 -end
 \ No newline at end of file
++    return 0
 +end
 diff --git a/luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua b/luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua
-index 49ee97b..ac460de 100644
+deleted file mode 100644
+index 49ee97b..0000000
 --- a/luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua
-+++ b/luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua
-@@ -1,4 +1,4 @@
++++ /dev/null
+@@ -1,25 +0,0 @@
 --- 
-+--
- local m, s ,o
- 
- local m = Map("lucky", translate("Lucky"), translate("ipv4/ipv6 portforward,ddns,reverseproxy proxy,wake on lan,IOT and more...") )
+-local m, s ,o
+-
+-local m = Map("lucky", translate("Lucky"), translate("ipv4/ipv6 portforward,ddns,reverseproxy proxy,wake on lan,IOT and more...") )
+-
+-m:section(SimpleSection).template  = "lucky/lucky_status"
+-
+-s = m:section(TypedSection, "lucky", translate("Basic Settings"))
+-s.addremove=false
+-s.anonymous=true
+-
+---o=s:option(Flag,"enabled",translate("Enable"))
+---o.default=0
+-
+-o = s:option( Value, "configdir", translate("Config dir path"),
+-	translate("The path to store the config file"))
+-o.placeholder = "/etc/config/lucky.daji"
+-
+-
+-m.apply_on_parse = true
+-m.on_after_apply = function(self,map)
+-	luci.sys.exec("/etc/init.d/lucky restart")
+-end
+-
+-return m
 diff --git a/luci-app-lucky/luasrc/view/lucky/lucky_status.htm b/luci-app-lucky/luasrc/view/lucky/lucky_status.htm
-index 098a060..8931a39 100644
+index 098a060..fb17fbb 100644
 --- a/luci-app-lucky/luasrc/view/lucky/lucky_status.htm
 +++ b/luci-app-lucky/luasrc/view/lucky/lucky_status.htm
-@@ -352,4 +352,4 @@
- 	}
+@@ -49,7 +49,7 @@
+ 	  </tr>
+ 	</table>
+   </fieldset>
+-  
++
+   <fieldset class="cbi-section">
+ 	<legend><%:Admin Panel Information%></legend>
+ 	<table>
+diff --git a/luci-app-lucky/po/zh_Hans/lucky.po b/luci-app-lucky/po/zh_Hans/lucky.po
+index 5762fd5..7822d23 100644
+--- a/luci-app-lucky/po/zh_Hans/lucky.po
++++ b/luci-app-lucky/po/zh_Hans/lucky.po
+@@ -22,7 +22,7 @@ msgstr "配置文件夹位置"
+ msgid "Lucky"
+ msgstr "Lucky"
  
+-msgid "ipv4/ipv6 portforward,ddns,reverseproxy proxy,wake on lan,IOT and more..."
++msgid "ipv4/ipv6 portforward, ddns, reverseproxy proxy, wake on lan, IOT and more..."
+ msgstr "IPv4/IPv6端口转发,动态域名服务,http/https反向代理，网络唤醒(可通过第三方物联网平台接入各大语音助手实现语音控制开关电脑)"
  
--</script>
-\ No newline at end of file
-+</script>
-diff --git a/luci-app-lucky/root/etc/uci-defaults/66_luci-lucky b/luci-app-lucky/root/etc/uci-defaults/66_luci-lucky
-index 68439e3..434b327 100644
---- a/luci-app-lucky/root/etc/uci-defaults/66_luci-lucky
-+++ b/luci-app-lucky/root/etc/uci-defaults/66_luci-lucky
-@@ -11,4 +11,4 @@ chmod +x /usr/bin/luckyarch
- rm -f /tmp/luci-indexcache* 2>/dev/null
- rm -f /tmp/luci-modulecache/* 2>/dev/null  # 针对OpenWrt 21.02+
- rm -f /tmp/luci-indexcache
--return 0
-\ No newline at end of file
-+return 0
+ msgid "Running state"
 diff --git a/luci-app-lucky/root/usr/share/luci/menu.d/luci-app-lucky.json b/luci-app-lucky/root/usr/share/luci/menu.d/luci-app-lucky.json
-index fbf2b52..5a44d63 100644
+deleted file mode 100644
+index fbf2b52..0000000
 --- a/luci-app-lucky/root/usr/share/luci/menu.d/luci-app-lucky.json
-+++ b/luci-app-lucky/root/usr/share/luci/menu.d/luci-app-lucky.json
-@@ -1,14 +1,13 @@
- {
-     "admin/services/lucky": {
-         "title": "Lucky",
++++ /dev/null
+@@ -1,14 +0,0 @@
+-{
+-    "admin/services/lucky": {
+-        "title": "Lucky",
 -        "order": 60,
 -        "action": {
 -            "type": "view",
 -            "path": "lucky"
 -        },
-+       "order": 57,
-+		"action": {
-+			"type": "firstchild"
-+		},
-         "depends": {
-             "acl": ["luci-app-lucky"],
-             "uci": {"lucky": true}
-         }
-     }
+-        "depends": {
+-            "acl": ["luci-app-lucky"],
+-            "uci": {"lucky": true}
+-        }
+-    }
 -}
 \ No newline at end of file
-+}
-diff --git a/luci-app-lucky/root/usr/share/rpcd/acl.d/luci-app-lucky.json b/luci-app-lucky/root/usr/share/rpcd/acl.d/luci-app-lucky.json
-index 6bbab46..37b2a14 100644
---- a/luci-app-lucky/root/usr/share/rpcd/acl.d/luci-app-lucky.json
-+++ b/luci-app-lucky/root/usr/share/rpcd/acl.d/luci-app-lucky.json
-@@ -11,4 +11,4 @@
- 			"uci": [ "lucky" ]
- 		}
- 	}
--}
-\ No newline at end of file
-+}
