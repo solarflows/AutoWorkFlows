@@ -1,5 +1,5 @@
 ﻿diff --git a/luci-app-lucky/Makefile b/luci-app-lucky/Makefile
-index 8ee4d30..ba8ce7e 100644
+index 8ee4d30..c0bb4d7 100644
 --- a/luci-app-lucky/Makefile
 +++ b/luci-app-lucky/Makefile
 @@ -1,7 +1,7 @@
@@ -17,7 +17,7 @@ index 8ee4d30..ba8ce7e 100644
  PKG_RELEASE:=1
  
 -LUCI_TITLE:=LuCI Support for  lucky 
-+LUCI_TITLE:=LuCI Support for  lucky
++LUCI_TITLE:=LuCI Support for lucky
  LUCI_DEPENDS:=+lucky +luci-compat
  LUCI_PKGARCH:=all
  
@@ -280,37 +280,43 @@ index c40ceaf..38cc281 100644
 \ No newline at end of file
 +    return 0
 +end
-diff --git a/luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua b/luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua
-deleted file mode 100644
-index 49ee97b..0000000
+diff --git a/luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua b/luci-app-lucky/luasrc/model/cbi/lucky.lua
+similarity index 51%
+rename from luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua
+rename to luci-app-lucky/luasrc/model/cbi/lucky.lua
+index 49ee97b..ac52574 100644
 --- a/luci-app-lucky/luasrc/model/cbi/lucky/lucky.lua
-+++ /dev/null
-@@ -1,25 +0,0 @@
++++ b/luci-app-lucky/luasrc/model/cbi/lucky.lua
+@@ -1,13 +1,14 @@
 --- 
 -local m, s ,o
--
++﻿local m, s, o
+ 
 -local m = Map("lucky", translate("Lucky"), translate("ipv4/ipv6 portforward,ddns,reverseproxy proxy,wake on lan,IOT and more...") )
--
++m = Map("lucky", translate("Lucky"), translate("ipv4/ipv6 portforward, ddns, reverseproxy proxy, wake on lan, IOT and more..."))
+ 
 -m:section(SimpleSection).template  = "lucky/lucky_status"
--
++-- 状态显示部分
++m:section(SimpleSection).template = "lucky/lucky_status"
+ 
 -s = m:section(TypedSection, "lucky", translate("Basic Settings"))
 -s.addremove=false
 -s.anonymous=true
++-- 基本设置部分
++s = m:section(TypedSection, "lucky")
++s.anonymous = true
++s.addremove = false
+ 
+ --o=s:option(Flag,"enabled",translate("Enable"))
+ --o.default=0
+@@ -16,7 +17,6 @@ o = s:option( Value, "configdir", translate("Config dir path"),
+ 	translate("The path to store the config file"))
+ o.placeholder = "/etc/config/lucky.daji"
+ 
 -
----o=s:option(Flag,"enabled",translate("Enable"))
----o.default=0
--
--o = s:option( Value, "configdir", translate("Config dir path"),
--	translate("The path to store the config file"))
--o.placeholder = "/etc/config/lucky.daji"
--
--
--m.apply_on_parse = true
--m.on_after_apply = function(self,map)
--	luci.sys.exec("/etc/init.d/lucky restart")
--end
--
--return m
+ m.apply_on_parse = true
+ m.on_after_apply = function(self,map)
+ 	luci.sys.exec("/etc/init.d/lucky restart")
 diff --git a/luci-app-lucky/luasrc/view/lucky/lucky_status.htm b/luci-app-lucky/luasrc/view/lucky/lucky_status.htm
 index 098a060..fb17fbb 100644
 --- a/luci-app-lucky/luasrc/view/lucky/lucky_status.htm
