@@ -163,7 +163,8 @@ checkout_partial_code -r https://github.com/immortalwrt/packages net/smartdns
 # smartinfo         S.M.A.R.T监控软件
 format_git_clone_output -r https://github.com/huajijam/luci-app-smartinfo
 # sms-tool          sms-tool的luci界面
-checkout_partial_code -r https://github.com/4IceG/luci-app-sms-tool luci-app-sms-tool sms-tool
+checkout_partial_code -r https://github.com/4IceG/luci-app-sms-tool luci-app-sms-tool
+checkout_partial_code -r https://github.com/4IceG/packages sms-tool
 # ssr-plus          科学上网
 checkout_partial_code -r https://github.com/fw876/helloworld luci-app-ssr-plus lua-neturl redsocks2 shadow-tls
 # subconverter      订阅转换
