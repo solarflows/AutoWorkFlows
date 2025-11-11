@@ -1,0 +1,70 @@
+﻿diff --git a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+index e90aa061..4b3ef2ea 100644
+--- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
++++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
+@@ -275,13 +275,14 @@ o = s:taboption("Main", Value, "tcp_node_socks_port", translate("TCP Node") .. "
+ o.default = 1070
+ o.datatype = "port"
+ o:depends({ tcp_node = "", ["!reverse"] = true })
+---[[
++
+ if has_singbox or has_xray then
+ 	o = s:taboption("Main", Value, "tcp_node_http_port", translate("TCP Node") .. " HTTP " .. translate("Listen Port") .. " " .. translate("0 is not use"))
+ 	o.default = 0
+ 	o.datatype = "port"
+ end
+-]]--
++o:depends({ tcp_node = "", ["!reverse"] = true })
++
+ o = s:taboption("Main", Flag, "tcp_node_socks_bind_local", translate("TCP Node") .. " Socks " .. translate("Bind Local"), translate("When selected, it can only be accessed localhost."))
+ o.default = "1"
+ o:depends({ tcp_node = "", ["!reverse"] = true })
+diff --git a/luci-app-passwall/root/usr/share/passwall/app.sh b/luci-app-passwall/root/usr/share/passwall/app.sh
+index 2af28dc0..e60baf32 100755
+--- a/luci-app-passwall/root/usr/share/passwall/app.sh
++++ b/luci-app-passwall/root/usr/share/passwall/app.sh
+@@ -872,7 +872,7 @@ run_redir() {
+ 		tcp_node_socks_bind="127.0.0.1"
+ 		[ "${tcp_node_socks_bind_local}" != "1" ] && tcp_node_socks_bind="0.0.0.0"
+ 		tcp_node_socks_port=$(get_new_port $(config_t_get global tcp_node_socks_port 1070))
+-		tcp_node_http_port=$(config_t_get global tcp_node_http_port 0)
++		tcp_node_http_port=$(config_t_get global tcp_node_http_port 10708)
+ 		[ "$tcp_node_http_port" != "0" ] && tcp_node_http=1
+ 		if [ $PROXY_IPV6 == "1" ]; then
+ 			echolog "开启实验性IPv6透明代理(TProxy)，请确认您的节点及类型支持IPv6！"
+@@ -913,7 +913,7 @@ run_redir() {
+ 			}
+ 			[ "$tcp_node_http" = "1" ] && {
+ 				tcp_node_http_flag=1
+-				_args="${_args} http_port=${tcp_node_http_port}"
++				_args="${_args} http_address=${tcp_node_socks_bind} http_port=${tcp_node_http_port}"
+ 				config_file="${config_file//TCP/TCP_HTTP}"
+ 			}
+ 			[ "$TCP_UDP" = "1" ] && {
+@@ -993,7 +993,7 @@ run_redir() {
+ 			}
+ 			[ "$tcp_node_http" = "1" ] && {
+ 				tcp_node_http_flag=1
+-				_args="${_args} http_port=${tcp_node_http_port}"
++				_args="${_args} http_address=${tcp_node_socks_bind} http_port=${tcp_node_http_port}"
+ 				config_file="${config_file//TCP/TCP_HTTP}"
+ 			}
+ 			[ "$TCP_UDP" = "1" ] && {
+@@ -1110,7 +1110,7 @@ run_redir() {
+ 			[ "$tcp_node_http" = "1" ] && {
+ 				tcp_node_http_flag=1
+ 				config_file="${config_file//TCP/TCP_HTTP}"
+-				_extra_param="${_extra_param} -local_http_port ${tcp_node_http_port}"
++				_extra_param="${_extra_param} -local_http_address ${tcp_node_socks_bind} -local_http_port ${tcp_node_http_port}"
+ 			}
+ 			[ "$TCP_UDP" = "1" ] && {
+ 				config_file="${config_file//TCP/TCP_UDP}"
+@@ -1133,7 +1133,7 @@ run_redir() {
+ 			[ "$tcp_node_http" = "1" ] && {
+ 				tcp_node_http_flag=1
+ 				config_file="${config_file//TCP/TCP_HTTP}"
+-				_extra_param="${_extra_param} -local_http_port ${tcp_node_http_port}"
++				_extra_param="${_extra_param} -local_http_address ${tcp_node_socks_bind} -local_http_port ${tcp_node_http_port}"
+ 			}
+ 			[ "$TCP_UDP" = "1" ] && {
+ 				config_file="${config_file//TCP/TCP_UDP}"
