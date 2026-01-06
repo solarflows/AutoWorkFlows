@@ -34,9 +34,9 @@ checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app
 
 # P
 # PassWall1&2       科学上网
-format_git_clone_output -r https://github.com/xiaorouji/openwrt-passwall-packages && mvdir openwrt-passwall-packages
-checkout_partial_code -r https://github.com/xiaorouji/openwrt-passwall luci-app-passwall
-checkout_partial_code -r https://github.com/xiaorouji/openwrt-passwall2 luci-app-passwall2
+format_git_clone_output -r https://github.com/Openwrt-Passwall/openwrt-passwall-packages && mvdir openwrt-passwall-packages
+checkout_partial_code -r https://github.com/Openwrt-Passwall/openwrt-passwall luci-app-passwall
+checkout_partial_code -r https://github.com/Openwrt-Passwall/openwrt-passwall2 luci-app-passwall2
 
 # S
 # SmartDNS
