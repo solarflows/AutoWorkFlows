@@ -134,7 +134,7 @@ index eb5527e..b29e613 100644
  				</div>
  			</div>
  		</div>
--		<div class="pure-u-1-4 check" onclick="check_connect('instagram', 'https://www.instagram.com')">
+-		<div class="pure-u-1-4 check" onclick="check_connect('instagram', 'https://www.instagram.com')" title="<%:TLS handshake test, latency for reference only%>">
 +		<div class="pure-u-1-4 check" onclick="check_ip_info()">
  			<div class="block pure-g">
  				<div class="pure-u-1-3">
