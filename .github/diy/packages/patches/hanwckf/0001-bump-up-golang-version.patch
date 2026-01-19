@@ -1,5 +1,5 @@
 diff --git a/lang/golang/golang-build.sh b/lang/golang/golang-build.sh
-index e0e4ea6..01df4aa 100644
+index e0e4ea6..6686f5c 100644
 --- a/lang/golang/golang-build.sh
 +++ b/lang/golang/golang-build.sh
 @@ -1,4 +1,10 @@
@@ -18,7 +18,7 @@ index e0e4ea6..01df4aa 100644
  		log "Calling go generate"
  		# shellcheck disable=SC2086
 -		GOOS='' GOARCH='' GO386='' GOARM='' GOMIPS='' GOMIPS64='' \
-+		GOOS='' GOARCH='' GO386='' GOARM='' GOARM64='' GOMIPS='' GOMIPS64='' GORISCV64=''\
++		GOOS='' GOARCH='' GO386='' GOARM='' GOARM64='' GOMIPS='' GOMIPS64='' GORISCV64='' \
  		go generate -v $targets
  		log
  	fi
@@ -96,7 +96,7 @@ index 4b9e298..7c7551f 100644
  # This is free software, licensed under the GNU General Public License v2.
  # See /LICENSE for more information.
 diff --git a/lang/golang/golang-package.mk b/lang/golang/golang-package.mk
-index 20a9937..cc00505 100644
+index 20a9937..8edcb27 100644
 --- a/lang/golang/golang-package.mk
 +++ b/lang/golang/golang-package.mk
 @@ -1,5 +1,5 @@
@@ -106,7 +106,15 @@ index 20a9937..cc00505 100644
  #
  # This is free software, licensed under the GNU General Public License v2.
  # See /LICENSE for more information.
-@@ -215,7 +215,8 @@ GO_PKG_BUILD_VARS= \
+@@ -200,6 +200,7 @@ GO_PKG_TARGET_VARS= \
+ 	GO386="$(GO_386)" \
+ 	GOAMD64="$(GO_AMD64)" \
+ 	GOARM="$(GO_ARM)" \
++	GOARM64="$(GO_ARM64)" \
+ 	GOMIPS="$(GO_MIPS)" \
+ 	GOMIPS64="$(GO_MIPS64)" \
+ 	GOPPC64="$(GO_PPC64)" \
+@@ -215,7 +216,8 @@ GO_PKG_BUILD_VARS= \
  	GOPATH="$(GO_PKG_BUILD_DIR)" \
  	GOCACHE="$(GO_BUILD_CACHE_DIR)" \
  	GOMODCACHE="$(GO_MOD_CACHE_DIR)" \
@@ -117,7 +125,7 @@ index 20a9937..cc00505 100644
  GO_PKG_VARS= \
  	$(GO_PKG_TARGET_VARS) \
 diff --git a/lang/golang/golang-values.mk b/lang/golang/golang-values.mk
-index 2cd656d..d57de5f 100644
+index 2cd656d..06e6cec 100644
 --- a/lang/golang/golang-values.mk
 +++ b/lang/golang/golang-values.mk
 @@ -1,5 +1,5 @@
@@ -168,12 +176,70 @@ index 2cd656d..d57de5f 100644
  
  GO_OS:=linux
  GO_ARCH:=$(call go_arch,$(ARCH))
-@@ -197,17 +205,16 @@ endif
+@@ -139,6 +147,34 @@ GO_HOST_ARCH:=$(call go_arch,$(subst \
+   i686,i386,$(HOST_ARCH)))))
+ GO_HOST_OS_ARCH:=$(GO_HOST_OS)_$(GO_HOST_ARCH)
+ 
++# Filter lists for ARM64 cores
++# See https://en.wikipedia.org/wiki/ARM_architecture_family#Cores
++GO_ARM64_V8_0_CORES= \
++  cortex-a34 \
++  cortex-a35 \
++  cortex-a53 \
++  cortex-a57 \
++  cortex-a72 \
++  cortex-a73
++GO_ARM64_V8_2_CORES= \
++  cortex-a55 \
++  cortex-a65 \
++  cortex-a75 \
++  cortex-a76 \
++  cortex-a77 \
++  cortex-a78 \
++  cortex-x1
++GO_ARM64_V9_0_CORES= \
++  cortex-a510 \
++  cortex-a710 \
++  cortex-a715 \
++  cortex-x2 \
++  cortex-x3
++GO_ARM64_V9_2_CORES= \
++  cortex-a520 \
++  cortex-a720 \
++  cortex-x4
++
+ ifeq ($(GO_OS_ARCH),$(GO_HOST_OS_ARCH))
+   GO_HOST_TARGET_SAME:=1
+ else
+@@ -172,6 +208,22 @@ else ifeq ($(GO_ARCH),arm)
+     GO_ARM:=7
+   endif
+ 
++else ifeq ($(GO_ARCH),arm64)
++  GO_TARGET_CPU:=$(call qstrip,$(CONFIG_CPU_TYPE))
++
++  ifneq ($(filter $(GO_TARGET_CPU),$(GO_ARM64_V8_0_CORES)),)
++    GO_ARM64:=v8.0
++  else ifneq ($(filter $(GO_TARGET_CPU),$(GO_ARM64_V8_2_CORES)),)
++    GO_ARM64:=v8.2
++  else ifneq ($(filter $(GO_TARGET_CPU),$(GO_ARM64_V9_0_CORES)),)
++    GO_ARM64:=v9.0
++  else ifneq ($(filter $(GO_TARGET_CPU),$(GO_ARM64_V9_2_CORES)),)
++    GO_ARM64:=v9.2
++  else
++    # Unknown CPU, assume baseline
++    GO_ARM64:=v8.0
++  endif
++
+ else ifneq ($(filter $(GO_ARCH),mips mipsle),)
+   ifeq ($(CONFIG_HAS_FPU),y)
+     GO_MIPS:=hardfloat
+@@ -197,17 +249,16 @@ endif
  
  # Target Go
  
 -GO_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||mips||mips64||mips64el||mipsel||powerpc64||x86_64)
-+GO_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||loongarch64||mips||mips64||mips64el||mipsel||powerpc64||riscv64||x86_64)
++GO_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||loongarch64||mips||mips64||mips64el||mipsel||riscv64||x86_64)
  
  
  # ASLR/PIE
@@ -189,7 +255,7 @@ index 2cd656d..d57de5f 100644
    \
    darwin_amd64 darwin_arm64 \
    ios_amd64    ios_arm64 \
-@@ -216,10 +223,10 @@ GO_PIE_SUPPORTED_OS_ARCH:= \
+@@ -216,10 +267,10 @@ GO_PIE_SUPPORTED_OS_ARCH:= \
    \
    aix_ppc64 \
    \
@@ -203,7 +269,7 @@ index 2cd656d..d57de5f 100644
  ifneq ($(filter $(GO_HOST_OS_ARCH),$(GO_PIE_SUPPORTED_OS_ARCH)),)
    GO_HOST_PIE_SUPPORTED:=1
 diff --git a/lang/golang/golang/Makefile b/lang/golang/golang/Makefile
-index 9f37fb6..b610f38 100644
+index 9f37fb6..e04ab8a 100644
 --- a/lang/golang/golang/Makefile
 +++ b/lang/golang/golang/Makefile
 @@ -1,5 +1,5 @@
@@ -219,25 +285,30 @@ index 9f37fb6..b610f38 100644
  
 -GO_VERSION_MAJOR_MINOR:=1.19
 -GO_VERSION_PATCH:=13
-+GO_VERSION_MAJOR_MINOR:=1.24
-+GO_VERSION_PATCH:=3
++GO_VERSION_MAJOR_MINOR:=1.25
++GO_VERSION_PATCH:=6
  
  PKG_NAME:=golang
  PKG_VERSION:=$(GO_VERSION_MAJOR_MINOR)$(if $(GO_VERSION_PATCH),.$(GO_VERSION_PATCH))
-@@ -21,7 +21,7 @@ GO_SOURCE_URLS:=https://dl.google.com/go/ \
+@@ -16,12 +16,11 @@ PKG_RELEASE:=1
+ 
+ GO_SOURCE_URLS:=https://dl.google.com/go/ \
+                 https://mirrors.ustc.edu.cn/golang/ \
+-                https://mirrors.nju.edu.cn/golang/ \
+-                https://go.dev/dl/
++                https://mirrors.nju.edu.cn/golang/
  
  PKG_SOURCE:=go$(PKG_VERSION).src.tar.gz
  PKG_SOURCE_URL:=$(GO_SOURCE_URLS)
 -PKG_HASH:=ccf36b53fb0024a017353c3ddb22c1f00bc7a8073c6aac79042da24ee34434d3
-+PKG_HASH:=229c08b600b1446798109fae1f569228102c8473caba8104b6418cb5bc032878
++PKG_HASH:=58cbf771e44d76de6f56d19e33b77d745a1e489340922875e46585b975c2b059
  
  PKG_MAINTAINER:=Jeffery To <jeffery.to@gmail.com>
  PKG_LICENSE:=BSD-3-Clause
-@@ -31,11 +31,10 @@ PKG_CPE_ID:=cpe:/a:golang:go
- PKG_BUILD_DEPENDS:=golang/host
+@@ -32,10 +31,10 @@ PKG_BUILD_DEPENDS:=golang/host
  PKG_BUILD_DIR:=$(BUILD_DIR)/go-$(PKG_VERSION)
  PKG_BUILD_PARALLEL:=1
--PKG_USE_MIPS16:=0
+ PKG_USE_MIPS16:=0
 +PKG_BUILD_FLAGS:=no-mips16
  
  PKG_GO_PREFIX:=/usr
@@ -300,7 +371,29 @@ index 9f37fb6..b610f38 100644
  endef
  
  define Package/golang-src/description
-@@ -182,8 +207,7 @@ ifeq ($(BOOTSTRAP_ROOT_DIR),)
+@@ -170,6 +195,21 @@ endef
+ # Bootstrap
+ 
+ BOOTSTRAP_ROOT_DIR:=$(call qstrip,$(CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT))
++ifeq ($(BOOTSTRAP_ROOT_DIR)$(GO_HOST_OS_ARCH),darwin_arm64)
++#C-Bootstrap doesn't work on darwin/arm64 host: https://go.dev/doc/install/source#bootstrapFromSource
++#so let's use host installed golang if BOOTSTRAP_ROOT_DIR is not defined
++  BOOTSTRAP_ROOT_DIR:=$(shell go env GOROOT)
++
++  ifeq ($(BOOTSTRAP_ROOT_DIR),)
++    $(warning CONFIG_GOLANG_EXTERNAL_BOOTSTRAP_ROOT is not defined, host golang \
++    not found. Please download golang binaries and define external bootstrap \
++    or install golang (should be accessible form PATH). \
++    Normal bootstrap is not supported on darwin/arm64 host)
++  else
++    $(info host golang will be used for bootstrap: $(BOOTSTRAP_ROOT_DIR))
++  endif
++
++endif
+ 
+ ifeq ($(BOOTSTRAP_ROOT_DIR),)
+   BOOTSTRAP_ROOT_DIR:=$(BOOTSTRAP_BUILD_DIR)
+@@ -182,8 +222,7 @@ ifeq ($(BOOTSTRAP_ROOT_DIR),)
    $(eval $(call Download,golang-bootstrap))
  
    define Bootstrap/Prepare
@@ -310,7 +403,7 @@ index 9f37fb6..b610f38 100644
    endef
    Hooks/HostPrepare/Post+=Bootstrap/Prepare
  
-@@ -191,6 +215,56 @@ ifeq ($(BOOTSTRAP_ROOT_DIR),)
+@@ -191,6 +230,56 @@ ifeq ($(BOOTSTRAP_ROOT_DIR),)
  endif
  
  
@@ -367,8 +460,11 @@ index 9f37fb6..b610f38 100644
  # Host
  
  ifeq ($(GO_HOST_PIE_SUPPORTED),1)
-@@ -221,8 +295,23 @@ define Host/Compile
+@@ -219,10 +308,26 @@ endef
+ define Host/Compile
+ 	$(call GoCompiler/Bootstrap/Make, \
  		$(HOST_GO_VARS) \
++		CC="$(HOSTCC_NOCACHE) -std=gnu17" \
  	)
  
 -	$(call GoCompiler/Host/Make, \
@@ -392,16 +488,17 @@ index 9f37fb6..b610f38 100644
  		$(if $(HOST_GO_ENABLE_PIE),GO_LDFLAGS="-buildmode pie") \
  		$(HOST_GO_VARS) \
  	)
-@@ -267,7 +356,7 @@ $(eval $(call GoCompiler/AddProfile,Package,$(PKG_BUILD_DIR),$(PKG_GO_PREFIX),$(
+@@ -267,7 +372,8 @@ $(eval $(call GoCompiler/AddProfile,Package,$(PKG_BUILD_DIR),$(PKG_GO_PREFIX),$(
  PKG_GO_ZBOOTSTRAP_MODS:= \
  	s/defaultGO386 = `[^`]*`/defaultGO386 = `$(or $(GO_386),sse2)`/; \
  	s/defaultGOAMD64 = `[^`]*`/defaultGOAMD64 = `$(or $(GO_AMD64),v1)`/; \
 -	s/defaultGOARM = `[^`]*`/defaultGOARM = `$(or $(GO_ARM),5)`/; \
 +	s/defaultGOARM = `[^`]*`/defaultGOARM = `$(or $(GO_ARM),7)`/; \
++	s/defaultGOARM64 = `[^`]*`/defaultGOARM64 = `$(or $(GO_ARM64),v8.0)`/; \
  	s/defaultGOMIPS = `[^`]*`/defaultGOMIPS = `$(or $(GO_MIPS),hardfloat)`/; \
  	s/defaultGOMIPS64 = `[^`]*`/defaultGOMIPS64 = `$(or $(GO_MIPS64),hardfloat)`/; \
  	s/defaultGOPPC64 = `[^`]*`/defaultGOPPC64 = `$(or $(GO_PPC64),power8)`/;
-@@ -336,7 +425,6 @@ define Build/Compile
+@@ -336,7 +442,6 @@ define Build/Compile
  		cd "$(PKG_BUILD_DIR)/bin" ; \
  		export $(GO_PKG_TARGET_VARS) ; \
  		$(CP) go go-host ; \
