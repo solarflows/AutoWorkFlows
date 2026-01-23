@@ -13,6 +13,10 @@ CHECK_CORE_FILE() {
 
 CHECK_CORE_FILE
 
+checkout_partial_code -r https://github.com/openwrt/packages/ net/tailscale
+checkout_partial_code -r https://github.com/coolsnowwolf/packages lang/golang
+checkout_partial_code -r https://github.com/padavanonly/immortalwrt-mt798x-24.10 package/mtk/applications/luci-app-mwan3helper-chinaroute package/mtk/applications/luci-app-wrtbwmon package/mtk/applications/wrtbwmon
+
 # Applications
 
 # D
@@ -20,9 +24,6 @@ CHECK_CORE_FILE
 format_git_clone_output -r https://github.com/kiddin9/luci-app-dnsfilter
 checkout_partial_code -r https://github.com/linkease/nas-packages-luci luci/luci-app-ddnsto
 checkout_partial_code -r https://github.com/linkease/nas-packages network/services/ddnsto
-
-checkout_partial_code -r https://github.com/openwrt/packages/ net/tailscale lang/golang
-checkout_partial_code -r https://github.com/padavanonly/immortalwrt-mt798x-24.10 package/mtk/applications/luci-app-mwan3helper-chinaroute package/mtk/applications/luci-app-wrtbwmon package/mtk/applications/wrtbwmon
 
 # L
 # lucky             大吉多种功能结合体
