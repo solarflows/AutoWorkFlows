@@ -14,7 +14,7 @@ CHECK_CORE_FILE() {
 CHECK_CORE_FILE
 
 checkout_partial_code -r https://github.com/openwrt/packages/ net/tailscale
-checkout_partial_code -r https://github.com/coolsnowwolf/packages lang/golang
+# checkout_partial_code -r https://github.com/coolsnowwolf/packages lang/golang
 checkout_partial_code -r https://github.com/padavanonly/immortalwrt-mt798x-24.10 package/mtk/applications/luci-app-mwan3helper-chinaroute package/mtk/applications/luci-app-wrtbwmon package/mtk/applications/wrtbwmon
 
 # Applications
