@@ -124,7 +124,7 @@ checkout_partial_code -r https://github.com/Erope/openwrt_nezha luci-app-nezha o
 # netdata
 format_git_clone_output -r https://github.com/sirpdboy/luci-app-netdata
 # netspeedtest      网络测速
-format_git_clone_output -r https://github.com/sirpdboy/netspeedtest && mvdir netspeedtest
+# format_git_clone_output -r https://github.com/sirpdboy/netspeedtest && mvdir netspeedtest
 # nft-qos           基于nftables的qos工具(静态、动态双模式) 21.02以后不可用了
 # checkout_partial_code -r https://github.com/x-wrt/packages net/nft-qos
 # checkout_partial_code -r https://github.com/x-wrt/luci applications/luci-app-nft-qos
