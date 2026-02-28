@@ -19,6 +19,11 @@ checkout_partial_code -r https://github.com/padavanonly/immortalwrt-mt798x-24.10
 
 # Applications
 
+# C
+# CloudflareSpeedtest  Cloudflare Speedtest 插件
+format_git_clone_output -r https://github.com/stevenjoezhang/luci-app-cloudflarespeedtest
+checkout_partial_code -r https://github.com/immortalwrt/packages net/cdnspeedtest
+
 # D
 # dnsfilter         基于dnsmasq的去广告程序
 format_git_clone_output -r https://github.com/kiddin9/luci-app-dnsfilter
