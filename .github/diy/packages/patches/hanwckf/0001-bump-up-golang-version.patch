@@ -251,7 +251,7 @@ index 2cd656d..06e6cec 100644
    linux_386    linux_amd64    linux_arm    linux_arm64 \
 -  \
 -  windows_386  windows_amd64  windows_arm \
-+  windows_386  windows_amd64  windows_arm  windows_arm64 \
++  windows_386  windows_amd64  windows_arm64 \
    \
    darwin_amd64 darwin_arm64 \
    ios_amd64    ios_arm64 \
@@ -264,7 +264,7 @@ index 2cd656d..06e6cec 100644
  
  # From https://go.dev/src/cmd/go/internal/work/init.go
 -go_pie_install_suffix=$(if $(filter $(1),aix_ppc64 windows_386 windows_amd64 windows_arm),,shared)
-+go_pie_install_suffix=$(if $(filter $(1),aix_ppc64 windows_386 windows_amd64 windows_arm windows_arm64),,shared)
++go_pie_install_suffix=$(if $(filter $(1),aix_ppc64 windows_386 windows_amd64 windows_arm64),,shared)
  
  ifneq ($(filter $(GO_HOST_OS_ARCH),$(GO_PIE_SUPPORTED_OS_ARCH)),)
    GO_HOST_PIE_SUPPORTED:=1
@@ -328,7 +328,7 @@ index 9f37fb6..e04ab8a 100644
    \
    linux_ppc64 linux_ppc64le \
    linux_mips linux_mipsle linux_mips64 linux_mips64le \
-@@ -87,6 +90,24 @@ BOOTSTRAP_GO_VALID_OS_ARCH:= \
+@@ -87,6 +90,30 @@ BOOTSTRAP_GO_VALID_OS_ARCH:= \
                   solaris_amd64 \
    windows_386    windows_amd64
  
@@ -350,16 +350,23 @@ index 9f37fb6..e04ab8a 100644
 +
 +BOOTSTRAP_1_22_BUILD_DIR:=$(HOST_BUILD_DIR)/.go_bootstrap_1.22
 +
++BOOTSTRAP_1_24_SOURCE:=go1.24.13.src.tar.gz
++BOOTSTRAP_1_24_SOURCE_URL:=$(GO_SOURCE_URLS)
++BOOTSTRAP_1_24_HASH:=639a6204c2486b137df1eb6e78ee3ed038f9877d0e4b5a465e796a2153f858d7
++
++BOOTSTRAP_1_24_BUILD_DIR:=$(HOST_BUILD_DIR)/.go_bootstrap_1.24
++
  include $(INCLUDE_DIR)/host-build.mk
  include $(INCLUDE_DIR)/package.mk
  include ../golang-compiler.mk
-@@ -95,6 +116,9 @@ include ../golang-package.mk
+@@ -95,6 +116,10 @@ include ../golang-package.mk
  PKG_UNPACK:=$(HOST_TAR) -C "$(PKG_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(PKG_SOURCE)"
  HOST_UNPACK:=$(HOST_TAR) -C "$(HOST_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(PKG_SOURCE)"
  BOOTSTRAP_UNPACK:=$(HOST_TAR) -C "$(BOOTSTRAP_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(BOOTSTRAP_SOURCE)"
 +BOOTSTRAP_1_17_UNPACK:=$(HOST_TAR) -C "$(BOOTSTRAP_1_17_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(BOOTSTRAP_1_17_SOURCE)"
 +BOOTSTRAP_1_20_UNPACK:=$(HOST_TAR) -C "$(BOOTSTRAP_1_20_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(BOOTSTRAP_1_20_SOURCE)"
 +BOOTSTRAP_1_22_UNPACK:=$(HOST_TAR) -C "$(BOOTSTRAP_1_22_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(BOOTSTRAP_1_22_SOURCE)"
++BOOTSTRAP_1_24_UNPACK:=$(HOST_TAR) -C "$(BOOTSTRAP_1_24_BUILD_DIR)" --strip-components=1 -xzf "$(DL_DIR)/$(BOOTSTRAP_1_24_SOURCE)"
  
  # don't strip ELF executables in test data
  RSTRIP:=:
@@ -403,7 +410,7 @@ index 9f37fb6..e04ab8a 100644
    endef
    Hooks/HostPrepare/Post+=Bootstrap/Prepare
  
-@@ -191,6 +230,56 @@ ifeq ($(BOOTSTRAP_ROOT_DIR),)
+@@ -191,6 +230,73 @@ ifeq ($(BOOTSTRAP_ROOT_DIR),)
  endif
  
  
@@ -457,10 +464,27 @@ index 9f37fb6..e04ab8a 100644
 +
 +$(eval $(call GoCompiler/AddProfile,Bootstrap-1.22,$(BOOTSTRAP_1_22_BUILD_DIR),,bootstrap-1.22,$(GO_HOST_OS_ARCH)))
 +
++
++# Bootstrap 1.24
++
++define Download/golang-bootstrap-1.24
++  FILE:=$(BOOTSTRAP_1_24_SOURCE)
++  URL:=$(BOOTSTRAP_1_24_SOURCE_URL)
++  HASH:=$(BOOTSTRAP_1_24_HASH)
++endef
++$(eval $(call Download,golang-bootstrap-1.24))
++
++define Bootstrap-1.24/Prepare
++	mkdir -p "$(BOOTSTRAP_1_24_BUILD_DIR)" && $(BOOTSTRAP_1_24_UNPACK) ;
++endef
++Hooks/HostPrepare/Post+=Bootstrap-1.24/Prepare
++
++$(eval $(call GoCompiler/AddProfile,Bootstrap-1.24,$(BOOTSTRAP_1_24_BUILD_DIR),,bootstrap-1.24,$(GO_HOST_OS_ARCH)))
++
  # Host
  
  ifeq ($(GO_HOST_PIE_SUPPORTED),1)
-@@ -219,10 +308,26 @@ endef
+@@ -219,10 +308,31 @@ endef
  define Host/Compile
  	$(call GoCompiler/Bootstrap/Make, \
  		$(HOST_GO_VARS) \
@@ -483,8 +507,13 @@ index 9f37fb6..e04ab8a 100644
 +		$(HOST_GO_VARS) \
 +	)
 +
-+	$(call GoCompiler/Host/Make, \
++	$(call GoCompiler/Bootstrap-1.24/Make, \
 +		GOROOT_BOOTSTRAP="$(BOOTSTRAP_1_22_BUILD_DIR)" \
++		$(HOST_GO_VARS) \
++	)
++
++	$(call GoCompiler/Host/Make, \
++		GOROOT_BOOTSTRAP="$(BOOTSTRAP_1_24_BUILD_DIR)" \
  		$(if $(HOST_GO_ENABLE_PIE),GO_LDFLAGS="-buildmode pie") \
  		$(HOST_GO_VARS) \
  	)
