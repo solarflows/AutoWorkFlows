@@ -19,6 +19,10 @@ checkout_partial_code -r https://github.com/padavanonly/immortalwrt-mt798x-24.10
 
 # Applications
 
+# A
+# arp-scan           基于arping的局域网扫描工具
+checkout_partial_code -r https://github.com/immortalwrt/packages net/arp-scan
+
 # C
 # CloudflareSpeedtest  Cloudflare Speedtest 插件
 format_git_clone_output -r https://github.com/stevenjoezhang/luci-app-cloudflarespeedtest
