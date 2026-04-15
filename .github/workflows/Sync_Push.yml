@@ -1,4 +1,4 @@
-name: 同步 Coolsnowwolf 仓库
+name: 同步并推送
 
 on:
   schedule:
@@ -289,6 +289,87 @@ jobs:
           fi
 
           git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:hanwckf
+
+  sync_and_tag:
+    name: 同步VIKINGYFY仓库并打标签
+    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    runs-on: ubuntu-latest
+    # env:
+    #   TARGETS: "VIKINGYFY"
+    #   UPSTREAMS: "https://github.com/VIKINGYFY/immortalwrt.git"
+
+    steps:
+      - name: 检出目标仓库
+        uses: actions/checkout@v4
+        with:
+          repository: solarflows/ImmortalWRT-QualcommAX
+          ref: VIKINGYFY-main
+          fetch-depth: 0
+          token: ${{ secrets.ACCESS_TOKEN }}
+
+      - name: 配置环境
+        run: |
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          sudo timedatectl set-timezone "Asia/Shanghai"
+
+      - name: 添加上游仓库并拉取
+        run: |
+          git remote add upstream https://github.com/VIKINGYFY/immortalwrt.git
+          git fetch upstream main
+
+      - name: 检测上游是否有更新
+        id: check
+        run: |
+          # 获取当前分支 HEAD 的 commit SHA
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          # 获取上游 main 分支的最新 commit SHA
+          UPSTREAM_COMMIT=$(git rev-parse upstream/main)
+
+          echo "当前跟踪提交: $CURRENT_COMMIT"
+          echo "上游最新提交: $UPSTREAM_COMMIT"
+
+          if [ "$CURRENT_COMMIT" = "$UPSTREAM_COMMIT" ]; then
+            echo "🟢 上游无新提交，无需同步。"
+            echo "has_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "🔵 检测到上游更新，准备同步。"
+            echo "has_update=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 尝试变基
+        if: steps.check.outputs.has_update == 'true'
+        id: rebase
+        continue-on-error: true
+        run: |
+          echo "::group::尝试将 VIKINGYFY-main 变基到上游 main"
+          git rebase upstream/main
+          echo "rebase_success=true" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: 变基失败时强制重置为上游状态
+        if: steps.check.outputs.has_update == 'true' && steps.rebase.outputs.rebase_success != 'true'
+        run: |
+          echo "::warning::变基失败，将强制重置分支为上游 main 的最新提交。"
+          git reset --hard upstream/main
+
+      - name: 强制推送更新到目标仓库
+        if: steps.check.outputs.has_update == 'true'
+        run: |
+          git push origin VIKINGYFY-main --force-with-lease
+          echo "✅ 已推送分支 VIKINGYFY-main"
+
+      - name: 创建日期标签
+        if: steps.check.outputs.has_update == 'true'
+        run: |
+          TAG_NAME=$(git log -1 --format=%cd --date=format:'%Y%m%d' upstream/main)
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️ 标签 $TAG_NAME 已存在，跳过创建。"
+          else
+            git tag $TAG_NAME
+            git push origin $TAG_NAME
+            echo "✅ 已创建标签: $TAG_NAME"
+          fi
 
   del_runs:
     name: 删除旧运行记录
