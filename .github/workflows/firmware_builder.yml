@@ -45,13 +45,12 @@ jobs:
         run: |
           TARGET="${{ github.event.inputs.target || 'both' }}"
           if [ "$TARGET" = "both" ]; then
-            echo 'matrix=[{"target":"mt798x","repo":"solarflows/immortalwrt-mt798x","ref":"test","config":"mt798x.conf"},{"target":"qualcommax","repo":"solarflows/ImmortalWrt-QualcommAX","ref":"VIKINGYFY-main","config":"qualcommax.conf"}]' > matrix.json
+            echo 'matrix=[{"target":"mt798x","repo":"solarflows/immortalwrt-mt798x","ref":"test","config":"mt798x.conf"},{"target":"qualcommax","repo":"solarflows/ImmortalWrt-QualcommAX","ref":"VIKINGYFY-main","config":"qualcommax.conf"}]' >> $GITHUB_OUTPUT
           elif [ "$TARGET" = "mt798x" ]; then
-            echo 'matrix=[{"target":"mt798x","repo":"solarflows/immortalwrt-mt798x","ref":"test","config":"mt798x.conf"}]' > matrix.json
+            echo 'matrix=[{"target":"mt798x","repo":"solarflows/immortalwrt-mt798x","ref":"test","config":"mt798x.conf"}]' >> $GITHUB_OUTPUT
           else
-            echo 'matrix=[{"target":"qualcommax","repo":"solarflows/ImmortalWrt-QualcommAX","ref":"VIKINGYFY-main","config":"qualcommax.conf"}]' > matrix.json
+            echo 'matrix=[{"target":"qualcommax","repo":"solarflows/ImmortalWrt-QualcommAX","ref":"VIKINGYFY-main","config":"qualcommax.conf"}]' >> $GITHUB_OUTPUT
           fi
-          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
 
   # ========== 构建任务（矩阵并行） ==========
   build:
