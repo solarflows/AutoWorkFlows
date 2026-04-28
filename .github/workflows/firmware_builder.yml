@@ -1,8 +1,17 @@
-﻿name: ImmortalWrt Builder
+name: ImmortalWrt Builder
 
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: '选择构建目标'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - 'mt798x'
+          - 'qualcommax'
+          - 'both'
       release:
         description: '是否发布到 Release'
         required: false
@@ -20,12 +29,13 @@ on:
           - 'true'
           - 'false'
   schedule:
-    - cron: '0 18 * * 3,6' # 每周三和周六的凌晨3点UTC
+    - cron: '0 3 * * 3,6'  # 每周三、六 UTC 3:00
 
 env:
   TZ: Asia/Shanghai
 
 jobs:
+  # ========== 构建矩阵（支持单目标过滤） ==========
   define-matrix:
     runs-on: ubuntu-22.04
     outputs:
@@ -33,9 +43,17 @@ jobs:
     steps:
       - id: set-matrix
         run: |
-          echo 'matrix=[{"target":"mt798x","repo":"solarflows/immortalwrt-mt798x","ref":"test","config":"mt798x.conf"},{"target":"qualcommax","repo":"solarflows/ImmortalWrt-QualcommAX","ref":"VIKINGYFY-main","config":"qualcommax.conf"}]' > matrix.json
+          TARGET="${{ github.event.inputs.target || 'both' }}"
+          if [ "$TARGET" = "both" ]; then
+            echo 'matrix=[{"target":"mt798x","repo":"solarflows/immortalwrt-mt798x","ref":"test","config":"mt798x.conf"},{"target":"qualcommax","repo":"solarflows/ImmortalWrt-QualcommAX","ref":"VIKINGYFY-main","config":"qualcommax.conf"}]' > matrix.json
+          elif [ "$TARGET" = "mt798x" ]; then
+            echo 'matrix=[{"target":"mt798x","repo":"solarflows/immortalwrt-mt798x","ref":"test","config":"mt798x.conf"}]' > matrix.json
+          else
+            echo 'matrix=[{"target":"qualcommax","repo":"solarflows/ImmortalWrt-QualcommAX","ref":"VIKINGYFY-main","config":"qualcommax.conf"}]' > matrix.json
+          fi
           echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
 
+  # ========== 构建任务（矩阵并行） ==========
   build:
     name: Build ${{ matrix.target }}
     needs: define-matrix
@@ -43,8 +61,6 @@ jobs:
     strategy:
       matrix:
         include: ${{ fromJson(needs.define-matrix.outputs.matrix) }}
-    outputs:
-      build_status: ${{ steps.check.outputs.changed }}
     steps:
       - name: Checkout AutoWorkflows
         uses: actions/checkout@v4
@@ -58,17 +74,19 @@ jobs:
           repository: ${{ matrix.repo }}
           ref: ${{ matrix.ref }}
           path: openwrt
+          fetch-depth: 0
 
+      # ---------- 变化检测 ----------
       - name: Get current commit SHA
         id: current_sha
         run: echo "sha=$(git -C openwrt rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Restore last built SHA
+      - name: Restore last built SHA from cache
         id: cache_sha
         uses: actions/cache/restore@v4
         with:
           path: .last_sha_${{ matrix.target }}
-          key: last-sha-${{ matrix.target }}
+          key: last-sha-${{ matrix.target }}-${{ runner.os }}
 
       - name: Check if source changed
         id: check
@@ -76,17 +94,24 @@ jobs:
           CURRENT="${{ steps.current_sha.outputs.sha }}"
           LAST_FILE=".last_sha_${{ matrix.target }}"
           if [ -f "$LAST_FILE" ]; then LAST=$(cat "$LAST_FILE"); else LAST=""; fi
-          if [ "$CURRENT" != "$LAST" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "$CURRENT" != "$LAST" ]; then
+              echo "changed=true" >> $GITHUB_OUTPUT
+              echo "🔵 定时触发且源码有更新，继续构建。"
+            else
+              echo "changed=false" >> $GITHUB_OUTPUT
+              echo "⏭️ 定时触发但源码无变化，跳过构建。"
+            fi
           else
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "🟢 手动触发或其他事件，强制构建。"
           fi
 
       - name: Free Disk Space
         if: steps.check.outputs.changed == 'true'
         uses: jlumbroso/free-disk-space@main
         with:
-          tool-cache: true
+          tool-cache: false
           android: true
           dotnet: true
           haskell: true
@@ -105,27 +130,35 @@ jobs:
           sudo -E apt-get -qq clean
           sudo -E apt-get -qq install libfuse-dev
           sudo timedatectl set-timezone "$TZ"
-          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          # curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo -E apt-get -qq install nodejs
 
-      # ---------- 缓存优化 ----------
+      # ---------- 缓存工具链和ccache ----------
       - name: Restore ccache and toolchain
         if: steps.check.outputs.changed == 'true'
         id: cache
-        uses: klever1988/cachewrtbuild@main
+        uses: stupidloud/cachewrtbuild@main
         with:
           ccache: ${{ github.event.inputs.use_ccache || 'true' }}
-          toolchain: 'true'
-          skip: 'true'
           prefix: ${{ github.workspace }}/openwrt
           mixkey: ${{ matrix.target }}
-          skip_saving: ${{ github.event_name == 'schedule' }}
 
+      - name: Record cache hit status
+        if: steps.check.outputs.changed == 'true'
+        id: cache_status
+        run: |
+          if [ "${{ steps.cache.outputs.hit }}" = "1" ]; then
+            echo "hit=true" >> $GITHUB_OUTPUT
+          else
+            echo "hit=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ---------- 构建 ----------
       - name: Update feeds
         if: steps.check.outputs.changed == 'true'
         run: |
           cd openwrt
-          git clone https://github.com/solarflows/openwrt-packages.git package/solarflows -b ${{ matrix.target }}
+          git clone --depth 1 https://github.com/solarflows/openwrt-packages.git package/solarflows -b ${{ matrix.target }}
           ./scripts/feeds update -a && ./scripts/feeds install -a
 
       - name: Apply Configuration
@@ -144,24 +177,81 @@ jobs:
 
       - name: Build Firmware
         if: steps.check.outputs.changed == 'true'
+        id: build
         run: |
+          START_TIME=$(date +%s)
           cd openwrt
-          make -j$(($(nproc) + 1)) || make -j1 V=s
+          make -j$(($(nproc) + 1)) 2>&1 | tee build.log || {
+            echo "⚠️ 并行构建失败，尝试单线程（详细日志见 build.log）..."
+            make -j1 V=s 2>&1 | tee -a build.log || {
+              echo "❌ 单线程构建也失败，请查看 build.log 分析原因。"
+              exit 1
+            }
+          }
+          END_TIME=$(date +%s)
+          echo "duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
 
+      # ---------- 上传构建失败日志 ----------
+      - name: Upload build log on failure
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-build-log
+          path: openwrt/build.log
+          retention-days: 7
+
+      # ---------- 保存 SHA 记录 ----------
+      - name: Save current SHA for next run
+        if: steps.check.outputs.changed == 'true' && success()
+        run: |
+          echo "${{ steps.current_sha.outputs.sha }}" > .last_sha_${{ matrix.target }}
+
+      - name: Cache last SHA
+        if: steps.check.outputs.changed == 'true' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: .last_sha_${{ matrix.target }}
+          key: last-sha-${{ matrix.target }}-${{ runner.os }}
+
+      # ---------- 打包产物 ----------
       - name: Prepare artifacts
         if: steps.check.outputs.changed == 'true'
         run: |
           cd openwrt
           mkdir -p release/firmware
-          cp bin/targets/*/*/*.bin release/firmware/ || true
-          cp bin/targets/*/*/sha256sums release/firmware/ || true
+          # 复制所有常见固件格式（.bin/.img/.tar.gz/.factory/.sysupgrade 等）
+          find bin/targets -type f \( \
+            -name "*.bin" -o \
+            -name "*.img" -o \
+            -name "*.gz" -o \
+            -name "*.tar" -o \
+            -name "*.manifest" -o \
+            -name "sha256sums" -o \
+            -name "config.buildinfo" \
+          \) -exec cp {} release/firmware/ \; 2>/dev/null || true
+          # passwall ipk 和 apk 均支持（mt798x 旧版用 ipk，qualcommax 新版用 apk）
           mkdir -p release/passwall
-          find bin/packages -name "*passwall*.ipk" -exec cp {} release/passwall/ \;
+          find bin/packages -name "*passwall*.ipk" -o -name "*passwall*.apk" -exec cp {} release/passwall/ \; 2>/dev/null || true
           DEPS=(chinadns-ng dns2socks geoview hysteria ipt2socks microsocks naiveproxy shadowsocksr simple-obfs sing-box tcping xray-core)
           for dep in "${DEPS[@]}"; do
-            find bin/packages -name "*${dep}*.ipk" -exec cp {} release/passwall/ \; 2>/dev/null
+            find bin/packages \( -name "*${dep}*.ipk" -o -name "*${dep}*.apk" \) -exec cp {} release/passwall/ \; 2>/dev/null || true
           done
           cd release && tar czf ../${{ matrix.target }}-release.tar.gz .
+
+      # ---------- 构建信息 JSON（独立 artifact） ----------
+      - name: Generate build info artifact
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          cat > build-info.json <<EOF
+          {
+            "target": "${{ matrix.target }}",
+            "branch": "${{ matrix.ref }}",
+            "duration": "${{ steps.build.outputs.duration }}",
+            "cache_hit": "${{ steps.cache_status.outputs.hit }}",
+            "config": "${{ matrix.config }}",
+            "timestamp": "$(date +'%Y-%m-%d %H:%M:%S')"
+          }
+          EOF
 
       - name: Upload firmware artifact
         if: steps.check.outputs.changed == 'true'
@@ -171,7 +261,7 @@ jobs:
           path: openwrt/${{ matrix.target }}-release.tar.gz
           retention-days: 7
 
-      - name: Upload passwall-only artifact
+      - name: Upload passwall artifact
         if: steps.check.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -179,16 +269,25 @@ jobs:
           path: openwrt/release/passwall
           retention-days: 7
 
+      - name: Upload build info artifact
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-build-info
+          path: build-info.json
+          retention-days: 7
+
+  # ========== 发布任务 ==========
   publish:
     name: Publish Releases
     needs: build
-    if: always() && (github.event.inputs.release != 'false' || github.event_name == 'schedule')
+    if: success() && (github.event.inputs.release != 'false' || github.event_name == 'schedule')
     runs-on: ubuntu-22.04
     steps:
       - name: Generate version tag
         id: version
         run: |
-          DATE_TAG=$(date +'%Y%m%d')
+          DATE_TAG="v$(date +'%Y%m%d')"
           echo "tag=$DATE_TAG" >> $GITHUB_OUTPUT
           echo "title=Build $DATE_TAG" >> $GITHUB_OUTPUT
 
@@ -197,52 +296,132 @@ jobs:
         with:
           path: artifacts
           pattern: '*'
-          merge-multiple: true
 
-      - name: Publish mt798x firmware to its repo
-        if: needs.build.outputs.build_status != 'false'
+      # ===== mt798x 发布 =====
+      - name: Publish mt798x firmware
+        if: hashFiles('artifacts/mt798x-build-info/build-info.json') != ''
         env:
           GITHUB_TOKEN: ${{ secrets.REPO_PAT }}
         run: |
-          tar xzf artifacts/mt798x-release.tar.gz -C artifacts/
-          cd artifacts/firmware
-          FILES=$(ls -1 *.bin sha256sums 2>/dev/null | tr '\n' ' ')
-          cd ../..
-          gh release create ${{ steps.version.outputs.tag }} \
-            --repo solarflows/immortalwrt-mt798x \
-            --title "mt798x ${{ steps.version.outputs.title }}" \
-            --notes "自动构建于 $(date +'%Y-%m-%d %H:%M')" \
-            $FILES
+          tar xzf artifacts/mt798x-release/mt798x-release.tar.gz -C artifacts/mt798x-release/
+          cd artifacts/mt798x-release/firmware
 
-      - name: Publish qualcommax firmware to its repo
-        if: needs.build.outputs.build_status != 'false'
+          INFO_FILE="../../mt798x-build-info/build-info.json"
+          TARGET=$(jq -r '.target' "$INFO_FILE")
+          BRANCH=$(jq -r '.branch' "$INFO_FILE")
+          DURATION=$(jq -r '.duration' "$INFO_FILE")
+          CACHE_HIT=$(jq -r '.cache_hit' "$INFO_FILE")
+          CONFIG=$(jq -r '.config' "$INFO_FILE")
+          TIMESTAMP=$(jq -r '.timestamp' "$INFO_FILE")
+
+          FILES=$(ls -1 2>/dev/null | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "⚠️ 没有找到固件文件，跳过 mt798x 发布。"
+            exit 0
+          fi
+
+          REPO="solarflows/immortalwrt-mt798x"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          cat > /tmp/release_body.md <<EOF
+          ### 构建信息
+          - **目标**: ${TARGET}
+          - **分支**: ${BRANCH}
+          - **配置文件**: ${CONFIG}
+          - **构建耗时**: ${DURATION} 秒
+          - **缓存命中**: ${CACHE_HIT}
+          - **构建时间**: ${TIMESTAMP}
+          EOF
+
+          if gh release view "$TAG" --repo "$REPO" &>/dev/null; then
+            echo "Release $TAG 已存在，更新 assets..."
+            gh release upload "$TAG" --repo "$REPO" $FILES --clobber
+          else
+            gh release create "$TAG" --repo "$REPO" --title "${TARGET} ${{ steps.version.outputs.title }}" --notes-file /tmp/release_body.md $FILES
+          fi
+
+      # ===== qualcommax 发布 =====
+      - name: Publish qualcommax firmware
+        if: hashFiles('artifacts/qualcommax-build-info/build-info.json') != ''
         env:
           GITHUB_TOKEN: ${{ secrets.REPO_PAT }}
         run: |
-          tar xzf artifacts/qualcommax-release.tar.gz -C artifacts/
-          cd artifacts/firmware
-          FILES=$(ls -1 *.bin sha256sums 2>/dev/null | tr '\n' ' ')
-          cd ../..
-          gh release create ${{ steps.version.outputs.tag }} \
-            --repo solarflows/ImmortalWrt-QualcommAX \
-            --title "qualcommax ${{ steps.version.outputs.title }}" \
-            --notes "自动构建于 $(date +'%Y-%m-%d %H:%M')" \
-            $FILES
+          tar xzf artifacts/qualcommax-release/qualcommax-release.tar.gz -C artifacts/qualcommax-release/
+          cd artifacts/qualcommax-release/firmware
 
-      - name: Publish passwall packages to current repo
+          INFO_FILE="../../qualcommax-build-info/build-info.json"
+          TARGET=$(jq -r '.target' "$INFO_FILE")
+          BRANCH=$(jq -r '.branch' "$INFO_FILE")
+          DURATION=$(jq -r '.duration' "$INFO_FILE")
+          CACHE_HIT=$(jq -r '.cache_hit' "$INFO_FILE")
+          CONFIG=$(jq -r '.config' "$INFO_FILE")
+          TIMESTAMP=$(jq -r '.timestamp' "$INFO_FILE")
+
+          FILES=$(ls -1 2>/dev/null | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "⚠️ 没有找到固件文件，跳过 qualcommax 发布。"
+            exit 0
+          fi
+
+          REPO="solarflows/ImmortalWrt-QualcommAX"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          cat > /tmp/release_body.md <<EOF
+          ### 构建信息
+          - **目标**: ${TARGET}
+          - **分支**: ${BRANCH}
+          - **配置文件**: ${CONFIG}
+          - **构建耗时**: ${DURATION} 秒
+          - **缓存命中**: ${CACHE_HIT}
+          - **构建时间**: ${TIMESTAMP}
+          EOF
+
+          if gh release view "$TAG" --repo "$REPO" &>/dev/null; then
+            echo "Release $TAG 已存在，更新 assets..."
+            gh release upload "$TAG" --repo "$REPO" $FILES --clobber
+          else
+            gh release create "$TAG" --repo "$REPO" --title "${TARGET} ${{ steps.version.outputs.title }}" --notes-file /tmp/release_body.md $FILES
+          fi
+
+      # ===== Passwall 固定 Release (mt798x) =====
+      - name: Publish passwall to fixed release (mt798x)
+        if: hashFiles('artifacts/mt798x-build-info/build-info.json') != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.REPO_PAT }}
         run: |
-          for TARGET in mt798x qualcommax; do
-            if [ -d "artifacts/${TARGET}-passwall" ]; then
-              cd artifacts/${TARGET}-passwall
-              FILES=$(ls -1 *.ipk 2>/dev/null | tr '\n' ' ')
-              cd ../..
-              if [ -n "$FILES" ]; then
-                gh release create "passwall-${TARGET}-${{ steps.version.outputs.tag }}" \
-                  --title "Passwall Packages for ${TARGET} (${{ steps.version.outputs.title }})" \
-                  --notes "包含 passwall 及其依赖的 ipk 包。" \
-                  $FILES
-              fi
+          cd artifacts/mt798x-passwall
+          FILES=$(ls -1 *.ipk *.apk 2>/dev/null | tr '\n' ' ')
+          REPO="solarflows/immortalwrt-mt798x"
+          FIXED_TAG="passwall-mt798x"
+          if [ -n "$FILES" ]; then
+            if gh release view "$FIXED_TAG" --repo "$REPO" &>/dev/null; then
+              echo "Release $FIXED_TAG 已存在，更新 assets..."
+              gh release upload "$FIXED_TAG" --repo "$REPO" $FILES --clobber
+            else
+              gh release create "$FIXED_TAG" --repo "$REPO" --title "Passwall Packages (mt798x)" --notes "最新 passwall 及依赖，更新于 $(date +'%Y-%m-%d %H:%M')" $FILES
             fi
-          done
+          else
+            echo "⚠️ 没有找到 passwall ipk/apk 文件，跳过发布。"
+          fi
+
+      # ===== Passwall 固定 Release (qualcommax) =====
+      - name: Publish passwall to fixed release (qualcommax)
+        if: hashFiles('artifacts/qualcommax-build-info/build-info.json') != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.REPO_PAT }}
+        run: |
+          cd artifacts/qualcommax-passwall
+          FILES=$(ls -1 *.ipk *.apk 2>/dev/null | tr '\n' ' ')
+          REPO="solarflows/ImmortalWrt-QualcommAX"
+          FIXED_TAG="passwall-qualcommax"
+
+          if [ -n "$FILES" ]; then
+            if gh release view "$FIXED_TAG" --repo "$REPO" &>/dev/null; then
+              echo "Release $FIXED_TAG 已存在，更新 assets..."
+              gh release upload "$FIXED_TAG" --repo "$REPO" $FILES --clobber
+            else
+              gh release create "$FIXED_TAG" --repo "$REPO" --title "Passwall Packages (qualcommax)" --notes "最新 passwall 及依赖，更新于 $(date +'%Y-%m-%d %H:%M')" $FILES
+            fi
+          else
+            echo "⚠️ 没有找到 passwall ipk/apk 文件，跳过发布。"
+          fi
