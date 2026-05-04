@@ -343,24 +343,40 @@ jobs:
         continue-on-error: true
         run: |
           echo "::group::尝试将 VIKINGYFY-main 变基到上游 main"
-          git rebase upstream/main
-          echo "rebase_success=true" >> $GITHUB_OUTPUT
+          if git rebase upstream/main; then
+            echo "rebase_success=true" >> $GITHUB_OUTPUT
+            echo "✅ 变基成功"
+          else
+            echo "rebase_success=false" >> $GITHUB_OUTPUT
+            echo "❌ 变基失败，将回退到上游状态"
+          fi
           echo "::endgroup::"
 
       - name: 变基失败时强制重置为上游状态
-        if: steps.check.outputs.has_update == 'true' && steps.rebase.outputs.rebase_success != 'true'
+        if: steps.check.outputs.has_update == 'true' && steps.rebase.outputs.rebase_success == 'false'
         run: |
-          echo "::warning::变基失败，将强制重置分支为上游 main 的最新提交。"
+          echo "::warning::变基失败，中止变基并强制重置分支为上游 main 的最新提交。"
+          git rebase --abort || true
           git reset --hard upstream/main
 
-      - name: 强制推送更新到目标仓库
+      - name: 推送更新到目标仓库
         if: steps.check.outputs.has_update == 'true'
+        id: push
+        continue-on-error: true
         run: |
-          git push origin VIKINGYFY-main --force-with-lease
+          echo "::group::推送 VIKINGYFY-main 到远程仓库"
+          git push origin VIKINGYFY-main --force
+          echo "push_success=true" >> $GITHUB_OUTPUT
           echo "✅ 已推送分支 VIKINGYFY-main"
+          echo "::endgroup::"
+
+      - name: 推送失败警告
+        if: steps.check.outputs.has_update == 'true' && steps.push.outputs.push_success != 'true'
+        run: |
+          echo "::error::推送 VIKINGYFY-main 失败，跳过创建标签。"
 
       - name: 创建日期标签
-        if: steps.check.outputs.has_update == 'true'
+        if: steps.check.outputs.has_update == 'true' && steps.push.outputs.push_success == 'true'
         run: |
           TAG_NAME=$(git log -1 --format=%cd --date=format:'%Y%m%d' upstream/main)
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
