@@ -82,7 +82,7 @@ jobs:
 
       - name: Restore last built SHA from cache
         id: cache_sha
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .last_sha_${{ matrix.target }}
           key: last-sha-${{ matrix.target }}-${{ runner.os }}
@@ -207,7 +207,7 @@ jobs:
 
       - name: Cache last SHA
         if: steps.check.outputs.changed == 'true' && success()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: .last_sha_${{ matrix.target }}
           key: last-sha-${{ matrix.target }}-${{ runner.os }}
@@ -300,7 +300,7 @@ jobs:
       - name: Publish mt798x firmware
         if: hashFiles('artifacts/mt798x-build-info/build-info.json') != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.REPO_PAT }}
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           tar xzf artifacts/mt798x-release/mt798x-release.tar.gz -C artifacts/mt798x-release/
           cd artifacts/mt798x-release/firmware
@@ -343,7 +343,7 @@ jobs:
       - name: Publish qualcommax firmware
         if: hashFiles('artifacts/qualcommax-build-info/build-info.json') != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.REPO_PAT }}
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           tar xzf artifacts/qualcommax-release/qualcommax-release.tar.gz -C artifacts/qualcommax-release/
           cd artifacts/qualcommax-release/firmware
@@ -386,7 +386,7 @@ jobs:
       - name: Publish passwall to fixed release (mt798x)
         if: hashFiles('artifacts/mt798x-build-info/build-info.json') != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.REPO_PAT }}
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           cd artifacts/mt798x-passwall
           FILES=$(ls -1 *.ipk *.apk 2>/dev/null | tr '\n' ' ')
@@ -407,7 +407,7 @@ jobs:
       - name: Publish passwall to fixed release (qualcommax)
         if: hashFiles('artifacts/qualcommax-build-info/build-info.json') != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.REPO_PAT }}
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           cd artifacts/qualcommax-passwall
           FILES=$(ls -1 *.ipk *.apk 2>/dev/null | tr '\n' ' ')
