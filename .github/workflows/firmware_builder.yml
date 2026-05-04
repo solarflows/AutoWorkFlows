@@ -251,7 +251,7 @@ jobs:
 
       # ---------- 保存工具链缓存 ----------
       - name: Save toolchain cache
-        if: steps.check.outputs.changed == 'true' && success() && github.event.inputs.force_rebuild != 'true'
+        if: steps.check.outputs.changed == 'true' && success()
         uses: actions/cache/save@v5
         with:
           path: |
@@ -261,7 +261,7 @@ jobs:
 
       # ---------- 保存 ccache（由 use_ccache 输入控制）----------
       - name: Check ccache content
-        if: steps.check.outputs.changed == 'true' && success() && github.event.inputs.use_ccache != 'false' && github.event.inputs.force_rebuild != 'true'
+        if: steps.check.outputs.changed == 'true' && success() && github.event.inputs.use_ccache != 'false'
         id: ccache-check
         run: |
           if [ -d openwrt/.ccache ] && [ "$(find openwrt/.ccache -type f 2>/dev/null | head -1)" ]; then
