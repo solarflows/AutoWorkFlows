@@ -225,12 +225,13 @@ jobs:
 
       # ---------- 上传构建失败日志 ----------
       - name: Upload build log on failure
-        if: failure() && steps.build.outcome == 'failure'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}-build-log
           path: openwrt/build.log
           retention-days: 7
+          if-no-files-found: ignore
 
       # ---------- 保存 SHA 记录 ----------
       - name: Save current SHA for next run
