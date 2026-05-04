@@ -21,13 +21,18 @@ on:
           - 'true'
           - 'false'
       use_ccache:
-        description: '是否使用 ccache'
+        description: '是否启用 ccache 编译缓存'
         required: false
         default: 'true'
         type: choice
         options:
           - 'true'
           - 'false'
+      force_rebuild:
+        description: '强制重新编译（忽略所有缓存，用于修复工具链损坏）'
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: '0 3 * * 3,6'  # 每周三、六 UTC 3:00
 
@@ -145,41 +150,39 @@ jobs:
           # curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo -E apt-get -qq install nodejs
 
-      # ---------- 缓存工具链和ccache（官方 actions/cache）----------
-      # 只缓存 host 工具和交叉编译工具链，不缓存 target-* 包构建产物
-      - name: Restore ccache and toolchain
-        if: steps.check.outputs.changed == 'true'
-        id: cache
+      # ---------- 缓存工具链（始终启用，除非 force_rebuild）----------
+      - name: Restore toolchain cache
+        if: steps.check.outputs.changed == 'true' && github.event.inputs.force_rebuild != 'true'
+        id: cache-tc
         uses: actions/cache/restore@v5
         with:
           path: |
-            openwrt/.ccache
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
-          key: wrtbuild-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-toolchain-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}
           restore-keys: |
-            wrtbuild-${{ matrix.target }}-
+            immwrt-toolchain-${{ matrix.target }}-
 
-      - name: Record cache hit status
-        if: steps.check.outputs.changed == 'true'
-        id: cache_status
+      # ---------- ccache 编译缓存（由 use_ccache 输入控制）----------
+      - name: Restore ccache
+        if: steps.check.outputs.changed == 'true' && github.event.inputs.use_ccache != 'false' && github.event.inputs.force_rebuild != 'true'
+        id: cache-cc
+        uses: actions/cache/restore@v5
+        with:
+          path: openwrt/.ccache
+          key: immwrt-ccache-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            immwrt-ccache-${{ matrix.target }}-
+
+      - name: Refresh toolchain stamps after cache restore
+        if: steps.check.outputs.changed == 'true' && steps.cache-tc.outputs.cache-hit == 'true'
         run: |
-          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
-            echo "hit=true" >> $GITHUB_OUTPUT
-            # 恢复后刷新 stamp 时间戳，防止 make 误判需要重新编译
-            for dir in openwrt/staging_dir/host* openwrt/staging_dir/tool*; do
-              if [ -d "$dir" ]; then
-                find "$dir" -type d -name "stamp" -not -path "*target*" | while read -r STAMP_DIR; do
-                  find "$STAMP_DIR" -type f -exec touch {} +
-                done
-              fi
-            done
-            mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
-            echo "✅ 缓存命中！工具链和 ccache 已恢复。"
-          else
-            echo "hit=false" >> $GITHUB_OUTPUT
-            echo "⏭️ 缓存未命中，将进行完整编译。"
-          fi
+          find openwrt/staging_dir/host* openwrt/staging_dir/tool* -type d -name "stamp" 2>/dev/null | while read -r d; do
+            find "$d" -type f -exec touch {} +
+          done
+          mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
+          echo "✅ 工具链缓存命中！"
+        continue-on-error: true
 
       # ---------- 构建 ----------
       - name: Update feeds
@@ -246,16 +249,23 @@ jobs:
           path: .last_sha_${{ matrix.target }}
           key: last-sha-${{ matrix.target }}-${{ runner.os }}
 
-      # ---------- 保存工具链和 ccache ----------
-      - name: Save ccache and toolchain cache
-        if: steps.check.outputs.changed == 'true' && success()
+      # ---------- 保存工具链缓存 ----------
+      - name: Save toolchain cache
+        if: steps.check.outputs.changed == 'true' && success() && github.event.inputs.force_rebuild != 'true'
         uses: actions/cache/save@v5
         with:
           path: |
-            openwrt/.ccache
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
-          key: wrtbuild-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-toolchain-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}
+
+      # ---------- 保存 ccache（由 use_ccache 输入控制）----------
+      - name: Save ccache
+        if: steps.check.outputs.changed == 'true' && success() && github.event.inputs.use_ccache != 'false' && github.event.inputs.force_rebuild != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: openwrt/.ccache
+          key: immwrt-ccache-${{ matrix.target }}-${{ github.run_id }}
 
       # ---------- 打包产物 ----------
       - name: Prepare artifacts
@@ -294,7 +304,7 @@ jobs:
             "target": "${{ matrix.target }}",
             "branch": "${{ matrix.ref }}",
             "duration": "${{ steps.build.outputs.duration }}",
-            "cache_hit": "${{ steps.cache_status.outputs.hit }}",
+            "cache_hit": "${{ steps.cache-tc.outputs.cache-hit }}",
             "config": "${{ matrix.config }}",
             "timestamp": "$(date +'%Y-%m-%d %H:%M:%S')"
           }
