@@ -5,7 +5,7 @@ on:
     - cron: '0 */12 * * *'  # 每12小时运行一次
   push:
       paths:
-        - '.github/workflows/Sync_Lean.yml'
+        - '.github/workflows/Sync_Push.yml'
         - '.github/diy/lede/patches/*/*.patch'
         - '.github/diy/luci/patches/*/*.patch'
         - '.github/diy/packages/patches/*/*.patch'  # 当workflow文件有改变时触发
@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: 检出仓库
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
       - name: 配置环境
         run: |
@@ -65,7 +65,7 @@ jobs:
             fi
 
             if [ -d "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" -type f -name '*.patch' -print0 |
+              patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -73,9 +73,14 @@ jobs:
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
-                  echo "应用补丁时出错: $patch_file"
+                  echo "::error::应用补丁时出错: $patch_file"
+                  patch_failed=true
                 fi
-              done
+              done < <(find "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" -type f -name '*.patch' -print0)
+              if [ "$patch_failed" = true ]; then
+                echo "::error::$target 补丁应用失败，跳过推送。"
+                continue
+              fi
             fi
 
             # if [[ $target == "lean" ]]; then
@@ -89,6 +94,7 @@ jobs:
             #   git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:$target
             # fi
 
+            # LEDE 仓库（包括 lean 分支）统一删除 .github 目录
             if [ -d .github ]; then
                 rm -rf .github
                 git add .
@@ -109,7 +115,7 @@ jobs:
 
     steps:
       - name: 检出仓库
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
       - name: 配置环境
         run: |
@@ -144,7 +150,7 @@ jobs:
             git checkout -B $target $target/master
 
             if [ -d "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" -type f -name '*.patch' -print0 |
+              patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -152,9 +158,14 @@ jobs:
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
-                  echo "应用补丁时出错: $patch_file"
+                  echo "::error::应用补丁时出错: $patch_file"
+                  patch_failed=true
                 fi
-              done
+              done < <(find "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" -type f -name '*.patch' -print0)
+              if [ "$patch_failed" = true ]; then
+                echo "::error::$target 补丁应用失败，跳过推送。"
+                continue
+              fi
             fi
 
             if [[ $target == "lean" ]]; then
@@ -172,8 +183,8 @@ jobs:
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
+          patch_failed=false
           if [ -d "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" ]; then
-            find "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" -type f -name '*.patch' -print0 |
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check "$patch_file"; then
@@ -181,18 +192,22 @@ jobs:
                 git add .
                 git commit -m "Applying $(basename "$patch_file")."
               else
-                echo "应用补丁时出错: $patch_file"
+                echo "::error::应用补丁时出错: $patch_file"
+                patch_failed=true
               fi
-            done
+            done < <(find "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" -type f -name '*.patch' -print0)
           fi
 
-          if [ -d .github ]; then
-              rm -rf .github
-              git add .
-              git commit -m "Removing workflows files."
+          if [ "$patch_failed" = false ]; then
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+            git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:hanwckf
+          else
+            echo "::error::hanwckf 补丁应用失败，跳过推送。"
           fi
-
-          git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:hanwckf
 
   sync_packages:
     name: 同步 Packages 仓库
@@ -205,7 +220,7 @@ jobs:
 
     steps:
       - name: 检出仓库
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
       - name: 配置环境
         run: |
@@ -239,7 +254,7 @@ jobs:
             git checkout -B $target $target/master
 
             if [ -d "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" ]; then
-              find "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" -type f -name '*.patch' -print0 |
+              patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
                 if git apply --check "$patch_file"; then
@@ -247,9 +262,14 @@ jobs:
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
-                  echo "应用补丁时出错: $patch_file"
+                  echo "::error::应用补丁时出错: $patch_file"
+                  patch_failed=true
                 fi
-              done
+              done < <(find "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" -type f -name '*.patch' -print0)
+              if [ "$patch_failed" = true ]; then
+                echo "::error::$target 补丁应用失败，跳过推送。"
+                continue
+              fi
             fi
 
             if [[ $target == "lean" ]]; then
@@ -268,8 +288,8 @@ jobs:
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
+          patch_failed=false
           if [ -d "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" ]; then
-            find "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" -type f -name '*.patch' -print0 |
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check "$patch_file"; then
@@ -277,18 +297,22 @@ jobs:
                 git add .
                 git commit -m "Applying $(basename "$patch_file")."
               else
-                echo "应用补丁时出错: $patch_file"
+                echo "::error::应用补丁时出错: $patch_file"
+                patch_failed=true
               fi
-            done
+            done < <(find "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" -type f -name '*.patch' -print0)
           fi
 
-          if [ -d .github ]; then
-              rm -rf .github
-              git add .
-              git commit -m "Removing workflows files."
+          if [ "$patch_failed" = false ]; then
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+            git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:hanwckf
+          else
+            echo "::error::hanwckf 补丁应用失败，跳过推送。"
           fi
-
-          git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:hanwckf
 
   sync_and_tag:
     name: 同步VIKINGYFY仓库并打标签
@@ -389,6 +413,8 @@ jobs:
 
   del_runs:
     name: 删除旧运行记录
+    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    needs: [sync_lede, sync_luci, sync_packages, sync_and_tag]
     runs-on: ubuntu-latest
     permissions:
       actions: write
