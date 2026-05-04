@@ -85,6 +85,14 @@ jobs:
         id: current_sha
         run: echo "sha=$(git -C openwrt rev-parse HEAD)" >> $GITHUB_OUTPUT
 
+      # ---------- 计算工具链指纹（仅基于 tools/ 和 toolchain/ 目录的变更）----------
+      - name: Compute toolchain fingerprint
+        id: toolchain_hash
+        run: |
+          HASH=$(git -C openwrt log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "🔧 工具链指纹: $HASH"
+
       - name: Restore last built SHA from cache
         id: cache_sha
         uses: actions/cache/restore@v5
@@ -137,24 +145,40 @@ jobs:
           # curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo -E apt-get -qq install nodejs
 
-      # ---------- 缓存工具链和ccache ----------
+      # ---------- 缓存工具链和ccache（官方 actions/cache）----------
+      # 只缓存 host 工具和交叉编译工具链，不缓存 target-* 包构建产物
       - name: Restore ccache and toolchain
         if: steps.check.outputs.changed == 'true'
         id: cache
-        uses: stupidloud/cachewrtbuild@main
+        uses: actions/cache/restore@v5
         with:
-          ccache: ${{ github.event.inputs.use_ccache || 'true' }}
-          prefix: ${{ github.workspace }}/openwrt
-          mixkey: ${{ matrix.target }}
+          path: |
+            openwrt/.ccache
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
+          key: wrtbuild-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}
+          restore-keys: |
+            wrtbuild-${{ matrix.target }}-
 
       - name: Record cache hit status
         if: steps.check.outputs.changed == 'true'
         id: cache_status
         run: |
-          if [ "${{ steps.cache.outputs.hit }}" = "1" ]; then
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
             echo "hit=true" >> $GITHUB_OUTPUT
+            # 恢复后刷新 stamp 时间戳，防止 make 误判需要重新编译
+            for dir in openwrt/staging_dir/host* openwrt/staging_dir/tool*; do
+              if [ -d "$dir" ]; then
+                find "$dir" -type d -name "stamp" -not -path "*target*" | while read -r STAMP_DIR; do
+                  find "$STAMP_DIR" -type f -exec touch {} +
+                done
+              fi
+            done
+            mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
+            echo "✅ 缓存命中！工具链和 ccache 已恢复。"
           else
             echo "hit=false" >> $GITHUB_OUTPUT
+            echo "⏭️ 缓存未命中，将进行完整编译。"
           fi
 
       # ---------- 构建 ----------
@@ -220,6 +244,17 @@ jobs:
         with:
           path: .last_sha_${{ matrix.target }}
           key: last-sha-${{ matrix.target }}-${{ runner.os }}
+
+      # ---------- 保存工具链和 ccache ----------
+      - name: Save ccache and toolchain cache
+        if: steps.check.outputs.changed == 'true' && success()
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            openwrt/.ccache
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
+          key: wrtbuild-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}
 
       # ---------- 打包产物 ----------
       - name: Prepare artifacts
