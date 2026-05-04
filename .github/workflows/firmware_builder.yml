@@ -260,8 +260,20 @@ jobs:
           key: immwrt-toolchain-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}
 
       # ---------- 保存 ccache（由 use_ccache 输入控制）----------
-      - name: Save ccache
+      - name: Check ccache content
         if: steps.check.outputs.changed == 'true' && success() && github.event.inputs.use_ccache != 'false' && github.event.inputs.force_rebuild != 'true'
+        id: ccache-check
+        run: |
+          if [ -d openwrt/.ccache ] && [ "$(find openwrt/.ccache -type f 2>/dev/null | head -1)" ]; then
+            echo "ready=true" >> $GITHUB_OUTPUT
+            echo "✅ .ccache 有内容，准备保存。"
+          else
+            echo "ready=false" >> $GITHUB_OUTPUT
+            echo "⏭️ .ccache 不存在或为空，跳过保存。"
+          fi
+
+      - name: Save ccache
+        if: steps.ccache-check.outputs.ready == 'true'
         uses: actions/cache/save@v5
         with:
           path: openwrt/.ccache
