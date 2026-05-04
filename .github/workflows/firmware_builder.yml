@@ -311,14 +311,15 @@ jobs:
       - name: Generate build info artifact
         if: steps.check.outputs.changed == 'true'
         run: |
-          cat > build-info.json <<'JSONEOF'
+          NOW=$(date +'%Y-%m-%d %H:%M:%S')
+          cat > build-info.json <<JSONEOF
           {
             "target": "${{ matrix.target }}",
             "branch": "${{ matrix.ref }}",
             "duration": "${{ steps.build.outputs.duration }}",
             "cache_hit": "${{ steps.cache-tc.outputs.cache-hit }}",
             "config": "${{ matrix.config }}",
-            "timestamp": "$(date +'%Y-%m-%d %H:%M:%S')"
+            "timestamp": "${NOW}"
           }
           JSONEOF
 
