@@ -42,6 +42,7 @@ concurrency:
 
 env:
   TZ: Asia/Shanghai
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ========== 构建矩阵（从 targets.json 读取） ==========
@@ -71,14 +72,12 @@ jobs:
             jq -c --arg t "$TARGET_FILTER" '[.targets[] | select(.target == $t)]' "$JSON_FILE"
           fi)
 
-          MATRIX=$(echo "$FILTERED" | jq -c '{
-            include: map(. + {
-              packages_branch:   (.packages_branch   // .target),
-              release_repo:     (.release_repo     // .repo),
-              passwall_tag:     (.passwall_tag     // "passwall-\(.target)"),
-              release_tag_prefix: (.release_tag_prefix // "")
-            })
-          }')
+          MATRIX=$(echo "$FILTERED" | jq -c 'map(. + {
+            packages_branch:   (.packages_branch   // .target),
+            release_repo:     (.release_repo     // .repo),
+            passwall_tag:     (.passwall_tag     // "passwall-\(.target)"),
+            release_tag_prefix: (.release_tag_prefix // "")
+          })')
 
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           echo "✅ 矩阵: $MATRIX"
