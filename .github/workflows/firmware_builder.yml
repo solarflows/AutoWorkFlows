@@ -230,9 +230,11 @@ jobs:
           echo "📄 合并种子配置: $SEED_DIR"
           find "$SEED_DIR" -type f -name '*.seed' | sort | while read -r f; do
             echo "  + $(basename "$f")" >&2
-            cat "$f"
+            [ -s "$f" ] && cat "$f" || echo "    ⚠️ 跳过空文件" >&2
             echo
           done > .config
+          # 确保 .config 为 LF 换行符（防止 Windows CRLF 导致 Make 解析失败）
+          sed -i 's/\r$//' .config
           echo "✅ 已生成 .config ($(wc -l < .config) 行)"
           echo "📋 ======== 种子配置内容 ========"
           cat .config
