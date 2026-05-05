@@ -36,6 +36,7 @@ checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app
 format_git_clone_output -r https://github.com/Openwrt-Passwall/openwrt-passwall-packages && mvdir openwrt-passwall-packages
 checkout_partial_code -r https://github.com/Openwrt-Passwall/openwrt-passwall luci-app-passwall
 checkout_partial_code -r https://github.com/Openwrt-Passwall/openwrt-passwall2 luci-app-passwall2
+format_git_clone_output -r https://github.com/Zerogiven-OpenWRT-Packages/luci-app-podman
 
 # S
 # SmartDNS
