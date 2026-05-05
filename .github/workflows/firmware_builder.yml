@@ -52,7 +52,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout AutoWorkflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: solarflows/AutoWorkFlows
           sparse-checkout: openwrt-configs/immortalwrt/targets.json
@@ -93,13 +93,13 @@ jobs:
         include: ${{ fromJson(needs.define-matrix.outputs.matrix) }}
     steps:
       - name: Checkout AutoWorkflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: solarflows/AutoWorkFlows
           path: AutoWorkFlows
 
       - name: Checkout Source Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ matrix.repo }}
           ref: ${{ matrix.ref }}
@@ -170,6 +170,10 @@ jobs:
           sudo timedatectl set-timezone "$TZ"
           # curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo -E apt-get -qq install nodejs
+
+      - name: Show build environment
+        if: steps.check.outputs.changed == 'true'
+        run: |
           echo "🖥️ 构建环境:"
           echo "  CPU: $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
           echo "  内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
