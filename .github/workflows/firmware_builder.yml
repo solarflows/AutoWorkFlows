@@ -242,7 +242,8 @@ jobs:
             fi
             cat "$f"
             # 若文件末尾无换行，补一个换行防止与下一个 seed 的首行拼接
-            [ -n "$(tail -c1 "$f")" ] && echo
+            [ -z "$(tail -c1 "$f")" ] || echo
+            true  # 确保循环始终以 0 退出（pipefail 兼容）
           done > .config
           # 确保 .config 为 LF 换行符（防止 Windows CRLF 导致 Make 解析失败）
           sed -i 's/\r$//' .config
