@@ -15,13 +15,15 @@ CHECK_CORE_FILE
 
 # Applications
 
+# C
+# CloudflareSpeedtest  Cloudflare Speedtest 插件
+format_git_clone_output -r https://github.com/stevenjoezhang/luci-app-cloudflarespeedtest
+
 # D
 # dnsfilter         基于dnsmasq的去广告程序
 format_git_clone_output -r https://github.com/kiddin9/luci-app-dnsfilter
 checkout_partial_code -r https://github.com/linkease/nas-packages-luci luci/luci-app-ddnsto
 checkout_partial_code -r https://github.com/linkease/nas-packages network/services/ddnsto
-
-checkout_partial_code -r https://github.com/openwrt/packages/ net/tailscale lang/golang
 
 # L
 # lucky             大吉多种功能结合体
@@ -40,16 +42,13 @@ format_git_clone_output -r https://github.com/Zerogiven-OpenWRT-Packages/luci-ap
 
 # S
 # SmartDNS
-checkout_partial_code -r https://github.com/immortalwrt/packages net/smartdns
+format_git_clone_output -r https://github.com/pymumu/openwrt-smartdns -d smartdns
 format_git_clone_output -r https://github.com/pymumu/luci-app-smartdns -b master
 
 # T
+# TaskPlan         定时任务计划管理器
+checkout_partial_code -r https://github.com/sirpdboy/luci-app-taskplan luci-app-taskplan
 format_git_clone_output -r https://github.com/jerrykuku/luci-theme-argon
 format_git_clone_output -r https://github.com/jerrykuku/luci-app-argon-config
-
-# Z
-# ZeroTier
-checkout_partial_code -r https://github.com/coolsnowwolf/packages net/zerotier
-# checkout_partial_code -r https://github.com/immortalwrt/luci applications/luci-app-zerotier
 
 exit 0
