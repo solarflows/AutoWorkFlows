@@ -170,6 +170,10 @@ jobs:
           sudo timedatectl set-timezone "$TZ"
           # curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo -E apt-get -qq install nodejs
+          echo "🖥️ 构建环境:"
+          echo "  CPU: $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
+          echo "  内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
+          echo "  系统: $(uname -r)"
 
       # ---------- 缓存工具链（始终启用，除非 force_rebuild）----------
       - name: Restore toolchain cache
@@ -221,11 +225,15 @@ jobs:
           SEED_DIR="../AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}"
           echo "📄 合并种子配置: $SEED_DIR"
           find "$SEED_DIR" -type f -name '*.seed' | sort | while read -r f; do
-            echo "  + $(basename "$f")"
+            echo "  + $(basename "$f")" >&2
+            echo "# Source: $(basename "$f")"
             cat "$f"
             echo
           done > .config
           echo "✅ 已生成 .config ($(wc -l < .config) 行)"
+          echo "📋 ======== 种子配置内容 ========"
+          cat .config
+          echo "📋 ======== 种子配置结束 ========"
           make defconfig
 
       - name: Download packages
