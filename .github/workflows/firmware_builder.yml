@@ -45,6 +45,10 @@ concurrency:
   group: firmware-build-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  actions: write
+  contents: write
+
 env:
   TZ: Asia/Shanghai
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -210,6 +214,8 @@ jobs:
 
       - name: Refresh cache stamps
         if: steps.check.outputs.changed == 'true' && github.event.inputs.force_rebuild != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TOOLCHAIN_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
           CCACHE_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
@@ -284,7 +290,7 @@ jobs:
         run: |
           set -euo pipefail
           cd openwrt
-          make download -j8
+          make download -j$(nproc)
           echo "📦 清理下载不完整的小文件（<1KB）..."
           find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
           echo "✅ 下载完成"
