@@ -202,8 +202,20 @@ jobs:
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
 
+      - name: Toolchain cache (force rebuild)
+        if: steps.check.outputs.changed == 'true' && github.event.inputs.force_rebuild == 'true'
+        id: cache-tc-rebuild
+        uses: actions/cache@v5
+        with:
+          key: immwrt-toolchain-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}-rebuild-${{ github.run_id }}
+          restore-keys: |
+            immwrt-toolchain-${{ matrix.target }}-${{ steps.toolchain_hash.outputs.hash }}-rebuild-${{ github.run_id }}-
+          path: |
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
+
       - name: Ccache cache
-        if: steps.check.outputs.changed == 'true' && github.event.inputs.force_rebuild != 'true'
+        if: steps.check.outputs.changed == 'true' && github.event.inputs.use_ccache != 'false' && github.event.inputs.force_rebuild != 'true'
         id: cache-cc
         uses: actions/cache@v5
         with:
@@ -212,13 +224,23 @@ jobs:
             immwrt-ccache-${{ matrix.target }}-
           path: openwrt/.ccache
 
+      - name: Ccache cache (force rebuild)
+        if: steps.check.outputs.changed == 'true' && github.event.inputs.use_ccache != 'false' && github.event.inputs.force_rebuild == 'true'
+        id: cache-cc-rebuild
+        uses: actions/cache@v5
+        with:
+          key: immwrt-ccache-${{ matrix.target }}-${{ github.run_id }}-rebuild
+          restore-keys: |
+            immwrt-ccache-${{ matrix.target }}-${{ github.run_id }}-rebuild-
+          path: openwrt/.ccache
+
       - name: Refresh cache stamps
-        if: steps.check.outputs.changed == 'true' && github.event.inputs.force_rebuild != 'true'
+        if: steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TOOLCHAIN_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
-          CCACHE_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
+          TOOLCHAIN_HIT="${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}"
+          CCACHE_HIT="${{ steps.cache-cc.outputs.cache-hit }}${{ steps.cache-cc-rebuild.outputs.cache-hit }}"
 
           if [ -d "openwrt/staging_dir" ]; then
             find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | while read -r d; do
@@ -239,10 +261,15 @@ jobs:
             echo "✅ 旧工具链缓存已清理。"
           fi
 
-          if [ "$CCACHE_HIT" == "true" ]; then
+          if [ "$CCACHE_HIT" != "true" ] && [ -n "$CCACHE_HIT" ]; then
+            echo "🧹 清理旧 ccache 缓存..."
+            CACHE_LIST=$(gh cache list --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 | cut -f 1)
+            for CACHE_KEY in $CACHE_LIST; do
+              gh cache delete "$CACHE_KEY"
+            done
+            echo "✅ 旧 ccache 缓存已清理。"
+          elif [ "$CCACHE_HIT" == "true" ]; then
             echo "✅ ccache 缓存命中！"
-          else
-            echo "⏭️ ccache 缓存未命中，首次编译较慢。"
           fi
         continue-on-error: true
 
@@ -379,7 +406,7 @@ jobs:
             "target": "${{ matrix.target }}",
             "branch": "${{ matrix.ref }}",
             "duration": "${{ steps.build.outputs.duration }}",
-            "cache_hit": "${{ steps.cache-tc.outputs.cache-hit }}",
+            "cache_hit": "${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}",
             "config": "${{ matrix.config }}",
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
