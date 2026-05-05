@@ -1,0 +1,28 @@
+﻿{
+  "_comment": "字段说明见同目录 README.md。带 * 为必填字段，其余可选（jq 自动补默认值）。",
+
+  "targets": [
+    {
+      "target": "mt798x",
+      "repo": "solarflows/immortalwrt-mt798x",
+      "ref": "test",
+      "config": "mt798x",
+
+      "packages_branch": "mt798x",
+      "release_repo": "solarflows/immortalwrt-mt798x",
+      "release_tag_prefix": "",
+      "passwall_tag": "passwall-mt798x"
+    },
+    {
+      "target": "qualcommax",
+      "repo": "solarflows/ImmortalWrt-QualcommAX",
+      "ref": "VIKINGYFY-main",
+      "config": "qualcommax",
+
+      "packages_branch": "qualcommax",
+      "release_repo": "solarflows/ImmortalWrt-QualcommAX",
+      "release_tag_prefix": "",
+      "passwall_tag": "passwall-qualcommax"
+    }
+  ]
+}
