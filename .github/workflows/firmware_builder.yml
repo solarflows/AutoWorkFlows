@@ -254,18 +254,18 @@ jobs:
 
           if [ "$TOOLCHAIN_HIT" != "true" ]; then
             echo "🧹 清理旧工具链缓存..."
-            CACHE_LIST=$(gh cache list --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 | cut -f 1)
+            CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 | cut -f 1)
             for CACHE_KEY in $CACHE_LIST; do
-              gh cache delete "$CACHE_KEY"
+              gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
             done
             echo "✅ 旧工具链缓存已清理。"
           fi
 
           if [ "$CCACHE_HIT" != "true" ] && [ -n "$CCACHE_HIT" ]; then
             echo "🧹 清理旧 ccache 缓存..."
-            CACHE_LIST=$(gh cache list --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 | cut -f 1)
+            CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 | cut -f 1)
             for CACHE_KEY in $CACHE_LIST; do
-              gh cache delete "$CACHE_KEY"
+              gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
             done
             echo "✅ 旧 ccache 缓存已清理。"
           elif [ "$CCACHE_HIT" == "true" ]; then
