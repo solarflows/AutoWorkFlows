@@ -42,7 +42,7 @@ format_git_clone_output -r https://github.com/Zerogiven-OpenWRT-Packages/luci-ap
 
 # S
 # SmartDNS
-format_git_clone_output -r https://github.com/pymumu/openwrt-smartdns -d smartdns
+checkout_partial_code -r https://github.com/immortalwrt/packages net/smartdns
 format_git_clone_output -r https://github.com/pymumu/luci-app-smartdns -b master
 
 # T
