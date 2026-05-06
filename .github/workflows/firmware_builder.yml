@@ -170,16 +170,24 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt -y purge firefox
+          echo "╔══════════════════════════════════════╗"
+          echo "║  1. Environment Prepare             ║"
+          echo "╚══════════════════════════════════════╝"
+          echo "🧹 清理无用软件包..."
+          sudo -E apt -y purge firefox 2>/dev/null || true
+          echo "📦 更新系统..."
           sudo -E apt update
           sudo -E apt -yqq full-upgrade
+          echo "🧹 清理 apt 缓存..."
           sudo -E apt -yqq autoremove --purge
           sudo -E apt -yqq autoclean
           sudo -E apt -yqq clean
+          echo "📦 安装编译依赖..."
           sudo -E apt -yqq install dos2unix libfuse-dev
           sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.eu.org/init_build_environment.sh)'
           sudo -E systemctl daemon-reload
           sudo timedatectl set-timezone "$TZ"
+          echo "✅ 环境准备完成"
 
       - name: Show build environment
         if: steps.check.outputs.changed == 'true'
@@ -242,17 +250,14 @@ jobs:
           TOOLCHAIN_HIT="${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}"
           CCACHE_HIT="${{ steps.cache-cc.outputs.cache-hit }}${{ steps.cache-cc-rebuild.outputs.cache-hit }}"
 
-          if [ -d "openwrt/staging_dir" ]; then
+          if [ "$TOOLCHAIN_HIT" == "true" ]; then
             find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | while read -r d; do
               find "$d" -type f -exec touch {} +
             done
             mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
             echo "✅ 工具链缓存命中，stamp 已刷新！"
-          else
+          elif [ "$TOOLCHAIN_HIT" == "false" ]; then
             echo "⏭️ 工具链缓存未命中，将全量编译。"
-          fi
-
-          if [ "$TOOLCHAIN_HIT" != "true" ]; then
             echo "🧹 清理旧工具链缓存..."
             CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 | cut -f 1)
             for CACHE_KEY in $CACHE_LIST; do
@@ -261,51 +266,63 @@ jobs:
             echo "✅ 旧工具链缓存已清理。"
           fi
 
-          if [ "$CCACHE_HIT" != "true" ] && [ -n "$CCACHE_HIT" ]; then
+          if [ "$CCACHE_HIT" == "true" ]; then
+            echo "✅ ccache 缓存命中！"
+          elif [ "$CCACHE_HIT" == "false" ]; then
+            echo "✅ ccache 缓存已恢复（restore-keys 匹配），正在更新..."
             echo "🧹 清理旧 ccache 缓存..."
             CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 | cut -f 1)
             for CACHE_KEY in $CACHE_LIST; do
               gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
             done
             echo "✅ 旧 ccache 缓存已清理。"
-          elif [ "$CCACHE_HIT" == "true" ]; then
-            echo "✅ ccache 缓存命中！"
           fi
         continue-on-error: true
 
       # ---------- 构建 ----------
       - name: Update feeds
         if: steps.check.outputs.changed == 'true'
+        id: feeds
         run: |
+          set -euo pipefail
+          echo "📦 克隆 openwrt-packages ..."
           cd openwrt
           git clone --depth 1 https://github.com/solarflows/openwrt-packages.git package/solarflows -b ${{ matrix.packages_branch }}
+          PKG_SHA=$(git -C package/solarflows rev-parse --short HEAD)
+          echo "packages_sha=${PKG_SHA}" >> $GITHUB_OUTPUT
+          echo "   openwrt-packages: ${PKG_SHA}"
+
+          echo "📦 更新 feeds ..."
           ./scripts/feeds update -a && ./scripts/feeds install -a
+          echo "✅ feeds 准备完成"
 
       - name: Apply Configuration
         if: steps.check.outputs.changed == 'true'
         run: |
           set -euo pipefail
+          echo "╔══════════════════════════════════════╗"
+          echo "║  2. Apply Configuration             ║"
+          echo "╚══════════════════════════════════════╝"
           cd openwrt
           SEED_DIR="../AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}"
           echo "📄 合并种子配置: $SEED_DIR"
           find "$SEED_DIR" -type f -name '*.seed' | sort | while read -r f; do
             echo "  + $(basename "$f")" >&2
-            # 跳过空文件
             if [ ! -s "$f" ]; then
               echo "    ⚠️ 跳过空文件" >&2
               continue
             fi
             cat "$f"
-            # 若文件末尾无换行，补一个换行防止与下一个 seed 的首行拼接
             [ -z "$(tail -c1 "$f")" ] || echo
-            true  # 确保循环始终以 0 退出（pipefail 兼容）
+            true
           done > .config
-          # 确保 .config 为 LF 换行符，清除 UTF-8 BOM（防止 Kconfig 解析失败）
           sed -i 's/\r$//; s/\xef\xbb\xbf//g' .config
           echo "✅ 已生成 .config ($(wc -l < .config) 行)"
-          echo "📋 ======== 种子配置内容 ========"
-          cat .config
-          echo "📋 ======== 种子配置结束 ========"
+          echo "📋 ======== 种子配置前 30 行 ========"
+          head -30 .config
+          echo "📋 ======== 种子配置尾部 10 行 ========"
+          tail -10 .config
+          echo "🔧 运行 make defconfig ..."
           make defconfig
           echo "📋 ======== defconfig 后 .config 前 50 行 ========"
           head -50 .config
@@ -316,7 +333,11 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           set -euo pipefail
+          echo "╔══════════════════════════════════════╗"
+          echo "║  3. Download Packages               ║"
+          echo "╚══════════════════════════════════════╝"
           cd openwrt
+          echo "📥 下载源码包 (并行 $(nproc) 线程)..."
           make download -j$(nproc)
           echo "📦 清理下载不完整的小文件（<1KB）..."
           find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
@@ -327,23 +348,35 @@ jobs:
         id: build
         run: |
           set -euo pipefail
+          echo "╔══════════════════════════════════════╗"
+          echo "║  4. Build Firmware                  ║"
+          echo "╚══════════════════════════════════════╝"
           START_TIME=$(date +%s)
           cd openwrt
-          # -k: 遇错不停止，全速编译所有能编的包；失败目标留给单线程重试
+          echo "🔨 开始编译 (并行 $(($(nproc) + 1)) 线程, -k 遇错不停止)..."
           set +o pipefail
           make -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
           MAKE_EXIT=${PIPESTATUS[0]}
           set -o pipefail
 
           if [ "$MAKE_EXIT" -ne 0 ]; then
-            echo "⚠️ 有编译错误（退出码: $MAKE_EXIT，其余已全速编译），单线程重试失败目标..."
+            echo "⚠️ 有编译错误（退出码: $MAKE_EXIT），尝试更新 feed 后重试..."
+            echo "📥 更新 feeds ..."
+            ./scripts/feeds update -a && ./scripts/feeds install -a
+            echo "📥 更新 openwrt-packages ..."
+            git -C package/solarflows pull origin ${{ matrix.packages_branch }} 2>/dev/null || true
+            echo "🔨 单线程重试失败目标..."
             make -j1 V=sc 2>&1 | tee -a build.log || {
               echo "💥 构建彻底失败，请查看 build.log 分析原因。"
               exit 1
             }
           fi
           END_TIME=$(date +%s)
-          echo "duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
+          DURATION_SEC=$((END_TIME - START_TIME))
+          DURATION_FMT=$(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))
+          echo "duration=${DURATION_SEC}" >> $GITHUB_OUTPUT
+          echo "duration_fmt=${DURATION_FMT}" >> $GITHUB_OUTPUT
+          echo "⏱️ 编译耗时: ${DURATION_FMT}"
 
       # ---------- 上传构建失败日志 ----------
       - name: Upload build log on failure
@@ -354,6 +387,12 @@ jobs:
           path: openwrt/build.log
           retention-days: 7
           if-no-files-found: ignore
+
+      # ---------- 手动触发失败时启动 tmate 调试会话 ----------
+      - name: Tmate debug session
+        if: failure() && github.event_name == 'workflow_dispatch'
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 30
 
       # ---------- 保存 SHA 记录 ----------
       - name: Save current SHA for next run
@@ -372,6 +411,9 @@ jobs:
       - name: Prepare artifacts
         if: steps.check.outputs.changed == 'true'
         run: |
+          echo "╔══════════════════════════════════════╗"
+          echo "║  5. Package Artifacts               ║"
+          echo "╚══════════════════════════════════════╝"
           cd openwrt
           mkdir -p release/firmware
           # 收集 bin/targets 下所有固件文件（.bin/.itb/.img/.manifest/.buildinfo/sha256sums/profiles.json 等）
@@ -401,13 +443,40 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           NOW=$(date +'%Y-%m-%d %H:%M:%S')
+          SHA_FULL="${{ steps.current_sha.outputs.sha }}"
+          SHA_SHORT=$(echo "$SHA_FULL" | cut -c1-7)
+
+          # 从编译产物 feeds.buildinfo 提取各 feed 版本
+          FEEDS_INFO=""
+          FEEDS_MD=""
+          FW_FEEDS_FILE=$(find openwrt/bin/targets -name "feeds.buildinfo" 2>/dev/null | head -1)
+          if [ -f "$FW_FEEDS_FILE" ]; then
+            FEEDS_INFO=$(jq -Rs '.' "$FW_FEEDS_FILE")
+            FEEDS_MD_JSON=$(awk '{
+              n=split($NF,a,"^"); url=a[1]; hash=a[2]
+              sub(/\.git$/,"",url)
+              printf "| [%s](%s/tree/%s) | `%s` |\n", $2, url, hash, hash
+            }' "$FW_FEEDS_FILE" | jq -Rs '.')
+          else
+            FEEDS_INFO='""'
+            FEEDS_MD_JSON='""'
+          fi
+          
           cat > build-info.json <<JSONEOF
           {
             "target": "${{ matrix.target }}",
-            "branch": "${{ matrix.ref }}",
-            "duration": "${{ steps.build.outputs.duration }}",
-            "cache_hit": "${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}",
             "config": "${{ matrix.config }}",
+            "source_repo": "${{ matrix.repo }}",
+            "source_ref": "${{ matrix.ref }}",
+            "source_sha": "${SHA_FULL}",
+            "source_sha_short": "${SHA_SHORT}",
+            "packages_sha": "${{ steps.feeds.outputs.packages_sha }}",
+            "feeds_info": ${FEEDS_INFO},
+            "feeds_md": ${FEEDS_MD_JSON},
+            "duration_sec": "${{ steps.build.outputs.duration }}",
+            "duration_fmt": "${{ steps.build.outputs.duration_fmt }}",
+            "toolchain_hit": "${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}",
+            "ccache_hit": "${{ steps.cache-cc.outputs.cache-hit }}${{ steps.cache-cc-rebuild.outputs.cache-hit }}",
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
             "release_tag_prefix": "${{ matrix.release_tag_prefix }}",
@@ -478,17 +547,28 @@ jobs:
             fi
 
             # -------- 从 build-info.json 读取所有参数 --------
-            local TARGET_NAME BRANCH DURATION CACHE_HIT CONFIG TIMESTAMP
+            local TARGET_NAME CONFIG SOURCE_REPO SOURCE_REF SHORT_SHA
+            local PKG_SHA FEEDS_MD DURATION_FMT
+            local TOOLCHAIN_HIT CCACHE_HIT TIMESTAMP
             local RELEASE_REPO PASSWALL_TAG TAG_PREFIX
             TARGET_NAME=$(jq -r '.target'              "$INFO_FILE")
-            BRANCH=$(jq -r '.branch'                   "$INFO_FILE")
-            DURATION=$(jq -r '.duration'               "$INFO_FILE")
-            CACHE_HIT=$(jq -r '.cache_hit'             "$INFO_FILE")
             CONFIG=$(jq -r '.config'                   "$INFO_FILE")
+            SOURCE_REPO=$(jq -r '.source_repo'          "$INFO_FILE")
+            SOURCE_REF=$(jq -r '.source_ref'            "$INFO_FILE")
+            SHORT_SHA=$(jq -r '.source_sha_short'       "$INFO_FILE")
+            PKG_SHA=$(jq -r '.packages_sha'            "$INFO_FILE")
+            FEEDS_MD=$(jq -r '.feeds_md'               "$INFO_FILE")
+            DURATION_FMT=$(jq -r '.duration_fmt'        "$INFO_FILE")
+            TOOLCHAIN_HIT=$(jq -r '.toolchain_hit'      "$INFO_FILE")
+            CCACHE_HIT=$(jq -r '.ccache_hit'             "$INFO_FILE")
             TIMESTAMP=$(jq -r '.timestamp'             "$INFO_FILE")
             RELEASE_REPO=$(jq -r '.release_repo'        "$INFO_FILE")
             PASSWALL_TAG=$(jq -r '.passwall_tag'        "$INFO_FILE")
             TAG_PREFIX=$(jq -r '.release_tag_prefix'    "$INFO_FILE")
+
+            # -------- 格式化图标 --------
+            TC_HIT_ICON=$([ "$TOOLCHAIN_HIT" = "true" ] && echo "✅" || echo "🔄")
+            CC_HIT_ICON=$([ "$CCACHE_HIT" = "true" ] && echo "✅" || echo "🔄")
 
             # -------- 生成版本 Tag --------
             local DATE_TAG TAG TITLE
@@ -509,14 +589,34 @@ jobs:
             FW_COUNT=$(find "$FW_DIR" -maxdepth 1 -type f 2>/dev/null | head -1)
             if [ -d "$FW_DIR" ] && [ -n "$FW_COUNT" ]; then
               cat > /tmp/release_body.md <<RELEOF
-          ### 构建信息
-          - **目标**: ${TARGET_NAME}
-          - **分支**: ${BRANCH}
-          - **配置文件**: ${CONFIG}
-          - **构建耗时**: ${DURATION} 秒
-          - **缓存命中**: ${CACHE_HIT}
-          - **构建时间**: ${TIMESTAMP}
+          ## ${TARGET_NAME} ${TITLE}
+
+          | 项目 | 详情 |
+          |------|------|
+          | **目标** | ${TARGET_NAME} |
+          | **源码** | [${SOURCE_REF}](https://github.com/${SOURCE_REPO}) |
+          | **源码提交** | \`${SHORT_SHA}\` |
+          | **软件包** | \`${PKG_SHA}\` |
+          | **编译耗时** | ${DURATION_FMT} |
+          | **构建时间** | ${TIMESTAMP} |
+
+          ### 缓存状态
+          | 工具链 | ccache |
+          |--------|--------|
+          | ${TC_HIT_ICON} ${TOOLCHAIN_HIT} | ${CC_HIT_ICON} ${CCACHE_HIT} |
           RELEOF
+
+              # 追加 feeds 版本表（从 feeds.buildinfo 提取）
+              if [ -n "$FEEDS_MD" ]; then
+                {
+                  echo ""
+                  echo "### Feed 版本"
+                  echo ""
+                  echo "| Feed | 版本 |"
+                  echo "|------|------|"
+                  echo "$FEEDS_MD"
+                } >> /tmp/release_body.md
+              fi
 
               if gh release view "$TAG" --repo "$RELEASE_REPO" &>/dev/null; then
                 echo "📤 [${TARGET}] Release $TAG 已存在，更新固件 assets..."
