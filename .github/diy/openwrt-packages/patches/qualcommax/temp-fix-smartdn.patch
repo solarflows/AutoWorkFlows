@@ -1,7 +1,7 @@
-diff --git a/net/smartdns/Makefile b/net/smartdns/Makefile
+diff --git a/smartdns/Makefile b/smartdns/Makefile
 index 0ea619c..86054c1 100644
---- a/net/smartdns/Makefile
-+++ b/net/smartdns/Makefile
+--- a/smartdns/Makefile
++++ b/smartdns/Makefile
 @@ -6,12 +6,12 @@ include $(TOPDIR)/rules.mk
  
  PKG_NAME:=smartdns
