@@ -541,11 +541,14 @@ jobs:
                 if gh release view "$PASSWALL_TAG" --repo "$RELEASE_REPO" &>/dev/null; then
                   echo "📤 [${TARGET}] Passwall Release 已存在，更新 assets..."
                   echo "$PW_FILES" | xargs gh release upload "$PASSWALL_TAG" --repo "$RELEASE_REPO" --clobber
+                  # 确保 Passwall 不抢占 latest release
+                  gh release edit "$PASSWALL_TAG" --repo "$RELEASE_REPO" --latest=false
                 else
                   echo "🚀 [${TARGET}] 创建 Passwall Release ..."
                   gh release create "$PASSWALL_TAG" --repo "$RELEASE_REPO" \
                     --title "Passwall Packages (${TARGET})" \
                     --notes "最新 passwall 及依赖，更新于 $(date +'%Y-%m-%d %H:%M')" \
+                    --latest=false \
                     $(echo "$PW_FILES")
                 fi
               else
