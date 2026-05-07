@@ -50,5 +50,7 @@ format_git_clone_output -r https://github.com/pymumu/luci-app-smartdns -b master
 checkout_partial_code -r https://github.com/sirpdboy/luci-app-taskplan luci-app-taskplan
 format_git_clone_output -r https://github.com/jerrykuku/luci-theme-argon
 format_git_clone_output -r https://github.com/jerrykuku/luci-app-argon-config
+format_git_clone_output -r https://github.com/eamonxg/luci-theme-aurora
+format_git_clone_output -r https://github.com/eamonxg/luci-app-aurora-config
 
 exit 0
