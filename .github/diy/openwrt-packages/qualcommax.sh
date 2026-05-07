@@ -53,4 +53,8 @@ format_git_clone_output -r https://github.com/jerrykuku/luci-app-argon-config
 format_git_clone_output -r https://github.com/eamonxg/luci-theme-aurora
 format_git_clone_output -r https://github.com/eamonxg/luci-app-aurora-config
 
+# temp add nss package from VIKINGYFY
+checkout_partial_code -r https://github.com/VIKINGYFY/nss-packages nss-userspace-oss
+
+
 exit 0

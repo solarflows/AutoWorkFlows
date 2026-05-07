@@ -1,0 +1,13 @@
+﻿diff --git a/nss-userspace-oss/Makefile b/nss-userspace-oss/Makefile
+index dcac3ac..48fed50 100644
+--- a/nss-userspace-oss/Makefile
++++ b/nss-userspace-oss/Makefile
+@@ -7,7 +7,7 @@ PKG_SOURCE_URL:=https://git.codelinaro.org/clo/qsdk/oss/nss-userspace.git
+ PKG_SOURCE_PROTO:=git
+ PKG_SOURCE_DATE:=2025-09-26
+ PKG_SOURCE_VERSION:=e1883f14
+-PKG_MIRROR_HASH:=6a46e223bae575141518ee6bcbb21bbc36d2e007ff1be8d34e11eee360183f2a
++PKG_MIRROR_HASH:=f18699766c08117c784dbf58feaeb3fc682183e1c34e5e17c9859c47f5b11f5c
+ QSDK_VERSION:=13.1
+ PKG_VERSION:=$(QSDK_VERSION).$(subst -,.,$(PKG_SOURCE_DATE))~$(PKG_SOURCE_VERSION)
+ 
