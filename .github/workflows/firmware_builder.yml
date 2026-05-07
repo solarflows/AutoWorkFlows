@@ -404,7 +404,7 @@ jobs:
       # ---------- 手动触发失败时启动 tmate 调试会话 ----------
       - name: Tmate debug session
         if: failure() && github.event_name == 'workflow_dispatch'
-        uses: mxschmitt/action-tmate@v4
+        uses: mxschmitt/action-tmate@v3
         timeout-minutes: 30
 
       # ---------- 保存 SHA 记录 ----------
@@ -501,7 +501,7 @@ jobs:
             FEEDS_INFO='""'
             FEEDS_MD_JSON='""'
           fi
-          
+
           cat > build-info.json <<JSONEOF
           {
             "target": "${{ matrix.target }}",
