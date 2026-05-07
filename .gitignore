@@ -1,0 +1,12 @@
+﻿# BOM/encoding — seed files must be LF, no BOM
+*.seed text eol=lf working-tree-encoding=UTF-8
+
+# Build artifacts
+*.log
+*.tar.gz
+build-info.json
+.last_sha_*
+
+# OS
+.DS_Store
+Thumbs.db
