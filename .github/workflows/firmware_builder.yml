@@ -71,15 +71,18 @@ jobs:
         run: |
           TARGET_FILTER="${{ github.event.inputs.target || 'both' }}"
           JSON_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/targets.json"
-          echo "📋 加载构建目标: $JSON_FILE"
+
+          if [ ! -f "$JSON_FILE" ]; then
+            echo "❌ 配置文件不存在: $JSON_FILE"
+            exit 1
+          fi
+          echo "📋 加载构建目标: $JSON_FILE ($(jq '.targets | length' "$JSON_FILE") 个目标)"
           echo "🎯 过滤条件: $TARGET_FILTER"
 
-          # 先过滤目标，再为缺失字段补默认值
-          FILTERED=$(if [ "$TARGET_FILTER" = "both" ]; then
-            jq -c '.targets' "$JSON_FILE"
-          else
-            jq -c --arg t "$TARGET_FILTER" '[.targets[] | select(.target == $t)]' "$JSON_FILE"
-          fi)
+          FILTERED=$(jq -c --arg t "$TARGET_FILTER" '
+            if $t == "both" then .targets
+            else [.targets[] | select(.target == $t)] end
+          ' "$JSON_FILE")
 
           MATRIX=$(echo "$FILTERED" | jq -c 'map(. + {
             packages_branch:   (.packages_branch   // .target),
@@ -128,9 +131,9 @@ jobs:
           echo "hash=$HASH" >> $GITHUB_OUTPUT
           echo "🔧 工具链指纹: $HASH"
 
-      - name: Restore last built SHA from cache
+      - name: SHA cache
         id: cache_sha
-        uses: actions/cache/restore@v5
+        uses: actions/cache@v4
         with:
           path: .last_sha_${{ matrix.target }}
           key: last-sha-${{ matrix.target }}-${{ runner.os }}
@@ -153,6 +156,14 @@ jobs:
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "🟢 手动触发或其他事件，强制构建。"
           fi
+
+      - name: Show build environment
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          echo "🖥️ 构建环境:"
+          echo "  CPU: $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
+          echo "  内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
+          echo "  系统: $(uname -r)"
 
       - name: Free Disk Space
         if: steps.check.outputs.changed == 'true' && github.event.inputs.free_disk_space == 'true'
@@ -189,13 +200,6 @@ jobs:
           sudo timedatectl set-timezone "$TZ"
           echo "✅ 环境准备完成"
 
-      - name: Show build environment
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          echo "🖥️ 构建环境:"
-          echo "  CPU: $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
-          echo "  内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
-          echo "  系统: $(uname -r)"
 
       # ---------- 构建缓存（工具链 + ccache）----------
       - name: Toolchain cache
@@ -244,39 +248,45 @@ jobs:
 
       - name: Refresh cache stamps
         if: steps.check.outputs.changed == 'true'
+        id: cache-refresh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TOOLCHAIN_HIT="${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}"
-          CCACHE_HIT="${{ steps.cache-cc.outputs.cache-hit }}${{ steps.cache-cc-rebuild.outputs.cache-hit }}"
+          FORCE="${{ github.event.inputs.force_rebuild }}"
 
-          if [ "$TOOLCHAIN_HIT" == "true" ]; then
+          # ====== 强制重建时预清空旧缓存（用户明确要求）======
+          if [ "$FORCE" == "true" ]; then
+            echo "🧹 强制重建：清空所有旧缓存..."
+            for PREFIX in "last-sha-${{ matrix.target }}-" "immwrt-toolchain-${{ matrix.target }}-" "immwrt-ccache-${{ matrix.target }}-"; do
+              CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "$PREFIX" --limit 100 | cut -f 1)
+              for CACHE_KEY in $CACHE_LIST; do
+                gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
+              done
+            done
+            echo "✅ 旧缓存已清空。"
+          fi
+
+          # ====== 工具链：检测 staging_dir 是否有 stamp 目录 ======
+          TOOLCHAIN_RESTORED="false"
+          if [ "$FORCE" != "true" ] && [ -d "openwrt/staging_dir" ] && [ "$(find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | head -1)" ]; then
             find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | while read -r d; do
               find "$d" -type f -exec touch {} +
             done
             mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
-            echo "✅ 工具链缓存命中，stamp 已刷新！"
-          elif [ "$TOOLCHAIN_HIT" == "false" ]; then
-            echo "⏭️ 工具链缓存未命中，将全量编译。"
-            echo "🧹 清理旧工具链缓存..."
-            CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 | cut -f 1)
-            for CACHE_KEY in $CACHE_LIST; do
-              gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
-            done
-            echo "✅ 旧工具链缓存已清理。"
+            TOOLCHAIN_RESTORED="true"
+            echo "✅ 工具链缓存已恢复，stamp 已刷新！"
+          else
+            echo "⏭️ 工具链缓存未恢复，将全量编译。"
           fi
+          echo "toolchain_restored=${TOOLCHAIN_RESTORED}" >> $GITHUB_OUTPUT
 
-          if [ "$CCACHE_HIT" == "true" ]; then
-            echo "✅ ccache 缓存命中！"
-          elif [ "$CCACHE_HIT" == "false" ]; then
-            echo "✅ ccache 缓存已恢复（restore-keys 匹配），正在更新..."
-            echo "🧹 清理旧 ccache 缓存..."
-            CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 | cut -f 1)
-            for CACHE_KEY in $CACHE_LIST; do
-              gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
-            done
-            echo "✅ 旧 ccache 缓存已清理。"
+          # ====== ccache：检测 .ccache 目录是否有文件 ======
+          CCACHE_RESTORED="false"
+          if [ "$FORCE" != "true" ] && [ -d "openwrt/.ccache" ] && [ "$(find openwrt/.ccache -type f 2>/dev/null | head -1)" ]; then
+            CCACHE_RESTORED="true"
+            echo "✅ ccache 已恢复（来自上次构建）"
           fi
+          echo "ccache_restored=${CCACHE_RESTORED}" >> $GITHUB_OUTPUT
         continue-on-error: true
 
       # ---------- 构建 ----------
@@ -322,8 +332,11 @@ jobs:
           head -30 .config
           echo "📋 ======== 种子配置尾部 10 行 ========"
           tail -10 .config
-          echo "🔧 运行 make defconfig ..."
-          make defconfig
+          echo "🔧 运行 make defconfig (超时 5 分钟)..."
+          timeout 300 make defconfig || {
+            echo "❌ make defconfig 超时或失败，请检查 .config 语法"
+            exit 1
+          }
           echo "📋 ======== defconfig 后 .config 前 50 行 ========"
           head -50 .config
           echo "📋 ======== defconfig 后 .config 尾部 20 行 ========"
@@ -381,7 +394,7 @@ jobs:
       # ---------- 上传构建失败日志 ----------
       - name: Upload build log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-build-log
           path: openwrt/build.log
@@ -391,7 +404,7 @@ jobs:
       # ---------- 手动触发失败时启动 tmate 调试会话 ----------
       - name: Tmate debug session
         if: failure() && github.event_name == 'workflow_dispatch'
-        uses: mxschmitt/action-tmate@v3
+        uses: mxschmitt/action-tmate@v4
         timeout-minutes: 30
 
       # ---------- 保存 SHA 记录 ----------
@@ -400,12 +413,39 @@ jobs:
         run: |
           echo "${{ steps.current_sha.outputs.sha }}" > .last_sha_${{ matrix.target }}
 
-      - name: Cache last SHA
+      # ---------- 清理旧缓存（仅在构建成功后，失败时保留旧缓存作为 fallback）----------
+      - name: Cleanup old caches
         if: steps.check.outputs.changed == 'true' && success()
-        uses: actions/cache/save@v5
-        with:
-          path: .last_sha_${{ matrix.target }}
-          key: last-sha-${{ matrix.target }}-${{ runner.os }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TC_EXACT_HIT="${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}"
+          echo "🧹 清理旧缓存..."
+
+          # SHA：静态 key，始终删除（允许 post-job 写入新值）
+          SHA_LIST=$(gh cache list --repo "${{ github.repository }}" --key "last-sha-${{ matrix.target }}-" --limit 100 | cut -f 1)
+          for CACHE_KEY in $SHA_LIST; do
+            gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
+          done
+
+          # 工具链：仅在 exact key 未命中时删除（此时 post-job 会写入新 key）
+          if [ "$TC_EXACT_HIT" != "true" ]; then
+            TC_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 | cut -f 1)
+            for CACHE_KEY in $TC_LIST; do
+              gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
+            done
+            echo "✅ 旧工具链缓存已清理。"
+          else
+            echo "ℹ️ 工具链 exact key 命中，缓存不可变，无需清理。"
+          fi
+
+          # ccache：始终删除（run_id 唯一，每次构建均写入新 key）
+          CC_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 | cut -f 1)
+          for CACHE_KEY in $CC_LIST; do
+            gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
+          done
+          echo "✅ 旧 ccache 缓存已清理。"
+        continue-on-error: true
 
       # ---------- 打包产物 ----------
       - name: Prepare artifacts
@@ -475,8 +515,8 @@ jobs:
             "feeds_md": ${FEEDS_MD_JSON},
             "duration_sec": "${{ steps.build.outputs.duration }}",
             "duration_fmt": "${{ steps.build.outputs.duration_fmt }}",
-            "toolchain_hit": "${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}",
-            "ccache_hit": "${{ steps.cache-cc.outputs.cache-hit }}${{ steps.cache-cc-rebuild.outputs.cache-hit }}",
+            "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored }}",
+            "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored }}",
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
             "release_tag_prefix": "${{ matrix.release_tag_prefix }}",
@@ -486,7 +526,7 @@ jobs:
 
       - name: Upload firmware artifact
         if: steps.check.outputs.changed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-release
           path: openwrt/${{ matrix.target }}-release.tar.gz
@@ -494,7 +534,7 @@ jobs:
 
       - name: Upload passwall artifact
         if: steps.check.outputs.changed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-passwall
           path: openwrt/release/passwall
@@ -503,7 +543,7 @@ jobs:
 
       - name: Upload build info artifact
         if: steps.check.outputs.changed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-build-info
           path: build-info.json
@@ -520,7 +560,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: '*'
