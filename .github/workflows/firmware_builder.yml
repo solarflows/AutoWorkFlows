@@ -175,27 +175,27 @@ jobs:
           path: openwrt
           fetch-depth: 0
 
-      # ---------- 变化检测 ----------
-      - name: Get current commit SHA
+      # ───────── 变化检测 ─────────
+      - name: 🔍 Get source commit SHA
         id: current_sha
         run: echo "sha=$(git -C openwrt rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-      # ---------- 计算工具链指纹（仅基于 tools/ 和 toolchain/ 目录的变更）----------
-      - name: Compute toolchain fingerprint
+      # ───────── 计算工具链指纹（仅基于 tools/ 和 toolchain/ 目录的变更）─────────
+      - name: 🔧 Compute toolchain fingerprint
         id: toolchain_hash
         run: |
           HASH=$(git -C openwrt log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
           echo "hash=$HASH" >> $GITHUB_OUTPUT
           echo "🔧 工具链指纹: $HASH"
 
-      - name: SHA cache
+      - name: 💾 Last-SHA cache
         id: cache_sha
         uses: actions/cache@v5
         with:
           path: .last_sha_${{ matrix.target }}
           key: last-sha-${{ matrix.target }}-${{ runner.os }}
 
-      - name: Check if source changed
+      - name: 🕵️ Detect source changes
         id: check
         run: |
           CURRENT="${{ steps.current_sha.outputs.sha }}"
@@ -204,25 +204,25 @@ jobs:
           if [ "${{ github.event_name }}" = "schedule" ]; then
             if [ "$CURRENT" != "$LAST" ]; then
               echo "changed=true" >> $GITHUB_OUTPUT
-              echo "🔵 定时触发且源码有更新，继续构建。"
+              echo "🔵 定时触发 · 源码有更新 → 继续构建"
             else
               echo "changed=false" >> $GITHUB_OUTPUT
-              echo "⏭️ 定时触发但源码无变化，跳过构建。"
+              echo "⏭️ 定时触发 · 源码无变化 → 跳过构建"
             fi
           else
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "🟢 手动触发或其他事件，强制构建。"
+            echo "🟢 手动触发 → 强制构建"
           fi
 
-      - name: Show build environment
+      - name: 🖥️ Show build environment
         if: steps.check.outputs.changed == 'true'
         run: |
-          echo "🖥️ 构建环境:"
-          echo "  CPU: $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
-          echo "  内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
-          echo "  系统: $(uname -r)"
+          echo "🖥️ 构建环境"
+          echo "  🧠 CPU : $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
+          echo "  💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
+          echo "  🐧 系统: $(uname -r)"
 
-      - name: Free Disk Space
+      - name: 🧹 Free Disk Space
         if: steps.check.outputs.changed == 'true' && github.event.inputs.free_disk_space == 'true'
         uses: jlumbroso/free-disk-space@main
         with:
@@ -233,13 +233,13 @@ jobs:
           large-packages: true
           swap-storage: true
 
-      - name: Environment Prepare
+      - name: 📦 1. Prepare Environment
         if: steps.check.outputs.changed == 'true'
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           echo "╔══════════════════════════════════════╗"
-          echo "║  1. Environment Prepare             ║"
+          echo "║  📦 1. Prepare Environment           ║"
           echo "╚══════════════════════════════════════╝"
           echo "🧹 清理无用软件包..."
           sudo -E apt -y purge firefox 2>/dev/null || true
@@ -258,8 +258,8 @@ jobs:
           echo "✅ 环境准备完成"
 
 
-      # ---------- 构建缓存（工具链 + ccache）----------
-      - name: Toolchain cache
+      # ───────── 构建缓存（工具链 + ccache）─────────
+      - name: 🔧 Restore toolchain cache
         if: steps.check.outputs.changed == 'true' && github.event.inputs.force_rebuild != 'true'
         id: cache-tc
         uses: actions/cache@v5
@@ -271,7 +271,7 @@ jobs:
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
 
-      - name: Toolchain cache (force rebuild)
+      - name: 🔧 Restore toolchain cache [force]
         if: steps.check.outputs.changed == 'true' && github.event.inputs.force_rebuild == 'true'
         id: cache-tc-rebuild
         uses: actions/cache@v5
@@ -283,7 +283,7 @@ jobs:
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
 
-      - name: Ccache cache
+      - name: ⚡ Restore ccache
         if: steps.check.outputs.changed == 'true' && github.event.inputs.use_ccache != 'false' && github.event.inputs.force_rebuild != 'true'
         id: cache-cc
         uses: actions/cache@v5
@@ -293,7 +293,7 @@ jobs:
             immwrt-ccache-${{ matrix.target }}-
           path: openwrt/.ccache
 
-      - name: Ccache cache (force rebuild)
+      - name: ⚡ Restore ccache [force]
         if: steps.check.outputs.changed == 'true' && github.event.inputs.use_ccache != 'false' && github.event.inputs.force_rebuild == 'true'
         id: cache-cc-rebuild
         uses: actions/cache@v5
@@ -303,7 +303,7 @@ jobs:
             immwrt-ccache-${{ matrix.target }}-${{ github.run_id }}-rebuild-
           path: openwrt/.ccache
 
-      - name: Refresh cache stamps
+      - name: 📊 Refresh cache stamps & report
         if: steps.check.outputs.changed == 'true'
         id: cache-refresh
         env:
@@ -311,9 +311,9 @@ jobs:
         run: |
           FORCE="${{ github.event.inputs.force_rebuild }}"
 
-          # ====== 强制重建时预清空旧缓存（用户明确要求）======
+          # ====== 强制重建：预清空旧缓存 ======
           if [ "$FORCE" == "true" ]; then
-            echo "🧹 强制重建：清空所有旧缓存..."
+            echo "🧹 强制重建 · 清空所有旧缓存..."
             for PREFIX in "last-sha-${{ matrix.target }}-" "immwrt-toolchain-${{ matrix.target }}-" "immwrt-ccache-${{ matrix.target }}-"; do
               CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "$PREFIX" --limit 100 | cut -f 1)
               for CACHE_KEY in $CACHE_LIST; do
@@ -323,7 +323,7 @@ jobs:
             echo "✅ 旧缓存已清空。"
           fi
 
-          # ====== 工具链：检测 staging_dir 是否有 stamp 目录 ======
+          # ====== 工具链：检测 staging_dir ======
           TOOLCHAIN_RESTORED="false"
           if [ "$FORCE" != "true" ] && [ -d "openwrt/staging_dir" ] && [ "$(find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | head -1)" ]; then
             find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | while read -r d; do
@@ -331,69 +331,69 @@ jobs:
             done
             mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
             TOOLCHAIN_RESTORED="true"
-            echo "✅ 工具链缓存已恢复，stamp 已刷新！"
+            echo "🔧 工具链缓存已恢复 · stamp 已刷新"
           else
-            echo "⏭️ 工具链缓存未恢复，将全量编译。"
+            echo "ℹ️ 工具链缓存未命中 · 将全量编译"
           fi
           echo "toolchain_restored=${TOOLCHAIN_RESTORED}" >> $GITHUB_OUTPUT
 
-          # ====== ccache：检测 .ccache 目录是否有文件 ======
+          # ====== ccache：检测 .ccache 目录 ======
           CCACHE_RESTORED="false"
           if [ "$FORCE" != "true" ] && [ -d "openwrt/.ccache" ] && [ "$(find openwrt/.ccache -type f 2>/dev/null | head -1)" ]; then
             CCACHE_RESTORED="true"
-            echo "✅ ccache 已恢复（来自上次构建）"
+            echo "⚡ ccache 已恢复（来自上次构建）"
           fi
           echo "ccache_restored=${CCACHE_RESTORED}" >> $GITHUB_OUTPUT
 
           # ====== 缓存命中汇总 ======
           echo ""
           echo "╔══════════════════════════════════════╗"
-          echo "║  缓存命中状态                        ║"
+          echo "║  📊 缓存命中状态                     ║"
           echo "╚══════════════════════════════════════╝"
 
           # 工具链：区分 exact key 命中 vs restore-key 模糊恢复
           TC_EXACT="${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}"
           if [ "$TOOLCHAIN_RESTORED" = "true" ]; then
             if [ "$TC_EXACT" = "true" ]; then
-              echo "  工具链 (staging_dir): ✅ 精确命中 (exact key)"
+              echo "  🔧 工具链 (staging_dir): ✅ 精确命中 (exact key)"
             else
-              echo "  工具链 (staging_dir): ♻️ 模糊恢复 (restore-key)"
+              echo "  🔧 工具链 (staging_dir): ♻️ 模糊恢复 (restore-key)"
             fi
           else
-            echo "  工具链 (staging_dir): 🔨 重新编译"
+            echo "  🔧 工具链 (staging_dir): 🔨 重新编译"
           fi
 
-          # ccache：仅展示命中/未命中（始终使用 restore-key 模糊匹配）
+          # ccache：仅展示命中/未命中
           CC_ICON=$([ "$CCACHE_RESTORED" = "true" ] && echo "✅ 命中" || echo "🔄 冷启动")
-          echo "  ccache (.ccache):      ${CC_ICON}"
+          echo "  ⚡ ccache (.ccache):      ${CC_ICON}"
 
           # 输出工具链精确命中标记供 release note 使用
           echo "toolchain_exact=${TC_EXACT}" >> $GITHUB_OUTPUT
         continue-on-error: true
 
-      # ---------- 构建 ----------
-      - name: Update feeds
+      # ───────── 构建 ─────────
+      - name: 📥 2. Update Feeds & Packages
         if: steps.check.outputs.changed == 'true'
         id: feeds
         run: |
           set -euo pipefail
-          echo "📦 克隆 openwrt-packages ..."
+          echo "📦 克隆 openwrt-packages (${{ matrix.packages_branch }}) ..."
           cd openwrt
           git clone --depth 1 https://github.com/solarflows/openwrt-packages.git package/solarflows -b ${{ matrix.packages_branch }}
           PKG_SHA=$(git -C package/solarflows rev-parse --short HEAD)
           echo "packages_sha=${PKG_SHA}" >> $GITHUB_OUTPUT
-          echo "   openwrt-packages: ${PKG_SHA}"
+          echo "   📋 openwrt-packages @ ${PKG_SHA}"
 
-          echo "📦 更新 feeds ..."
+          echo "📥 更新 feeds ..."
           ./scripts/feeds update -a && ./scripts/feeds install -a
           echo "✅ feeds 准备完成"
 
-      - name: Apply Configuration
+      - name: ⚙️ 3. Apply Configuration
         if: steps.check.outputs.changed == 'true'
         run: |
           set -euo pipefail
           echo "╔══════════════════════════════════════╗"
-          echo "║  2. Apply Configuration             ║"
+          echo "║  ⚙️ 3. Apply Configuration            ║"
           echo "╚══════════════════════════════════════╝"
           cd openwrt
           SEED_DIR="../AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}"
@@ -424,12 +424,12 @@ jobs:
           echo "📋 ======== defconfig 后 .config 尾部 20 行 ========"
           tail -20 .config
 
-      - name: Download packages
+      - name: 📥 4. Download Source Packages
         if: steps.check.outputs.changed == 'true'
         run: |
           set -euo pipefail
           echo "╔══════════════════════════════════════╗"
-          echo "║  3. Download Packages               ║"
+          echo "║  📥 4. Download Source Packages      ║"
           echo "╚══════════════════════════════════════╝"
           cd openwrt
           echo "📥 下载源码包 (并行 $(nproc) 线程)..."
@@ -438,13 +438,13 @@ jobs:
           find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
           echo "✅ 下载完成"
 
-      - name: Build Firmware
+      - name: 🔨 5. Build Firmware
         if: steps.check.outputs.changed == 'true'
         id: build
         run: |
           set -euo pipefail
           echo "╔══════════════════════════════════════╗"
-          echo "║  4. Build Firmware                  ║"
+          echo "║  🔨 5. Build Firmware                ║"
           echo "╚══════════════════════════════════════╝"
           START_TIME=$(date +%s)
           cd openwrt
@@ -455,14 +455,14 @@ jobs:
           set -o pipefail
 
           if [ "$MAKE_EXIT" -ne 0 ]; then
-            echo "⚠️ 有编译错误（退出码: $MAKE_EXIT），尝试更新 feed 后重试..."
+            echo "⚠️ 编译有错误（退出码: $MAKE_EXIT）→ 更新 feed 后单线程重试..."
             echo "📥 更新 feeds ..."
             ./scripts/feeds update -a && ./scripts/feeds install -a
             echo "📥 更新 openwrt-packages ..."
             git -C package/solarflows pull origin ${{ matrix.packages_branch }} 2>/dev/null || true
-            echo "🔨 单线程重试失败目标..."
+            echo "🔨 单线程重试失败目标 (V=sc)..."
             make -j1 V=sc 2>&1 | tee -a build.log || {
-              echo "💥 构建彻底失败，请查看 build.log 分析原因。"
+              echo "💥 构建彻底失败 · 请查看 build.log"
               exit 1
             }
           fi
@@ -473,8 +473,8 @@ jobs:
           echo "duration_fmt=${DURATION_FMT}" >> $GITHUB_OUTPUT
           echo "⏱️ 编译耗时: ${DURATION_FMT}"
 
-      # ---------- 上传构建失败日志 ----------
-      - name: Upload build log on failure
+      # ───────── 失败处理 ─────────
+      - name: 📤 Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
@@ -483,20 +483,20 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # ---------- 手动触发失败时启动 tmate 调试会话 ----------
-      - name: Tmate debug session
+      # ───────── 手动触发失败时启动 tmate 调试会话 ─────────
+      - name: 🖥️ Tmate debug session
         if: failure() && github.event_name == 'workflow_dispatch'
         uses: mxschmitt/action-tmate@v3
         timeout-minutes: 30
 
-      # ---------- 保存 SHA 记录 ----------
-      - name: Save current SHA for next run
+      # ───────── 保存 SHA 记录 ─────────
+      - name: 💾 Save source SHA
         if: steps.check.outputs.changed == 'true' && success()
         run: |
           echo "${{ steps.current_sha.outputs.sha }}" > .last_sha_${{ matrix.target }}
 
-      # ---------- 清理旧缓存（仅在构建成功后，失败时保留旧缓存作为 fallback）----------
-      - name: Cleanup old caches
+      # ───────── 清理旧缓存（失败时保留缓存作为 fallback）─────────
+      - name: 🧹 Cleanup stale caches
         if: steps.check.outputs.changed == 'true' && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -516,9 +516,9 @@ jobs:
             for CACHE_KEY in $TC_LIST; do
               gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
             done
-            echo "✅ 旧工具链缓存已清理。"
+            echo "🧹 旧工具链缓存已清理"
           else
-            echo "ℹ️ 工具链 exact key 命中，缓存不可变，无需清理。"
+            echo "ℹ️ 工具链 exact key 命中 · 缓存不可变，跳过清理"
           fi
 
           # ccache：始终删除（run_id 唯一，每次构建均写入新 key）
@@ -526,15 +526,15 @@ jobs:
           for CACHE_KEY in $CC_LIST; do
             gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
           done
-          echo "✅ 旧 ccache 缓存已清理。"
+          echo "🧹 旧 ccache 缓存已清理"
         continue-on-error: true
 
-      # ---------- 打包产物 ----------
-      - name: Prepare artifacts
+      # ───────── 打包产物 ─────────
+      - name: 📦 6. Package Artifacts
         if: steps.check.outputs.changed == 'true'
         run: |
           echo "╔══════════════════════════════════════╗"
-          echo "║  5. Package Artifacts               ║"
+          echo "║  📦 6. Package Artifacts             ║"
           echo "╚══════════════════════════════════════╝"
           cd openwrt
           mkdir -p release/firmware
@@ -560,8 +560,8 @@ jobs:
           echo "  Passwall: $(find release/passwall -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/passwall 2>/dev/null | cut -f1)"
           cd release && tar czf ../${{ matrix.target }}-release.tar.gz .
 
-      # ---------- 构建信息 JSON（独立 artifact） ----------
-      - name: Generate build info artifact
+      # ───────── 构建信息 JSON（独立 artifact）─────────
+      - name: 📋 Generate build info
         if: steps.check.outputs.changed == 'true'
         run: |
           NOW=$(date +'%Y-%m-%d %H:%M:%S')
@@ -607,7 +607,7 @@ jobs:
           }
           JSONEOF
 
-      - name: Upload firmware artifact
+      - name: 📤 Upload firmware artifact
         if: steps.check.outputs.changed == 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -615,7 +615,7 @@ jobs:
           path: openwrt/${{ matrix.target }}-release.tar.gz
           retention-days: 7
 
-      - name: Upload passwall artifact
+      - name: 📤 Upload passwall artifact
         if: steps.check.outputs.changed == 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -624,7 +624,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      - name: Upload build info artifact
+      - name: 📤 Upload build info artifact
         if: steps.check.outputs.changed == 'true'
         uses: actions/upload-artifact@v7
         with:
