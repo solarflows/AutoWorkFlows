@@ -101,10 +101,16 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           echo "🚀 触发 OpenWRT_Packages_Updater..."
-          RUN_ID=$(gh workflow run OpenWRT_Packages_Updater.yml \
+          gh workflow run OpenWRT_Packages_Updater.yml \
             --repo ${{ github.repository }} \
-            --ref ${{ github.ref_name }} \
-            --json id --jq '.id')
+            --ref ${{ github.ref_name }}
+          sleep 5
+          RUN_ID=$(gh run list \
+            --repo ${{ github.repository }} \
+            --workflow OpenWRT_Packages_Updater.yml \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
           echo "updater_id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "📋 Run ID: $RUN_ID"
 
@@ -114,10 +120,16 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           echo "🚀 触发 Sync_Push..."
-          RUN_ID=$(gh workflow run Sync_Push.yml \
+          gh workflow run Sync_Push.yml \
             --repo ${{ github.repository }} \
-            --ref ${{ github.ref_name }} \
-            --json id --jq '.id')
+            --ref ${{ github.ref_name }}
+          sleep 5
+          RUN_ID=$(gh run list \
+            --repo ${{ github.repository }} \
+            --workflow Sync_Push.yml \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
           echo "sync_id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "📋 Run ID: $RUN_ID"
 
