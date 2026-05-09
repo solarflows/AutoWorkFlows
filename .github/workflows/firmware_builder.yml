@@ -344,6 +344,31 @@ jobs:
             echo "✅ ccache 已恢复（来自上次构建）"
           fi
           echo "ccache_restored=${CCACHE_RESTORED}" >> $GITHUB_OUTPUT
+
+          # ====== 缓存命中汇总 ======
+          echo ""
+          echo "╔══════════════════════════════════════╗"
+          echo "║  缓存命中状态                        ║"
+          echo "╚══════════════════════════════════════╝"
+
+          # 工具链：区分 exact key 命中 vs restore-key 模糊恢复
+          TC_EXACT="${{ steps.cache-tc.outputs.cache-hit }}${{ steps.cache-tc-rebuild.outputs.cache-hit }}"
+          if [ "$TOOLCHAIN_RESTORED" = "true" ]; then
+            if [ "$TC_EXACT" = "true" ]; then
+              echo "  工具链 (staging_dir): ✅ 精确命中 (exact key)"
+            else
+              echo "  工具链 (staging_dir): ♻️ 模糊恢复 (restore-key)"
+            fi
+          else
+            echo "  工具链 (staging_dir): 🔨 重新编译"
+          fi
+
+          # ccache：仅展示命中/未命中（始终使用 restore-key 模糊匹配）
+          CC_ICON=$([ "$CCACHE_RESTORED" = "true" ] && echo "✅ 命中" || echo "🔄 冷启动")
+          echo "  ccache (.ccache):      ${CC_ICON}"
+
+          # 输出工具链精确命中标记供 release note 使用
+          echo "toolchain_exact=${TC_EXACT}" >> $GITHUB_OUTPUT
         continue-on-error: true
 
       # ---------- 构建 ----------
@@ -573,6 +598,7 @@ jobs:
             "duration_sec": "${{ steps.build.outputs.duration }}",
             "duration_fmt": "${{ steps.build.outputs.duration_fmt }}",
             "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored }}",
+            "toolchain_exact": "${{ steps.cache-refresh.outputs.toolchain_exact }}",
             "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored }}",
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
@@ -646,7 +672,7 @@ jobs:
             # -------- 从 build-info.json 读取所有参数 --------
             local TARGET_NAME CONFIG SOURCE_REPO SOURCE_REF SHORT_SHA
             local PKG_SHA FEEDS_MD DURATION_FMT
-            local TOOLCHAIN_HIT CCACHE_HIT TIMESTAMP
+            local TOOLCHAIN_HIT TOOLCHAIN_EXACT CCACHE_HIT TIMESTAMP
             local RELEASE_REPO PASSWALL_TAG TAG_PREFIX
             TARGET_NAME=$(jq -r '.target'              "$INFO_FILE")
             CONFIG=$(jq -r '.config'                   "$INFO_FILE")
@@ -657,6 +683,7 @@ jobs:
             FEEDS_MD=$(jq -r '.feeds_md'               "$INFO_FILE")
             DURATION_FMT=$(jq -r '.duration_fmt'        "$INFO_FILE")
             TOOLCHAIN_HIT=$(jq -r '.toolchain_hit'      "$INFO_FILE")
+            TOOLCHAIN_EXACT=$(jq -r '.toolchain_exact'   "$INFO_FILE")
             CCACHE_HIT=$(jq -r '.ccache_hit'             "$INFO_FILE")
             TIMESTAMP=$(jq -r '.timestamp'             "$INFO_FILE")
             RELEASE_REPO=$(jq -r '.release_repo'        "$INFO_FILE")
@@ -664,8 +691,16 @@ jobs:
             TAG_PREFIX=$(jq -r '.release_tag_prefix'    "$INFO_FILE")
 
             # -------- 格式化图标 --------
-            TC_HIT_ICON=$([ "$TOOLCHAIN_HIT" = "true" ] && echo "✅" || echo "🔄")
-            CC_HIT_ICON=$([ "$CCACHE_HIT" = "true" ] && echo "✅" || echo "🔄")
+            if [ "$TOOLCHAIN_HIT" = "true" ]; then
+              if [ "$TOOLCHAIN_EXACT" = "true" ]; then
+                TC_HIT_LABEL="✅ 精确命中"
+              else
+                TC_HIT_LABEL="♻️ 模糊恢复"
+              fi
+            else
+              TC_HIT_LABEL="🔨 重编"
+            fi
+            CC_HIT_LABEL=$([ "$CCACHE_HIT" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
 
             # -------- 生成版本 Tag --------
             local DATE_TAG TAG TITLE
@@ -700,7 +735,7 @@ jobs:
           ### 缓存状态
           | 工具链 | ccache |
           |--------|--------|
-          | ${TC_HIT_ICON} ${TOOLCHAIN_HIT} | ${CC_HIT_ICON} ${CCACHE_HIT} |
+          | ${TC_HIT_LABEL} | ${CC_HIT_LABEL} |
           RELEOF
 
               # 追加 feeds 版本表（从 feeds.buildinfo 提取）
