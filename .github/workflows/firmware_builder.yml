@@ -94,6 +94,51 @@ jobs:
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           echo "✅ 矩阵: $MATRIX"
 
+      # -------- 触发上游同步工作流 --------
+      - name: Trigger OpenWRT_Packages_Updater
+        id: trigger-updater
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "🚀 触发 OpenWRT_Packages_Updater..."
+          RUN_ID=$(gh workflow run OpenWRT_Packages_Updater.yml \
+            --repo ${{ github.repository }} \
+            --ref ${{ github.ref_name }} \
+            --json id --jq '.id')
+          echo "updater_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "📋 Run ID: $RUN_ID"
+
+      - name: Trigger Sync_Push
+        id: trigger-sync
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "🚀 触发 Sync_Push..."
+          RUN_ID=$(gh workflow run Sync_Push.yml \
+            --repo ${{ github.repository }} \
+            --ref ${{ github.ref_name }} \
+            --json id --jq '.id')
+          echo "sync_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "📋 Run ID: $RUN_ID"
+
+      - name: Wait for OpenWRT_Packages_Updater
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "⏳ 等待 OpenWRT_Packages_Updater 完成..."
+          gh run watch ${{ steps.trigger-updater.outputs.updater_id }} \
+            --repo ${{ github.repository }}
+          echo "✅ OpenWRT_Packages_Updater 完成"
+
+      - name: Wait for Sync_Push
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "⏳ 等待 Sync_Push 完成..."
+          gh run watch ${{ steps.trigger-sync.outputs.sync_id }} \
+            --repo ${{ github.repository }}
+          echo "✅ Sync_Push 完成"
+
   # ========== 构建任务（矩阵并行） ==========
   build:
     name: Build ${{ matrix.target }}
