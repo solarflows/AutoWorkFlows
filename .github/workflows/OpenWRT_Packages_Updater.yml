@@ -56,12 +56,22 @@ jobs:
           bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/modify.sh
 
-          # 应用补丁
-          find "$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches/${{matrix.target}}" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          # 应用补丁（temp* 前缀的补丁失败仅警告，不中断）
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches/${{matrix.target}}"
+          find "$PATCH_DIR" -type f -name '*.patch' ! -name 'temp*' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%' | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          find "$PATCH_DIR" -type f -name 'temp*.patch' -print0 | sort -z | while IFS= read -r -d '' f; do
+            echo "应用临时补丁: $f"
+            patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f" || echo "::warning::临时补丁应用失败 (忽略): $f"
+          done
 
-          # 应用全局补丁
+          # 应用全局补丁（temp* 前缀的补丁失败仅警告，不中断）
           rm -rf v2ray-geodata >/dev/null 2>&1
-          find "$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches" -maxdepth 1 -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches"
+          find "$PATCH_DIR" -maxdepth 1 -type f -name '*.patch' ! -name 'temp*' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%' | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
+          find "$PATCH_DIR" -maxdepth 1 -type f -name 'temp*.patch' -print0 | sort -z | while IFS= read -r -d '' f; do
+            echo "应用临时补丁: $f"
+            patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f" || echo "::warning::临时补丁应用失败 (忽略): $f"
+          done
 
           # # 下载修改补丁
           # curl -o "$GITHUB_WORKSPACE/.github/diy/openwrt-packages/download_patches/${{matrix.target}}/luci-smartdns-dev.patch" --create-dirs "https://github.com/xiaorouji/openwrt-passwall/compare/main...luci-smartdns-dev.patch"

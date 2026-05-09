@@ -74,9 +74,13 @@ jobs:
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
-                  echo "::error::应用补丁时出错: $patch_file"
-                  patch_failed=true
-                  overall_patch_failed=true
+                  if [[ "$(basename "$patch_file")" == temp* ]]; then
+                    echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                  else
+                    echo "::error::应用补丁时出错: $patch_file"
+                    patch_failed=true
+                    overall_patch_failed=true
+                  fi
                 fi
               done < <(find "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" -type f -name '*.patch' -print0)
               if [ "$patch_failed" = true ]; then
@@ -162,9 +166,13 @@ jobs:
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
-                  echo "::error::应用补丁时出错: $patch_file"
-                  patch_failed=true
-                  overall_patch_failed=true
+                  if [[ "$(basename "$patch_file")" == temp* ]]; then
+                    echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                  else
+                    echo "::error::应用补丁时出错: $patch_file"
+                    patch_failed=true
+                    overall_patch_failed=true
+                  fi
                 fi
               done < <(find "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" -type f -name '*.patch' -print0)
               if [ "$patch_failed" = true ]; then
@@ -198,8 +206,12 @@ jobs:
                 git add .
                 git commit -m "Applying $(basename "$patch_file")."
               else
-                echo "::error::应用补丁时出错: $patch_file"
-                patch_failed=true
+                if [[ "$(basename "$patch_file")" == temp* ]]; then
+                  echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                else
+                  echo "::error::应用补丁时出错: $patch_file"
+                  patch_failed=true
+                fi
               fi
             done < <(find "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" -type f -name '*.patch' -print0)
           fi
@@ -270,9 +282,13 @@ jobs:
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
-                  echo "::error::应用补丁时出错: $patch_file"
-                  patch_failed=true
-                  overall_patch_failed=true
+                  if [[ "$(basename "$patch_file")" == temp* ]]; then
+                    echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                  else
+                    echo "::error::应用补丁时出错: $patch_file"
+                    patch_failed=true
+                    overall_patch_failed=true
+                  fi
                 fi
               done < <(find "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" -type f -name '*.patch' -print0)
               if [ "$patch_failed" = true ]; then
@@ -307,8 +323,12 @@ jobs:
                 git add .
                 git commit -m "Applying $(basename "$patch_file")."
               else
-                echo "::error::应用补丁时出错: $patch_file"
-                patch_failed=true
+                if [[ "$(basename "$patch_file")" == temp* ]]; then
+                  echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                else
+                  echo "::error::应用补丁时出错: $patch_file"
+                  patch_failed=true
+                fi
               fi
             done < <(find "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" -type f -name '*.patch' -print0)
           fi
