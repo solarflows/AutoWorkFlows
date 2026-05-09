@@ -55,6 +55,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/temp_rep
 
+          overall_patch_failed=false
           for target in $TARGETS; do
             echo "Target: $target"
 
@@ -75,6 +76,7 @@ jobs:
                 else
                   echo "::error::应用补丁时出错: $patch_file"
                   patch_failed=true
+                  overall_patch_failed=true
                 fi
               done < <(find "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" -type f -name '*.patch' -print0)
               if [ "$patch_failed" = true ]; then
@@ -103,6 +105,7 @@ jobs:
             git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:$target
 
           done
+          if [ "$overall_patch_failed" = true ]; then exit 1; fi
 
   sync_luci:
     name: 同步 Luci 仓库
@@ -145,6 +148,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/temp_rep
 
+          overall_patch_failed=false
           for target in $TARGETS; do
             echo "Target: $target"
             git checkout -B $target $target/master
@@ -160,6 +164,7 @@ jobs:
                 else
                   echo "::error::应用补丁时出错: $patch_file"
                   patch_failed=true
+                  overall_patch_failed=true
                 fi
               done < <(find "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" -type f -name '*.patch' -print0)
               if [ "$patch_failed" = true ]; then
@@ -179,6 +184,7 @@ jobs:
               git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:$target
             fi
           done
+          if [ "$overall_patch_failed" = true ]; then exit 1; fi
 
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
@@ -207,6 +213,7 @@ jobs:
             git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:hanwckf
           else
             echo "::error::hanwckf 补丁应用失败，跳过推送。"
+            exit 1
           fi
 
   sync_packages:
@@ -249,6 +256,7 @@ jobs:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           cd $GITHUB_WORKSPACE/temp_rep
+          overall_patch_failed=false
           for target in $TARGETS; do
             echo "Target: $target"
             git checkout -B $target $target/master
@@ -264,6 +272,7 @@ jobs:
                 else
                   echo "::error::应用补丁时出错: $patch_file"
                   patch_failed=true
+                  overall_patch_failed=true
                 fi
               done < <(find "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" -type f -name '*.patch' -print0)
               if [ "$patch_failed" = true ]; then
@@ -284,6 +293,7 @@ jobs:
             fi
 
           done
+          if [ "$overall_patch_failed" = true ]; then exit 1; fi
 
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
@@ -312,6 +322,7 @@ jobs:
             git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:hanwckf
           else
             echo "::error::hanwckf 补丁应用失败，跳过推送。"
+            exit 1
           fi
 
   sync_and_tag:
