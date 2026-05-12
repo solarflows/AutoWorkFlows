@@ -38,6 +38,15 @@ on:
         required: false
         default: false
         type: boolean
+      enable_tmate:
+        description: '失败时启动 tmate 调试会话（auto=仅手动触发时启动）'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - 'auto'
+          - 'true'
+          - 'false'
   schedule:
     - cron: '12 4 * * 3,6'  # 每周三、六 UTC 4:12（北京时间 12:12，避开整点高峰）
 
@@ -139,7 +148,8 @@ jobs:
         run: |
           echo "⏳ 等待 OpenWRT_Packages_Updater 完成..."
           gh run watch ${{ steps.trigger-updater.outputs.updater_id }} \
-            --repo ${{ github.repository }}
+            --repo ${{ github.repository }} \
+            --exit-status
           echo "✅ OpenWRT_Packages_Updater 完成"
 
       - name: Wait for Sync_Push
@@ -148,7 +158,8 @@ jobs:
         run: |
           echo "⏳ 等待 Sync_Push 完成..."
           gh run watch ${{ steps.trigger-sync.outputs.sync_id }} \
-            --repo ${{ github.repository }}
+            --repo ${{ github.repository }} \
+            --exit-status
           echo "✅ Sync_Push 完成"
 
   # ========== 构建任务（矩阵并行） ==========
@@ -417,6 +428,8 @@ jobs:
             echo "❌ make defconfig 超时或失败，请检查 .config 语法"
             exit 1
           }
+          echo "📋 ======== defconfig 后 .config ========"
+          cat .config
 
       - name: 📥 4. Download Source Packages
         if: steps.check.outputs.changed == 'true'
@@ -450,10 +463,6 @@ jobs:
           MAKE_EXIT=${PIPESTATUS[0]}
           set -o pipefail
 
-          echo "📊 提取编译耗时数据..."
-          grep 'time:' build.log | awk -F'#' 'NF==4 && $1 ~ /^time: /' > build_time_clean.log || true
-          echo "   time: 记录数: $(wc -l < build_time_clean.log)"
-
           if [ "$MAKE_EXIT" -ne 0 ]; then
             echo "⚠️ 编译有错误（退出码: $MAKE_EXIT）→ 更新 feed 后单线程重试..."
             echo "📥 更新 feeds ..."
@@ -473,21 +482,32 @@ jobs:
           echo "duration_fmt=${DURATION_FMT}" >> $GITHUB_OUTPUT
           echo "⏱️ 编译耗时: ${DURATION_FMT}"
 
+      # ───────── 耗时提取（独立步骤，不受构建成败影响）─────────
+      - name: 📊 Extract Build Time Stats
+        if: always() && steps.check.outputs.changed == 'true'
+        run: |
+          echo "📊 提取编译耗时数据..."
+          cd openwrt
+          grep 'time:' build.log | awk -F'#' 'NF==4 && $1 ~ /^time: /' > build_time_clean.log || true
+          echo "   time: 记录数: $(wc -l < build_time_clean.log)"
+
       # ───────── 失败处理 ─────────
-      - name: 📤 Upload build logs on failure
+      - name: 📤 Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-build-log
-          path: |
-            openwrt/build.log
-            openwrt/build_time_clean.log
+          path: openwrt/build.log
           retention-days: 7
           if-no-files-found: ignore
 
       # ───────── 手动触发失败时启动 tmate 调试会话 ─────────
       - name: 🖥️ Tmate debug session
-        if: failure() && github.event_name == 'workflow_dispatch'
+        if: |
+          failure() && (
+            github.event.inputs.enable_tmate == 'true' ||
+            ((github.event.inputs.enable_tmate == 'auto' || github.event.inputs.enable_tmate == '') && github.event_name == 'workflow_dispatch')
+          )
         uses: mxschmitt/action-tmate@v3
         timeout-minutes: 30
 
@@ -591,7 +611,7 @@ jobs:
             FEEDS_MD_JSON='""'
           fi
 
-          cat > build-info.json <<JSONEOF
+          cat > build-info.json <<'JSONEOF'
           {
             "target": "${{ matrix.target }}",
             "config": "${{ matrix.config }}",
