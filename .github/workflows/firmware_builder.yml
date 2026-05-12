@@ -410,19 +410,13 @@ jobs:
           done > .config
           sed -i 's/\r$//; s/\xef\xbb\xbf//g' .config
           echo "✅ 已生成 .config ($(wc -l < .config) 行)"
-          echo "📋 ======== 种子配置前 30 行 ========"
-          head -30 .config
-          echo "📋 ======== 种子配置尾部 10 行 ========"
-          tail -10 .config
+          echo "📋 ======== 种子配置 (.config) ========"
+          cat .config
           echo "🔧 运行 make defconfig (超时 5 分钟)..."
           timeout 300 make defconfig || {
             echo "❌ make defconfig 超时或失败，请检查 .config 语法"
             exit 1
           }
-          echo "📋 ======== defconfig 后 .config 前 50 行 ========"
-          head -50 .config
-          echo "📋 ======== defconfig 后 .config 尾部 20 行 ========"
-          tail -20 .config
 
       - name: 📥 4. Download Source Packages
         if: steps.check.outputs.changed == 'true'
@@ -448,11 +442,17 @@ jobs:
           echo "╚══════════════════════════════════════╝"
           START_TIME=$(date +%s)
           cd openwrt
-          echo "🔨 开始编译 (并行 $(($(nproc) + 1)) 线程, -k 遇错不停止)..."
+          echo "🔨 开始编译 (并行 $(($(nproc) + 1)) 线程, -k 遇错不停止, V=s 计时)..."
           set +o pipefail
-          make -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
+          make -j$(($(nproc) + 1)) -k V=s 2>&1 | \
+            tee build.log | \
+            grep -E '(^time: |error|warning|Error|Warning)' || true
           MAKE_EXIT=${PIPESTATUS[0]}
           set -o pipefail
+
+          echo "📊 提取编译耗时数据..."
+          grep 'time:' build.log | awk -F'#' 'NF==4 && $1 ~ /^time: /' > build_time_clean.log || true
+          echo "   time: 记录数: $(wc -l < build_time_clean.log)"
 
           if [ "$MAKE_EXIT" -ne 0 ]; then
             echo "⚠️ 编译有错误（退出码: $MAKE_EXIT）→ 更新 feed 后单线程重试..."
@@ -474,12 +474,14 @@ jobs:
           echo "⏱️ 编译耗时: ${DURATION_FMT}"
 
       # ───────── 失败处理 ─────────
-      - name: 📤 Upload build log on failure
+      - name: 📤 Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-build-log
-          path: openwrt/build.log
+          path: |
+            openwrt/build.log
+            openwrt/build_time_clean.log
           retention-days: 7
           if-no-files-found: ignore
 
@@ -555,9 +557,14 @@ jobs:
           echo "📦 Passwall 包列表："
           ls -la release/passwall/ 2>/dev/null || echo "  (无 passwall 包)"
           echo ""
+          # 编译耗时日志（完整 build.log 仅在失败时上传，此处只保留耗时摘要）
+          mkdir -p release/build-logs
+          cp build_time_clean.log release/build-logs/ 2>/dev/null || true
+          echo ""
           echo "📊 产物汇总："
           echo "  固件: $(find release/firmware -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/firmware 2>/dev/null | cut -f1)"
           echo "  Passwall: $(find release/passwall -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/passwall 2>/dev/null | cut -f1)"
+          echo "  编译耗时: $(find release/build-logs -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/build-logs 2>/dev/null | cut -f1)"
           cd release && tar czf ../${{ matrix.target }}-release.tar.gz .
 
       # ───────── 构建信息 JSON（独立 artifact）─────────
