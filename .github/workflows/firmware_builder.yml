@@ -189,7 +189,10 @@ jobs:
       # ───────── 变化检测 ─────────
       - name: 🔍 Get source commit SHA
         id: current_sha
-        run: echo "sha=$(git -C openwrt rev-parse HEAD)" >> $GITHUB_OUTPUT
+        run: |
+          SHA=$(git -C openwrt rev-parse HEAD)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "   📋 源码 SHA: $SHA"
 
       # ───────── 计算工具链指纹（仅基于 tools/ 和 toolchain/ 目录的变更）─────────
       - name: 🔧 Compute toolchain fingerprint
@@ -459,7 +462,7 @@ jobs:
           set +o pipefail
           make -j$(($(nproc) + 1)) -k V=s 2>&1 | \
             tee build.log | \
-            grep -E '(^time: |error|warning|Error|Warning)' || true
+            grep '^time: ' || true
           MAKE_EXIT=${PIPESTATUS[0]}
           set -o pipefail
 
@@ -490,6 +493,13 @@ jobs:
           cd openwrt
           grep 'time:' build.log | awk -F'#' 'NF==4 && $1 ~ /^time: /' > build_time_clean.log || true
           echo "   time: 记录数: $(wc -l < build_time_clean.log)"
+          echo ""
+          echo "🐌 编译耗时 Top 10 (real time):"
+          awk -F'#' '{
+            pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
+            real=$2;
+            printf "%8.2fs  %s\n", real, pkg
+          }' build_time_clean.log | sort -rn | head -10 || true
 
       # ───────── 失败处理 ─────────
       - name: 📤 Upload build log on failure
@@ -597,7 +607,7 @@ jobs:
 
           # 从编译产物 feeds.buildinfo 提取各 feed 版本
           FEEDS_INFO=""
-          FEEDS_MD=""
+          FEEDS_MD_JSON=""
           FW_FEEDS_FILE=$(find openwrt/bin/targets -name "feeds.buildinfo" 2>/dev/null | head -1)
           if [ -f "$FW_FEEDS_FILE" ]; then
             FEEDS_INFO=$(jq -Rs '.' "$FW_FEEDS_FILE")
@@ -611,7 +621,7 @@ jobs:
             FEEDS_MD_JSON='""'
           fi
 
-          cat > build-info.json <<'JSONEOF'
+          cat > build-info.json <<JSONEOF
           {
             "target": "${{ matrix.target }}",
             "config": "${{ matrix.config }}",
@@ -633,6 +643,8 @@ jobs:
             "timestamp": "${NOW}"
           }
           JSONEOF
+          echo "📋 build-info.json 内容:"
+          jq . build-info.json
 
       - name: 📤 Upload firmware artifact
         if: steps.check.outputs.changed == 'true'
