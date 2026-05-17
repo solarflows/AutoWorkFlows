@@ -1,5 +1,5 @@
 diff --git a/smartdns/Makefile b/smartdns/Makefile
-index 0ea619c..86054c1 100644
+index 0ea619c81..62d3f0cfa 100644
 --- a/smartdns/Makefile
 +++ b/smartdns/Makefile
 @@ -6,12 +6,12 @@ include $(TOPDIR)/rules.mk
@@ -20,7 +20,17 @@ index 0ea619c..86054c1 100644
  
  PKG_MAINTAINER:=Nick Peng <pymumu@gmail.com>
  PKG_LICENSE:=GPL-3.0-or-later
-@@ -26,7 +26,7 @@ RUST_PKG_FEATURES:=build-release
+@@ -19,14 +19,16 @@ PKG_LICENSE_FILES:=LICENSE
+ PKG_CPE_ID:=cpe:/a:pymumu:smartdns
+ 
+ PKG_CONFIG_DEPENDS:=CONFIG_PACKAGE_smartdns-ui
+-PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:node/host PACKAGE_smartdns-ui:rust-bindgen/host
++# node compile is slow, so do not use it, download node manually.
++# PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:node/host PACKAGE_smartdns-ui:rust-bindgen/host
++PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:rust-bindgen/host
+ PKG_BUILD_PARALLEL:=1
+ 
+ RUST_PKG_FEATURES:=build-release
  RUST_PKG_LOCKED:=0
  
  include $(INCLUDE_DIR)/package.mk
@@ -29,7 +39,7 @@ index 0ea619c..86054c1 100644
  
  MAKE_PATH:=src
  MAKE_VARS+= VER=$(PKG_VERSION)
-@@ -63,6 +63,10 @@ endef
+@@ -63,6 +65,10 @@ endef
  
  define Package/smartdns/conffiles
  /etc/config/smartdns
@@ -40,7 +50,7 @@ index 0ea619c..86054c1 100644
  /etc/smartdns/address.conf
  /etc/smartdns/blacklist-ip.conf
  /etc/smartdns/custom.conf
-@@ -73,9 +77,9 @@ endef
+@@ -73,9 +79,9 @@ endef
  define Download/smartdns-webui
    PROTO:=git
    URL:=https://github.com/pymumu/smartdns-webui.git
