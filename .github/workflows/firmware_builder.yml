@@ -500,15 +500,25 @@ jobs:
         run: |
           echo "📊 提取编译耗时数据..."
           cd openwrt
-          grep 'time:' build.log | awk -F'#' 'NF==4 && $1 ~ /^time: /' > build_time_clean.log || true
+          # 去重：同包名取最后一条（因 make -j1 重试会在 build.log 尾部追加记录）
+          grep '^time: ' build.log | awk -F'#' 'NF==4' | tac | awk -F'#' '!seen[$1]++' | tac > build_time_clean.log || true
+          TOTAL_DUR="${{ steps.build.outputs.duration }}"
           echo "   time: 记录数: $(wc -l < build_time_clean.log)"
+          echo "   ⏱️  总编译耗时: ${{ steps.build.outputs.duration_fmt }}"
           echo ""
           echo "🐌 编译耗时 Top 10 (real time):"
           awk -F'#' '{
             pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
             real=$2;
             printf "%8.2fs  %s\n", real, pkg
-          }' build_time_clean.log | sort -rn | head -10 || true
+          }' build_time_clean.log | sort -rn -o /tmp/times_sorted.txt 2>/dev/null
+          head -10 /tmp/times_sorted.txt || true
+          # 异常检测：单包耗时不应明显超过总编译时长
+          echo ""
+          MAX_TIME=$(awk -F'#' '{if($2>max)max=$2} END{print max+0}' build_time_clean.log)
+          if [ -n "$TOTAL_DUR" ] && [ -n "$MAX_TIME" ] && [ "$(awk -v m="$MAX_TIME" -v t="$TOTAL_DUR" 'BEGIN{print (m>t*1.3)?1:0}')" = "1" ]; then
+            echo "⚠️ 警告: 单包最大耗时 ${MAX_TIME}s 超过总时长 ${TOTAL_DUR}s 的 1.3 倍，可能存在重复计时或时钟漂移"
+          fi
 
       # ───────── 失败处理 ─────────
       - name: 📤 Upload build log on failure
