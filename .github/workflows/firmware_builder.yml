@@ -186,6 +186,18 @@ jobs:
           path: openwrt
           fetch-depth: 0
 
+      - name: 📥 Clone openwrt-packages
+        id: clone_packages
+        run: |
+          echo "📦 克隆 openwrt-packages (${{ matrix.packages_branch }}) ..."
+          cd openwrt
+          git clone --depth 1 https://github.com/solarflows/openwrt-packages.git package/solarflows -b ${{ matrix.packages_branch }}
+          PKG_SHA=$(git -C package/solarflows rev-parse --short HEAD)
+          PKG_SHA_FULL=$(git -C package/solarflows rev-parse HEAD)
+          echo "packages_sha=${PKG_SHA}" >> $GITHUB_OUTPUT
+          echo "packages_sha_full=${PKG_SHA_FULL}" >> $GITHUB_OUTPUT
+          echo "   📋 openwrt-packages @ ${PKG_SHA}"
+
       # ───────── 变化检测 ─────────
       - name: 🔍 Get source commit SHA
         id: current_sha
@@ -212,13 +224,16 @@ jobs:
       - name: 🕵️ Detect source changes
         id: check
         run: |
-          CURRENT="${{ steps.current_sha.outputs.sha }}"
+          CURRENT_SRC="${{ steps.current_sha.outputs.sha }}"
+          CURRENT_PKG="${{ steps.clone_packages.outputs.packages_sha_full }}"
+          CURRENT="${CURRENT_SRC}:${CURRENT_PKG}"
           LAST_FILE=".last_sha_${{ matrix.target }}"
           if [ -f "$LAST_FILE" ]; then LAST=$(cat "$LAST_FILE"); else LAST=""; fi
           if [ "${{ github.event_name }}" = "schedule" ]; then
             if [ "$CURRENT" != "$LAST" ]; then
               echo "changed=true" >> $GITHUB_OUTPUT
               echo "🔵 定时触发 · 源码有更新 → 继续构建"
+              echo "   📋 源码: ${CURRENT_SRC:0:7}  软件包: ${CURRENT_PKG:0:7}"
             else
               echo "changed=false" >> $GITHUB_OUTPUT
               echo "⏭️ 定时触发 · 源码无变化 → 跳过构建"
@@ -391,14 +406,8 @@ jobs:
         id: feeds
         run: |
           set -euo pipefail
-          echo "📦 克隆 openwrt-packages (${{ matrix.packages_branch }}) ..."
+          echo "� 更新 feeds ..."
           cd openwrt
-          git clone --depth 1 https://github.com/solarflows/openwrt-packages.git package/solarflows -b ${{ matrix.packages_branch }}
-          PKG_SHA=$(git -C package/solarflows rev-parse --short HEAD)
-          echo "packages_sha=${PKG_SHA}" >> $GITHUB_OUTPUT
-          echo "   📋 openwrt-packages @ ${PKG_SHA}"
-
-          echo "📥 更新 feeds ..."
           ./scripts/feeds update -a && ./scripts/feeds install -a
           echo "✅ feeds 准备完成"
 
@@ -525,7 +534,7 @@ jobs:
       - name: 💾 Save source SHA
         if: steps.check.outputs.changed == 'true' && success()
         run: |
-          echo "${{ steps.current_sha.outputs.sha }}" > .last_sha_${{ matrix.target }}
+          echo "${{ steps.current_sha.outputs.sha }}:${{ steps.clone_packages.outputs.packages_sha_full }}" > .last_sha_${{ matrix.target }}
 
       # ───────── 清理旧缓存（失败时保留缓存作为 fallback）─────────
       - name: 🧹 Cleanup stale caches
@@ -629,7 +638,7 @@ jobs:
             "source_ref": "${{ matrix.ref }}",
             "source_sha": "${SHA_FULL}",
             "source_sha_short": "${SHA_SHORT}",
-            "packages_sha": "${{ steps.feeds.outputs.packages_sha }}",
+            "packages_sha": "${{ steps.clone_packages.outputs.packages_sha }}",
             "feeds_info": ${FEEDS_INFO},
             "feeds_md": ${FEEDS_MD_JSON},
             "duration_sec": "${{ steps.build.outputs.duration }}",
