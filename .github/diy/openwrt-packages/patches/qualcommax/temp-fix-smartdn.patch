@@ -27,7 +27,7 @@ index 0ea619c81..62d3f0cfa 100644
 -PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:node/host PACKAGE_smartdns-ui:rust-bindgen/host
 +# node compile is slow, so do not use it, download node manually.
 +# PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:node/host PACKAGE_smartdns-ui:rust-bindgen/host
-+PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:rust-bindgen/host
++PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:rust/host
  PKG_BUILD_PARALLEL:=1
  
  RUST_PKG_FEATURES:=build-release
