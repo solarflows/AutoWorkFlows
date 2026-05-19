@@ -358,6 +358,14 @@ jobs:
             find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | while read -r d; do
               find "$d" -type f -exec touch {} +
             done
+            # 修正 host ccache 软链接：OpenWrt 默认将 gcc/g++ 链接到系统编译器，
+            # 但同目录下有 ccache 二进制可用，重链接后 host 包(node/rust等)编译可走 ccache
+            if [ -x "openwrt/staging_dir/host/bin/ccache" ]; then
+              for cmd in gcc g++ cc c++; do
+                ln -sf ccache "openwrt/staging_dir/host/bin/$cmd" 2>/dev/null || true
+              done
+              echo "⚡ host ccache 软链接已修正"
+            fi
             mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
             TOOLCHAIN_RESTORED="true"
             echo "🔧 工具链缓存已恢复 · stamp 已刷新"
@@ -474,6 +482,7 @@ jobs:
             grep '^time: ' || true
           MAKE_EXIT=${PIPESTATUS[0]}
           set -o pipefail
+          echo '___PASS_1_END___' >> build.log
 
           if [ "$MAKE_EXIT" -ne 0 ]; then
             echo "⚠️ 编译有错误（退出码: $MAKE_EXIT）→ 更新 feed 后单线程重试..."
@@ -482,6 +491,7 @@ jobs:
             echo "📥 更新 openwrt-packages ..."
             git -C package/solarflows pull origin ${{ matrix.packages_branch }} 2>/dev/null || true
             echo "🔨 单线程重试失败目标 (V=sc)..."
+            echo '___PASS_2_START___' >> build.log
             make -j1 V=sc 2>&1 | tee -a build.log || {
               echo "💥 构建彻底失败 · 请查看 build.log"
               exit 1
@@ -500,8 +510,13 @@ jobs:
         run: |
           echo "📊 提取编译耗时数据..."
           cd openwrt
-          # 去重：同包名取最后一条（因 make -j1 重试会在 build.log 尾部追加记录）
-          grep '^time: ' build.log | awk -F'#' 'NF==4' | tac | awk -F'#' '!seen[$1]++' | tac > build_time_clean.log || true
+          # 仅提取最后一轮 make 的计时，避免跨轮时间戳污染
+          if grep -q '___PASS_2_START___' build.log; then
+            echo "   🔄 检测到重试轮次，仅提取重试轮次计时"
+            sed -n '/___PASS_2_START___/,$p' build.log | grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
+          else
+            grep '^time: ' build.log | awk -F'#' 'NF==4' > build_time_clean.log || true
+          fi
           TOTAL_DUR="${{ steps.build.outputs.duration }}"
           echo "   time: 记录数: $(wc -l < build_time_clean.log)"
           echo "   ⏱️  总编译耗时: ${{ steps.build.outputs.duration_fmt }}"
@@ -513,12 +528,6 @@ jobs:
             printf "%8.2fs  %s\n", real, pkg
           }' build_time_clean.log | sort -rn -o /tmp/times_sorted.txt 2>/dev/null
           head -10 /tmp/times_sorted.txt || true
-          # 异常检测：单包耗时不应明显超过总编译时长
-          echo ""
-          MAX_TIME=$(awk -F'#' '{if($2>max)max=$2} END{print max+0}' build_time_clean.log)
-          if [ -n "$TOTAL_DUR" ] && [ -n "$MAX_TIME" ] && [ "$(awk -v m="$MAX_TIME" -v t="$TOTAL_DUR" 'BEGIN{print (m>t*1.3)?1:0}')" = "1" ]; then
-            echo "⚠️ 警告: 单包最大耗时 ${MAX_TIME}s 超过总时长 ${TOTAL_DUR}s 的 1.3 倍，可能存在重复计时或时钟漂移"
-          fi
 
       # ───────── 失败处理 ─────────
       - name: 📤 Upload build log on failure
