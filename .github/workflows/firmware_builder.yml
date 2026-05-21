@@ -475,51 +475,79 @@ jobs:
           echo "╚══════════════════════════════════════╝"
           START_TIME=$(date +%s)
           cd openwrt
-          echo "🔨 开始编译 (并行 $(($(nproc) + 1)) 线程, -k 遇错不停止, V=s 计时)..."
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          NPROC=$(($(nproc) + 1))
+
+          # 确保 make_exit 总有值输出（防止步骤意外退出时 retry 误判）
+          MAKE_EXIT=1
+          echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
+
+          echo "🔨 并行编译 (${NPROC} 线程, -k)..."
           set +o pipefail
-          make -j$(($(nproc) + 1)) -k V=s 2>&1 | \
-            tee build.log | \
-            grep '^time: ' || true
+          make -j${NPROC} -k 2>&1 | tee build.log
           MAKE_EXIT=${PIPESTATUS[0]}
           set -o pipefail
-          echo '___PASS_1_END___' >> build.log
 
-          if [ "$MAKE_EXIT" -ne 0 ]; then
-            echo "⚠️ 编译有错误（退出码: $MAKE_EXIT）→ 更新 feed 后单线程重试..."
-            echo "📥 更新 feeds ..."
-            ./scripts/feeds update -a && ./scripts/feeds install -a
-            echo "📥 更新 openwrt-packages ..."
-            git -C package/solarflows pull origin ${{ matrix.packages_branch }} 2>/dev/null || true
-            echo "🔨 单线程重试失败目标 (V=sc)..."
-            echo '___PASS_2_START___' >> build.log
-            make -j1 V=sc 2>&1 | tee -a build.log || {
-              echo "💥 构建彻底失败 · 请查看 build.log"
-              exit 1
-            }
-          fi
           END_TIME=$(date +%s)
           DURATION_SEC=$((END_TIME - START_TIME))
-          DURATION_FMT=$(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))
+          echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           echo "duration=${DURATION_SEC}" >> $GITHUB_OUTPUT
-          echo "duration_fmt=${DURATION_FMT}" >> $GITHUB_OUTPUT
-          echo "⏱️ 编译耗时: ${DURATION_FMT}"
+          echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))"
+
+      # ───────── 单线程重试（独立步骤，兜底并行竞争）─────────
+      - name: 🔄 Retry Single-Thread
+        if: steps.check.outputs.changed == 'true' && steps.build.outputs.make_exit != '0'
+        run: |
+          START_TIME=$(date +%s)
+          cd openwrt
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+
+          echo "⚠️ 并行编译有错误 → 单线程重试..."
+          echo "📥 更新源码仓库 (${{ matrix.ref }})..."
+          git pull origin ${{ matrix.ref }} 2>/dev/null || echo "   (无远端更新或非分支引用)"
+          echo "📥 更新 openwrt-packages (${{ matrix.packages_branch }})..."
+          git -C package/solarflows pull origin ${{ matrix.packages_branch }} 2>/dev/null || echo "   (无远端更新)"
+          echo "📥 更新 feeds ..."
+          ./scripts/feeds update -a && ./scripts/feeds install -a
+          make -j1 2>&1 | tee -a build.log || {
+            END_TIME=$(date +%s)
+            DURATION_SEC=$((END_TIME - START_TIME))
+            echo "retry_duration=${DURATION_SEC}" >> $GITHUB_OUTPUT
+            echo "💥 构建彻底失败 · 请查看 build.log 及 logs/ 目录"
+            exit 1
+          }
+          END_TIME=$(date +%s)
+          DURATION_SEC=$((END_TIME - START_TIME))
+          echo "retry_duration=${DURATION_SEC}" >> $GITHUB_OUTPUT
+          echo "✅ 单线程重试完成 · 耗时: $(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))"
+
+      # ───────── 总耗时汇总 ─────────
+      - name: ⏱️ Total Build Duration
+        if: always() && steps.check.outputs.changed == 'true'
+        id: total_duration
+        run: |
+          BUILD_DUR="${{ steps.build.outputs.duration }}"
+          RETRY_DUR="${{ steps.retry.outputs.retry_duration || '0' }}"
+          TOTAL_SEC=$((BUILD_DUR + RETRY_DUR))
+          TOTAL_FMT=$(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60)))
+          echo "duration=${TOTAL_SEC}" >> $GITHUB_OUTPUT
+          echo "duration_fmt=${TOTAL_FMT}" >> $GITHUB_OUTPUT
+          echo "⏱️ 总编译耗时: ${TOTAL_FMT} (并行 ${BUILD_DUR}s + 重试 ${RETRY_DUR}s)"
 
       # ───────── 耗时提取（独立步骤，不受构建成败影响）─────────
       - name: 📊 Extract Build Time Stats
         if: always() && steps.check.outputs.changed == 'true'
         run: |
-          echo "📊 提取编译耗时数据..."
+          echo "📊 提取编译耗时数据 (来源: CONFIG_BUILD_LOG=y → logs/)"
           cd openwrt
-          # 仅提取最后一轮 make 的计时，避免跨轮时间戳污染
-          if grep -q '___PASS_2_START___' build.log; then
-            echo "   🔄 检测到重试轮次，仅提取重试轮次计时"
-            sed -n '/___PASS_2_START___/,$p' build.log | grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
-          else
-            grep '^time: ' build.log | awk -F'#' 'NF==4' > build_time_clean.log || true
-          fi
-          TOTAL_DUR="${{ steps.build.outputs.duration }}"
+          # 从 logs/*/compile.txt 提取每条最后一行的 timing（重试自动覆盖，无需去重）
+          find logs -name 'compile.txt' -exec sh -c 'tail -1 "$1" 2>/dev/null' _ {} \; 2>/dev/null | \
+            grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
+          TOTAL_DUR="${{ steps.total_duration.outputs.duration }}"
           echo "   time: 记录数: $(wc -l < build_time_clean.log)"
-          echo "   ⏱️  总编译耗时: ${{ steps.build.outputs.duration_fmt }}"
+          echo "   ⏱️  总编译耗时: ${{ steps.total_duration.outputs.duration_fmt }}"
           echo ""
           echo "🐌 编译耗时 Top 10 (real time):"
           awk -F'#' '{
@@ -528,6 +556,58 @@ jobs:
             printf "%8.2fs  %s\n", real, pkg
           }' build_time_clean.log | sort -rn -o /tmp/times_sorted.txt 2>/dev/null
           head -10 /tmp/times_sorted.txt || true
+
+      # ───────── 日志分析（BUILD_LOG=y → logs/ 目录）─────────
+      - name: 📋 Analyze Build Logs
+        if: always() && steps.check.outputs.changed == 'true'
+        run: |
+          cd openwrt
+          echo "📋 构建日志分析 (logs/):"
+          TOTAL=$(find logs -name 'compile.txt' 2>/dev/null | wc -l)
+          echo "   总 compile.txt: ${TOTAL}"
+          # 末行无 time: 的（编译可能未完成或被中断）
+          INCOMPLETE=$(find logs -name 'compile.txt' -exec sh -c '
+            tail -1 "$1" 2>/dev/null | grep -q "^time: " || echo "$1"
+          ' _ {} \; 2>/dev/null | wc -l)
+          echo "   末行无 time: 标记: ${INCOMPLETE} (可能中断/未完成)"
+          # 日志为空的
+          EMPTY=$(find logs -name 'compile.txt' -size 0 2>/dev/null | wc -l)
+          echo "   空日志: ${EMPTY}"
+          echo ""
+          # 若 2 轮后仍失败，列出异常日志供排查
+          if [ -n "${{ steps.total_duration.outputs.duration }}" ]; then
+            if [ "${INCOMPLETE}" -gt 0 ] || [ "${EMPTY}" -gt 0 ]; then
+              echo "⚠️ 异常 compile.txt 列表:"
+              find logs -name 'compile.txt' -exec sh -c '
+                if [ ! -s "$1" ] || ! tail -1 "$1" 2>/dev/null | grep -q "^time: "; then
+                  echo "  $1 ($(wc -c < "$1") bytes)"
+                  echo "  末5行:"; tail -5 "$1" 2>/dev/null | sed "s/^/    /"
+                fi
+              ' _ {} \; 2>/dev/null
+            fi
+          fi
+
+      # ───────── ccache 统计与清理（独立步骤，不受构建成败影响）─────────
+      - name: ⚡ ccache Stats & Cleanup
+        if: always() && steps.check.outputs.changed == 'true'
+        run: |
+          echo "╔══════════════════════════════════════╗"
+          echo "║  ⚡ ccache 命中率与缓存清理           ║"
+          echo "╚══════════════════════════════════════╝"
+          if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
+            export CCACHE_DIR="$(pwd)/openwrt/.ccache"
+            echo "📊 编译后缓存状态:"
+            ccache -s
+            echo ""
+            BEFORE=$(ccache -s 2>/dev/null | grep -oP 'Cache size \(GiB\):\s*\K[0-9.]+' || echo 0)
+            echo "🧹 清理过期缓存 (上限: $(ccache --max-size 2>/dev/null || echo 'N/A'))..."
+            ccache --cleanup 2>/dev/null || true
+            AFTER=$(ccache -s 2>/dev/null | grep -oP 'Cache size \(GiB\):\s*\K[0-9.]+' || echo 0)
+            EVICTED=$(awk "BEGIN {printf \"%.2f\", $BEFORE - $AFTER}" 2>/dev/null || echo 0)
+            echo "   清理前: ${BEFORE} GiB → 清理后: ${AFTER} GiB (释放 ${EVICTED} GiB)"
+          else
+            echo "⚠️ ccache 不可用或 .ccache 目录不存在"
+          fi
 
       # ───────── 失败处理 ─────────
       - name: 📤 Upload build log on failure
@@ -660,8 +740,8 @@ jobs:
             "packages_sha": "${{ steps.clone_packages.outputs.packages_sha }}",
             "feeds_info": ${FEEDS_INFO},
             "feeds_md": ${FEEDS_MD_JSON},
-            "duration_sec": "${{ steps.build.outputs.duration }}",
-            "duration_fmt": "${{ steps.build.outputs.duration_fmt }}",
+            "duration_sec": "${{ steps.total_duration.outputs.duration }}",
+            "duration_fmt": "${{ steps.total_duration.outputs.duration_fmt }}",
             "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored }}",
             "toolchain_exact": "${{ steps.cache-refresh.outputs.toolchain_exact }}",
             "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored }}",
