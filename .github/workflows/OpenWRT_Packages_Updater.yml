@@ -139,10 +139,69 @@ jobs:
       - name: 生成 README (仅 main 分支)
         if: matrix.target == 'main'
         run: |
-          cd $GITHUB_WORKSPACE/${{matrix.target}}
           TEMPLATE="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/readme-template.md"
           UPDATE_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
-          sed "s#{{LAST_UPDATE}}#$UPDATE_TIME#g" "$TEMPLATE" > README.md
+          SCRIPTS_DIR="$GITHUB_WORKSPACE/.github/diy/openwrt-packages"
+          OUTPUT="$GITHUB_WORKSPACE/${{matrix.target}}/README.md"
+
+          # 解析单个脚本，输出 "包名|仓库URL|分支" 行
+          parse_script() {
+            local script="$1"
+            local target_branch="$2"
+            grep -E "^\s*(format_git_clone_output|checkout_partial_code)" "$script" | while IFS= read -r line; do
+              repo_url=$(echo "$line" | grep -oP '(?<=-r )https://github.com/[^ ]+' | sed 's/\.git$//')
+              [ -z "$repo_url" ] && continue
+              repo_display=$(echo "$repo_url" | sed 's|https://github.com/||')
+              pkg_name=""
+              if echo "$line" | grep -q "checkout_partial_code"; then
+                parts=$(echo "$line" | sed 's/.*-r [^ ]* //' | xargs)
+                pkg_name=$(echo "$parts" | awk '{print $NF}' | sed 's|.*/||')
+              else
+                pkg_name=$(echo "$repo_url" | sed 's|.*/||')
+              fi
+              [ -n "$pkg_name" ] && [ -n "$repo_display" ] && echo "${pkg_name}|${repo_display}|${repo_url}|${target_branch}"
+            done
+          }
+
+          # 解析所有分支脚本，合并去重
+          ALL_ENTRIES=$(
+            for t in main qt6 mt798x qualcommax; do
+              parse_script "$SCRIPTS_DIR/${t}.sh" "$t"
+            done | sort -t'|' -k1,1
+          )
+
+          # 生成插件表 Markdown 文件
+          TABLE_FILE=$(mktemp)
+          echo "| 插件 | 来源 | 分支 |" > "$TABLE_FILE"
+          echo "|:-----|:-----|:-----|" >> "$TABLE_FILE"
+
+          CURRENT_PKG=""
+          CURRENT_ROW=""
+          while IFS='|' read -r pkg repo url branches; do
+            if [ "$pkg" = "$CURRENT_PKG" ]; then
+              CURRENT_ROW="${CURRENT_ROW}, \`${branches}\`"
+            else
+              [ -n "$CURRENT_PKG" ] && echo "$CURRENT_ROW" >> "$TABLE_FILE"
+              CURRENT_PKG="$pkg"
+              CURRENT_ROW="| \`${pkg}\` | [${repo}](${url}) | \`${branches}\`"
+            fi
+          done <<< "$ALL_ENTRIES"
+          [ -n "$CURRENT_PKG" ] && echo "$CURRENT_ROW" >> "$TABLE_FILE"
+
+          # 用 awk 替换模板中的占位符
+          awk -v time="$UPDATE_TIME" -v tbl="$TABLE_FILE" '
+            {
+              if (/{{LAST_UPDATE}}/) { gsub(/\{\{LAST_UPDATE\}\}/, time) }
+              if (/{{PLUGIN_TABLE}}/) {
+                while ((getline line < tbl) > 0) { print line }
+                close(tbl)
+                next
+              }
+              print
+            }
+          ' "$TEMPLATE" > "$OUTPUT"
+
+          rm -f "$TABLE_FILE"
           echo "✅ README.md 已生成 (更新时间: $UPDATE_TIME)"
 
       - name: 提交代码

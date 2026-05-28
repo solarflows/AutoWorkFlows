@@ -27,9 +27,11 @@
 git clone -b <branch> https://github.com/solarflows/openwrt-packages.git package/openwrt-packages
 ```
 
-## 📖 完整插件列表
+## 📖 插件来源
 
-请查看 [AutoWorkflows 仓库 README](https://github.com/solarflows/AutoWorkflows#-插件来源) 获取完整的插件来源和说明。
+{{PLUGIN_TABLE}}
+
+> 📌 仅列出各分支中实际采集的插件，已注释/归档的不在此列。
 
 ## 🔄 更新频率
 
