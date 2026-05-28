@@ -167,7 +167,7 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: define-matrix
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 480
     strategy:
       matrix:
         include: ${{ fromJson(needs.define-matrix.outputs.matrix) }}
@@ -250,6 +250,14 @@ jobs:
           echo "  🧠 CPU : $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
           echo "  💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
           echo "  🐧 系统: $(uname -r)"
+
+      - name: 🕐 Record build start time
+        if: steps.check.outputs.changed == 'true'
+        id: start_time
+        run: |
+          START_FMT=$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')
+          echo "timestamp=${START_FMT}" >> $GITHUB_OUTPUT
+          echo "🕐 构建开始时间: ${START_FMT}"
 
       - name: 🧹 Free Disk Space
         if: steps.check.outputs.changed == 'true' && github.event.inputs.free_disk_space == 'true'
@@ -498,6 +506,7 @@ jobs:
       # ───────── 单线程重试（独立步骤，兜底并行竞争）─────────
       - name: 🔄 Retry Single-Thread
         if: steps.check.outputs.changed == 'true' && steps.build.outputs.make_exit != '0'
+        id: retry
         run: |
           START_TIME=$(date +%s)
           cd openwrt
@@ -709,7 +718,7 @@ jobs:
       - name: 📋 Generate build info
         if: steps.check.outputs.changed == 'true'
         run: |
-          NOW=$(date +'%Y-%m-%d %H:%M:%S')
+          NOW="${{ steps.start_time.outputs.timestamp }}"
           SHA_FULL="${{ steps.current_sha.outputs.sha }}"
           SHA_SHORT=$(echo "$SHA_FULL" | cut -c1-7)
 
@@ -849,9 +858,10 @@ jobs:
             fi
             CC_HIT_LABEL=$([ "$CCACHE_HIT" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
 
-            # -------- 生成版本 Tag --------
+            # -------- 生成版本 Tag（使用构建开始时间） --------
             local DATE_TAG TAG TITLE
-            DATE_TAG="v$(date +'%Y%m%d-%H%M')"
+            # TIMESTAMP 格式: "2026-05-28 12:30:00" → "v20260528-1230"
+            DATE_TAG="v$(echo "$TIMESTAMP" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s-%s%s", a[1],a[2],a[3],a[4],a[5]}')"
             TAG="${TAG_PREFIX}${DATE_TAG}"
             TITLE="${TAG_PREFIX}Build ${DATE_TAG}"
             echo "🏷️  [${TARGET}] 版本: $TAG → $RELEASE_REPO"
