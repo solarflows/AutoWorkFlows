@@ -10,6 +10,7 @@ on:
       - '.github/diy/openwrt-packages/patches/**/*.patch'
       - '.github/diy/openwrt-packages/core'
       - '.github/diy/openwrt-packages/*.sh'
+      - '.github/diy/openwrt-packages/readme-template.md'
   watch:
     types: started
   workflow_dispatch:
@@ -37,6 +38,14 @@ jobs:
           sudo timedatectl set-timezone "Asia/Shanghai"
           ( sudo -E apt-get -qq install rename ) &
 
+          # 写入 Job Summary 头部
+          echo "# 🔄 OpenWRT Packages Updater" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **分支**: \`${{matrix.target}}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **触发方式**: \`${{github.event_name}}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **运行时间**: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
       - name: 克隆代码
         run: |
           cd $GITHUB_WORKSPACE
@@ -56,6 +65,56 @@ jobs:
           bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/create_acl_for_luci.sh -a
           bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/modify.sh
 
+      - name: 生成插件来源摘要
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          SCRIPT="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/${{matrix.target}}.sh"
+
+          echo "## 📦 ${{matrix.target}} 分支插件来源摘要" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 插件/包 | 来源仓库 | 说明 |" >> $GITHUB_STEP_SUMMARY
+          echo "|:--------|:---------|:-----|" >> $GITHUB_STEP_SUMMARY
+
+          # 解析脚本中的 format_git_clone_output 和 checkout_partial_code 调用
+          grep -E "^\s*(format_git_clone_output|checkout_partial_code)" "$SCRIPT" | while IFS= read -r line; do
+            # 提取仓库 URL
+            repo_url=$(echo "$line" | grep -oP '(?<=-r )https://github.com/[^ ]+' | sed 's/\.git$//')
+            if [ -z "$repo_url" ]; then
+              continue
+            fi
+
+            # 提取分支
+            branch=$(echo "$line" | grep -oP '(?<=-b )\S+' | head -1)
+            repo_display=$(echo "$repo_url" | sed 's|https://github.com/||')
+
+            # 提取包名（从 checkout_partial_code 的路径参数）
+            pkg_name=""
+            if echo "$line" | grep -q "checkout_partial_code"; then
+              # 获取 -r 后面的参数（跳过 URL）
+              parts=$(echo "$line" | sed 's/.*-r [^ ]* //' | xargs)
+              pkg_name=$(echo "$parts" | awk '{print $NF}' | sed 's|.*/||')
+            elif echo "$line" | grep -q "format_git_clone_output"; then
+              # 从 URL 提取仓库名
+              pkg_name=$(echo "$repo_url" | sed 's|.*/||')
+            fi
+
+            if [ -n "$pkg_name" ] && [ -n "$repo_display" ]; then
+              if [ -n "$branch" ]; then
+                echo "| \`$pkg_name\` | [$repo_display]($repo_url) | 分支: \`$branch\` |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| \`$pkg_name\` | [$repo_display]($repo_url) | |" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 📌 完整插件列表请查看 [README.md](https://github.com/${{github.repository}}#-插件来源)" >> $GITHUB_STEP_SUMMARY
+
+      - name: 应用补丁
+        run: |
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+
           # 应用补丁（temp* 前缀的补丁失败仅警告，不中断）
           PATCH_DIR="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches/${{matrix.target}}"
           find "$PATCH_DIR" -type f -name '*.patch' ! -name 'temp*' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%' | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
@@ -63,6 +122,10 @@ jobs:
             echo "应用临时补丁: $f"
             patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f" || echo "::warning::临时补丁应用失败 (忽略): $f"
           done
+
+      - name: 应用全局补丁
+        run: |
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 应用全局补丁（temp* 前缀的补丁失败仅警告，不中断）
           rm -rf v2ray-geodata >/dev/null 2>&1
@@ -73,10 +136,14 @@ jobs:
             patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f" || echo "::warning::临时补丁应用失败 (忽略): $f"
           done
 
-          # # 下载修改补丁
-          # curl -o "$GITHUB_WORKSPACE/.github/diy/openwrt-packages/download_patches/${{matrix.target}}/luci-smartdns-dev.patch" --create-dirs "https://github.com/xiaorouji/openwrt-passwall/compare/main...luci-smartdns-dev.patch"
-
-          # find "$GITHUB_WORKSPACE/.github/diy/openwrt-packages/download_patches/${{matrix.target}}" -type f -name '*.patch' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%'  | patch -d './' -p1 -N --forward --no-backup-if-mismatch" 2>&1 | grep -v "error_message" || exit 1
+      - name: 生成 README (仅 main 分支)
+        if: matrix.target == 'main'
+        run: |
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          TEMPLATE="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/readme-template.md"
+          UPDATE_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
+          sed "s#{{LAST_UPDATE}}#$UPDATE_TIME#g" "$TEMPLATE" > README.md
+          echo "✅ README.md 已生成 (更新时间: $UPDATE_TIME)"
 
       - name: 提交代码
         env:
@@ -93,10 +160,29 @@ jobs:
 
           # 检查是否有需要提交的更改
           if [ -n "$(git status --porcelain)" ]; then
+            # 统计变更
+            added=$(git diff --cached --numstat | awk '{s+=$1} END {print s}')
+            removed=$(git diff --cached --numstat | awk '{s+=$2} END {print s}')
+            files_changed=$(git diff --cached --numstat | wc -l)
+
             # 提交更改
             git commit -m "$commit_message"
             echo "Commit successful. Pushing changes to the repository."
             git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/openwrt-packages.git" HEAD:${{matrix.target}}
+
+            # 输出统计到 Summary
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ✅ 提交成功" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **分支**: \`${{matrix.target}}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **变更文件数**: $files_changed" >> $GITHUB_STEP_SUMMARY
+            echo "- **新增行数**: +$added" >> $GITHUB_STEP_SUMMARY
+            echo "- **删除行数**: -$removed" >> $GITHUB_STEP_SUMMARY
+            echo "- **提交信息**: $commit_message" >> $GITHUB_STEP_SUMMARY
           else
             echo "No changes to commit. Skipping the push step."
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ℹ️ 无变更" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "本次运行未检测到任何变更，跳过提交。" >> $GITHUB_STEP_SUMMARY
           fi
