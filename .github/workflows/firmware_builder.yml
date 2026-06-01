@@ -48,7 +48,7 @@ on:
           - 'true'
           - 'false'
   schedule:
-    - cron: '12 4 * * 3,6'  # 每周三、六 UTC 4:12（北京时间 12:12，避开整点高峰）
+    - cron: '6 3 * * 1,6'  # 每周一、六 UTC 15:06（北京时间 12:12，避开整点高峰）
 
 concurrency:
   group: firmware-build-${{ github.ref }}
