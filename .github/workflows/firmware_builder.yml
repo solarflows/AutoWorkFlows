@@ -417,12 +417,30 @@ jobs:
         continue-on-error: true
 
       # ───────── 构建 ─────────
+      - name: 🔑 Setup APK Signing Key
+        if: steps.check.outputs.changed == 'true'
+        id: signing_key
+        run: |
+          # 使用固定密钥签名 APK 包，避免路由器报 untrusted key
+          # 密钥来源：GitHub Secrets 中的 BUILD_KEY（RSA 私钥 PEM）
+          if [ -n "${{ secrets.BUILD_KEY }}" ]; then
+            echo "${{ secrets.BUILD_KEY }}" > openwrt/key-build
+            chmod 600 openwrt/key-build
+            # 提取公钥指纹用于追踪（不影响签名）
+            FP=$(openssl rsa -in openwrt/key-build -pubout 2>/dev/null | openssl sha256 | awk '{print $NF}')
+            echo "fingerprint=${FP}" >> $GITHUB_OUTPUT
+            echo "🔑 APK 签名密钥已注入 (SHA256: ${FP:0:16}...)"
+          else
+            echo "⚠️ BUILD_KEY secret 未设置，使用构建系统自动生成的随机密钥"
+            echo "fingerprint=random" >> $GITHUB_OUTPUT
+          fi
+
       - name: 📥 2. Update Feeds & Packages
         if: steps.check.outputs.changed == 'true'
         id: feeds
         run: |
           set -euo pipefail
-          echo "� 更新 feeds ..."
+          echo "📥 更新 feeds ..."
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install -a
           echo "✅ feeds 准备完成"
@@ -754,6 +772,7 @@ jobs:
             "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored }}",
             "toolchain_exact": "${{ steps.cache-refresh.outputs.toolchain_exact }}",
             "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored }}",
+            "signing_key_fingerprint": "${{ steps.signing_key.outputs.fingerprint }}",
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
             "release_tag_prefix": "${{ matrix.release_tag_prefix }}",
