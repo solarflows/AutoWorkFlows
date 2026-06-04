@@ -97,7 +97,8 @@ jobs:
             packages_branch:   (.packages_branch   // .target),
             release_repo:     (.release_repo     // .repo),
             passwall_tag:     (.passwall_tag     // "passwall-\(.target)"),
-            release_tag_prefix: (.release_tag_prefix // "")
+            release_tag_prefix: (.release_tag_prefix // ""),
+            apk_signing:      (.apk_signing      // false)
           })')
 
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
@@ -188,11 +189,20 @@ jobs:
           path: openwrt
           fetch-depth: 1
 
-      - name: 📥 Clone openwrt-packages
+      - name: 📦 Get source & clone packages
         id: clone_packages
         run: |
-          echo "📦 克隆 openwrt-packages (${{ matrix.packages_branch }}) ..."
           cd openwrt
+
+          # 获取源码 SHA
+          SHA=$(git rev-parse --short HEAD)
+          SHA_FULL=$(git rev-parse HEAD)
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+          echo "sha_full=${SHA_FULL}" >> $GITHUB_OUTPUT
+          echo "   📋 源码 @ ${SHA}"
+
+          # 克隆自定义软件包
+          echo "📦 克隆 openwrt-packages (${{ matrix.packages_branch }}) ..."
           git clone --depth 1 https://github.com/solarflows/openwrt-packages.git package/solarflows -b ${{ matrix.packages_branch }}
           PKG_SHA=$(git -C package/solarflows rev-parse --short HEAD)
           PKG_SHA_FULL=$(git -C package/solarflows rev-parse HEAD)
@@ -200,57 +210,58 @@ jobs:
           echo "packages_sha_full=${PKG_SHA_FULL}" >> $GITHUB_OUTPUT
           echo "   📋 openwrt-packages @ ${PKG_SHA}"
 
-      # ───────── 变化检测 ─────────
-      - name: 🔍 Get source commit SHA
-        id: current_sha
-        run: |
-          SHA=$(git -C openwrt rev-parse --short HEAD)
-          SHA_FULL=$(git -C openwrt rev-parse HEAD)
-          echo "sha=${SHA}" >> $GITHUB_OUTPUT
-          echo "sha_full=${SHA_FULL}" >> $GITHUB_OUTPUT
-          echo "   📋 源码 @ ${SHA}"
+          # ── Summary ──
+          echo "| 📦 **源码** | [${{ matrix.ref }}](https://github.com/${{ matrix.repo }}) @ \`${SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 **软件包** | [${{ matrix.packages_branch }}](https://github.com/solarflows/openwrt-packages/tree/${{ matrix.packages_branch }}) @ \`${PKG_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
 
       # ───────── 计算工具链指纹（仅基于 tools/ 和 toolchain/ 目录的变更）─────────
-      - name: 🔧 Compute toolchain fingerprint
+      - name: 🔧 Compute toolchain hash
         id: toolchain_hash
         run: |
           HASH=$(git -C openwrt log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
           echo "hash=$HASH" >> $GITHUB_OUTPUT
           echo "🔧 工具链指纹: $HASH"
 
-      - name: 🕵️ Detect source changes
+      - name: 💾 Cache source marker
         id: check
         uses: actions/cache@v5
         with:
           path: .sha_marker
-          key: sha-${{ matrix.target }}-${{ steps.current_sha.outputs.sha }}-${{ steps.clone_packages.outputs.packages_sha }}
+          key: sha-${{ matrix.target }}-${{ steps.clone_packages.outputs.sha }}-${{ steps.clone_packages.outputs.packages_sha }}
 
       - name: 📋 Evaluate changes
         id: evaluate
         run: |
-          echo "📋 源码:   ${{ steps.current_sha.outputs.sha_full }}"
+          SHA_SHORT="${{ steps.clone_packages.outputs.sha }}"
+          SHA_FULL="${{ steps.clone_packages.outputs.sha_full }}"
+          PKG_SHA="${{ steps.clone_packages.outputs.packages_sha }}"
+          echo "📋 源码:   $SHA_FULL"
           echo "📋 软件包: ${{ steps.clone_packages.outputs.packages_sha_full }}"
-          if [ "${{ steps.check.outputs.cache-hit }}" = "true" ]; then
-            if [ "${{ github.event_name }}" = "schedule" ]; then
-              echo "changed=false" >> $GITHUB_OUTPUT
-              echo "⏭️ 定时触发 · 源码无变化 → 跳过构建"
-            else
-              echo "changed=true" >> $GITHUB_OUTPUT
-              echo "🟢 手动触发 → 强制构建"
-            fi
+
+          # 判断是否跳过构建
+          if [ "${{ steps.check.outputs.cache-hit }}" = "true" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            BUILD_STATUS="⏭️ 缓存命中，定时触发无变更 → 跳过构建"
+          elif [ "${{ steps.check.outputs.cache-hit }}" = "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            BUILD_STATUS="🟢 缓存命中，但手动触发 → 强制构建"
           else
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "🔵 源码有变化 → 继续构建"
+            BUILD_STATUS="🔵 源码有变更 → 继续构建"
           fi
           touch .sha_marker
 
-      - name: 🖥️ Show build environment
-        if: steps.evaluate.outputs.changed == 'true'
-        run: |
-          echo "🖥️ 构建环境"
-          echo "  🧠 CPU : $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
-          echo "  💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
-          echo "  🐧 系统: $(uname -r)"
+          # ── Summary 标题 + 构建概述（表格保持打开，后续 step 继续追加行） ──
+          {
+            echo "---"
+            echo "## 📋 ${{ matrix.target }} — Build Summary"
+            echo ""
+            echo "| 项目 | 详情 |"
+            echo "|------|------|"
+            echo "| 🎯 **目标** | ${{ matrix.target }} |"
+            echo "| 🔄 **触发方式** | ${{ github.event_name }} |"
+            echo "| 📌 **变更检测** | ${BUILD_STATUS} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 🕐 Record build start time
         if: steps.evaluate.outputs.changed == 'true'
@@ -259,6 +270,9 @@ jobs:
           START_FMT=$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')
           echo "timestamp=${START_FMT}" >> $GITHUB_OUTPUT
           echo "🕐 构建开始时间: ${START_FMT}"
+
+          # ── Summary ──
+          echo "| 🕐 **构建开始** | ${START_FMT} |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 🧹 Free Disk Space
         if: steps.evaluate.outputs.changed == 'true' && github.event.inputs.free_disk_space == 'true'
@@ -271,7 +285,7 @@ jobs:
           large-packages: true
           swap-storage: true
 
-      - name: 📦 1. Prepare Environment
+      - name: 🛠️ 1. Prepare Environment
         if: steps.evaluate.outputs.changed == 'true'
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -309,7 +323,7 @@ jobs:
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
 
-      - name: ⚡ Restore ccache
+      - name: 🗄️ Restore ccache
         if: steps.evaluate.outputs.changed == 'true' && github.event.inputs.use_ccache != 'false'
         id: cache-cc
         uses: actions/cache@v5
@@ -319,7 +333,7 @@ jobs:
             immwrt-ccache-${{ matrix.target }}-
           path: openwrt/.ccache
 
-      - name: 📊 Refresh cache stamps & report
+      - name: 🔄 Verify & report cache status
         if: steps.evaluate.outputs.changed == 'true'
         id: cache-refresh
         env:
@@ -410,7 +424,7 @@ jobs:
 
       # ───────── 构建 ─────────
       - name: 🔑 Setup APK Signing Key
-        if: steps.evaluate.outputs.changed == 'true'
+        if: steps.evaluate.outputs.changed == 'true' && fromJson(matrix.apk_signing)
         id: signing_key
         env:
           BUILD_KEY: ${{ secrets.BUILD_KEY }}
@@ -523,7 +537,7 @@ jobs:
           echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))"
 
       # ───────── 单线程重试（独立步骤，兜底并行竞争）─────────
-      - name: 🔄 Retry Single-Thread
+      - name: 🔄 Retry build (serial)
         if: steps.evaluate.outputs.changed == 'true' && steps.build.outputs.make_exit != '0'
         id: retry
         run: |
@@ -564,79 +578,124 @@ jobs:
           echo "duration_fmt=${TOTAL_FMT}" >> $GITHUB_OUTPUT
           echo "⏱️ 总编译耗时: ${TOTAL_FMT} (并行 ${BUILD_DUR}s + 重试 ${RETRY_DUR}s)"
 
-      # ───────── 耗时提取（独立步骤，不受构建成败影响）─────────
-      - name: 📊 Extract Build Time Stats
-        if: always() && steps.evaluate.outputs.changed == 'true'
-        run: |
-          echo "📊 提取编译耗时数据 (来源: CONFIG_BUILD_LOG=y → logs/)"
-          cd openwrt
-          # 从 logs/*/compile.txt 提取每条最后一行的 timing（重试自动覆盖，无需去重）
-          find logs -name 'compile.txt' -exec sh -c 'tail -1 "$1" 2>/dev/null' _ {} \; 2>/dev/null | \
-            grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
-          TOTAL_DUR="${{ steps.total_duration.outputs.duration }}"
-          echo "   time: 记录数: $(wc -l < build_time_clean.log)"
-          echo "   ⏱️  总编译耗时: ${{ steps.total_duration.outputs.duration_fmt }}"
-          echo ""
-          echo "🐌 编译耗时 Top 10 (real time):"
-          awk -F'#' '{
-            pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
-            real=$2;
-            printf "%8.2fs  %s\n", real, pkg
-          }' build_time_clean.log | sort -rn -o /tmp/times_sorted.txt 2>/dev/null
-          head -10 /tmp/times_sorted.txt || true
+          # ── Summary ──
+          echo "| ⏱️ **编译耗时** | ${TOTAL_FMT} |" >> "$GITHUB_STEP_SUMMARY"
 
-      # ───────── 日志分析（BUILD_LOG=y → logs/ 目录）─────────
-      - name: 📋 Analyze Build Logs
+          # 表格结束，追加运行环境信息
+          {
+            echo ""
+            echo "### 运行环境"
+            echo "\`\`\`"
+            echo "🖥️ 构建环境"
+            echo "  🧠 CPU : $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
+            echo "  💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
+            echo "  🐧 系统: $(uname -r)"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ───────── 编译日志统计（合并：耗时提取 + 日志分析，只输出到 Summary）─────────
+      - name: 📊 Build Log Analysis
         if: always() && steps.evaluate.outputs.changed == 'true'
         run: |
           cd openwrt
-          echo "📋 构建日志分析 (logs/):"
           TOTAL=$(find logs -name 'compile.txt' 2>/dev/null | wc -l)
-          echo "   总 compile.txt: ${TOTAL}"
-          # 末行无 time: 的（编译可能未完成或被中断）
           INCOMPLETE=$(find logs -name 'compile.txt' -exec sh -c '
             tail -1 "$1" 2>/dev/null | grep -q "^time: " || echo "$1"
           ' _ {} \; 2>/dev/null | wc -l)
-          echo "   末行无 time: 标记: ${INCOMPLETE} (可能中断/未完成)"
-          # 日志为空的
           EMPTY=$(find logs -name 'compile.txt' -size 0 2>/dev/null | wc -l)
-          echo "   空日志: ${EMPTY}"
-          echo ""
-          # 若 2 轮后仍失败，列出异常日志供排查
-          if [ -n "${{ steps.total_duration.outputs.duration }}" ]; then
-            if [ "${INCOMPLETE}" -gt 0 ] || [ "${EMPTY}" -gt 0 ]; then
-              echo "⚠️ 异常 compile.txt 列表:"
-              find logs -name 'compile.txt' -exec sh -c '
-                if [ ! -s "$1" ] || ! tail -1 "$1" 2>/dev/null | grep -q "^time: "; then
-                  echo "  $1 ($(wc -c < "$1") bytes)"
-                  echo "  末5行:"; tail -5 "$1" 2>/dev/null | sed "s/^/    /"
-                fi
-              ' _ {} \; 2>/dev/null
-            fi
-          fi
+
+          # 耗时提取
+          find logs -name 'compile.txt' -exec sh -c 'tail -1 "$1" 2>/dev/null' _ {} \; 2>/dev/null | \
+            grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
+
+          # ── Summary ──
+          {
+            echo ""
+            echo "### 📊 编译统计"
+            echo "| 指标 | 数值 |"
+            echo "|------|------|"
+            echo "| compile.txt 总数 | ${TOTAL} |"
+            echo "| 未完成（末行无 time:） | ${INCOMPLETE} |"
+            echo "| 空日志 | ${EMPTY} |"
+            echo "| 耗时记录数 | $(wc -l < build_time_clean.log 2>/dev/null || echo 0) |"
+            echo ""
+            echo "🐌 编译耗时 Top 5:"
+            echo "\`\`\`"
+            awk -F'#' '{
+              pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
+              real=$2;
+              printf "%8.2fs  %s\n", real, pkg
+            }' build_time_clean.log 2>/dev/null | sort -rn | head -5 || true
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # ───────── ccache 统计与清理（独立步骤，不受构建成败影响）─────────
-      - name: ⚡ ccache Stats & Cleanup
+      - name: 📈 ccache Stats & Cleanup
         if: always() && steps.evaluate.outputs.changed == 'true'
         run: |
           echo "╔══════════════════════════════════════╗"
-          echo "║  ⚡ ccache 命中率与缓存清理           ║"
+          echo "║  📈 ccache 统计与压缩测量             ║"
           echo "╚══════════════════════════════════════╝"
           if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
             export CCACHE_DIR="$(pwd)/openwrt/.ccache"
-            # 限制 ccache 上限为 5GiB，避免无限增长挤占 GitHub Actions 缓存配额
+            # 限制 ccache 上限为 5GiB
             ccache --max-size 5G 2>/dev/null || true
-            echo "📊 编译后缓存状态:"
-            ccache -s
+
+            # ── 磁盘用量 ──
+            echo "📏 磁盘占用:"
+            DISK_USAGE=$(du -sb "openwrt/.ccache" 2>/dev/null | awk '{print $1}')
+            DISK_USAGE_HUMAN=$(du -sh "openwrt/.ccache" 2>/dev/null | cut -f1)
+            echo "   ${DISK_USAGE_HUMAN}"
             echo ""
-            BEFORE=$(ccache -s 2>/dev/null | grep -oP 'Cache size \(GiB\):\s*\K[0-9.]+' || echo 0)
+
+            # ── 测量 gzip 压缩后实际大小（模拟 GitHub cache 上传） ──
+            echo "📦 测量压缩大小..."
+            # 用 gzip -1（快速模式）+ timeout 60s 防止 hang
+            CC_GZIP_BYTES=$(timeout 60 tar cf - openwrt/.ccache 2>/dev/null | gzip -1 -c | wc -c 2>/dev/null || echo 0)
+            if [ -n "$CC_GZIP_BYTES" ] && [ "$CC_GZIP_BYTES" -gt 0 ] && [ -n "$DISK_USAGE" ] && [ "$DISK_USAGE" -gt 0 ]; then
+              CC_GZIP_HUMAN=$(numfmt --to=iec "$CC_GZIP_BYTES" 2>/dev/null || echo "${CC_GZIP_BYTES} B")
+              CC_REAL_RATIO=$(awk "BEGIN {printf \"%.1f\", $DISK_USAGE / $CC_GZIP_BYTES}" 2>/dev/null)
+              echo "   原始: ${DISK_USAGE_HUMAN}  →  gzip 后: ${CC_GZIP_HUMAN}（压缩比 ${CC_REAL_RATIO}x）"
+            else
+              CC_GZIP_BYTES=0
+              CC_GZIP_HUMAN="测量超时或失败"
+              echo "   ⚠️ 压缩测量超时（>60s），跳过"
+            fi
+            echo ""
+
+            # ── 清理过期缓存 ──
+            BEFORE=$(ccache -s 2>/dev/null | awk '/Cache size \(GB\):/ {print $4}' || echo 0)
             echo "🧹 清理过期缓存 (上限: 5GiB)..."
             ccache --cleanup 2>/dev/null || true
-            AFTER=$(ccache -s 2>/dev/null | grep -oP 'Cache size \(GiB\):\s*\K[0-9.]+' || echo 0)
+            AFTER=$(ccache -s 2>/dev/null | awk '/Cache size \(GB\):/ {print $4}' || echo 0)
             EVICTED=$(awk "BEGIN {printf \"%.2f\", $BEFORE - $AFTER}" 2>/dev/null || echo 0)
-            echo "   清理前: ${BEFORE} GiB → 清理后: ${AFTER} GiB (释放 ${EVICTED} GiB)"
+            echo "   清理前: ${BEFORE} GB → 清理后: ${AFTER} GB (释放 ${EVICTED} GB)"
           else
             echo "⚠️ ccache 不可用或 .ccache 目录不存在"
+          fi
+
+          # ── Summary 缓存状态 ──
+          {
+            echo ""
+            echo "### 💾 缓存状态"
+            echo "| 缓存 | 命中 | 磁盘大小 | GitHub 上传大小 |"
+            echo "|------|------|----------|----------------|"
+            # 工具链（从 cache-refresh 的输出读取）
+            TC_HIT=$([ "${{ steps.cache-refresh.outputs.toolchain_restored }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
+            TC_DISK=$(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo "N/A")
+            echo "| **工具链** (staging_dir) | ${TC_HIT} | ${TC_DISK} | ~N/A |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ccache 信息
+          if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
+            CC_HIT=$([ "${{ steps.cache-refresh.outputs.ccache_restored }}" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
+            if [ -n "$CC_GZIP_HUMAN" ] && [ "$CC_GZIP_BYTES" -gt 0 ]; then
+              echo "| **ccache** (.ccache) | ${CC_HIT} | ${DISK_USAGE_HUMAN} | ${CC_GZIP_HUMAN}（压缩比 ${CC_REAL_RATIO}x） |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| **ccache** (.ccache) | ${CC_HIT} | ${DISK_USAGE_HUMAN} | 待下次测量 |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "| **ccache** (.ccache) | 🔄 冷启 | N/A | N/A |" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # ───────── 失败处理 ─────────
@@ -690,7 +749,6 @@ jobs:
           else
             echo "ℹ️ ccache exact key 命中 · 缓存不可变，跳过清理"
           fi
-        continue-on-error: true
 
       # ───────── 打包产物 ─────────
       - name: 📦 6. Package Artifacts
@@ -718,9 +776,9 @@ jobs:
           echo "📦 Passwall 包列表："
           ls -la release/passwall/ 2>/dev/null || echo "  (无 passwall 包)"
           echo ""
-          # 编译耗时日志（完整 build.log 仅在失败时上传，此处只保留耗时摘要）
+          # 编译耗时数据已输出到 Summary，不再单独打包日志文件
           mkdir -p release/build-logs
-          cp build_time_clean.log release/build-logs/ 2>/dev/null || true
+          echo ""
           echo ""
           echo "📊 产物汇总："
           echo "  固件: $(find release/firmware -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/firmware 2>/dev/null | cut -f1)"
@@ -728,13 +786,23 @@ jobs:
           echo "  编译耗时: $(find release/build-logs -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/build-logs 2>/dev/null | cut -f1)"
           cd release && tar czf ../${{ matrix.target }}-release.tar.gz .
 
+          # ── Summary 产物统计 ──
+          {
+            echo ""
+            echo "### 📦 产物统计"
+            echo "| 类别 | 数量 | 大小 |"
+            echo "|------|------|------|"
+            echo "| **固件** | $(find release/firmware -type f 2>/dev/null | wc -l) 个 | $(du -sh release/firmware 2>/dev/null | cut -f1) |"
+            echo "| **Passwall** | $(find release/passwall -type f 2>/dev/null | wc -l) 个 | $(du -sh release/passwall 2>/dev/null | cut -f1) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # ───────── 构建信息 JSON（独立 artifact）─────────
       - name: 📋 Generate build info
         if: steps.evaluate.outputs.changed == 'true'
         run: |
           NOW="${{ steps.start_time.outputs.timestamp }}"
-          SHA_FULL="${{ steps.current_sha.outputs.sha_full }}"
-          SHA_SHORT="${{ steps.current_sha.outputs.sha }}"
+          SHA_FULL="${{ steps.clone_packages.outputs.sha_full }}"
+          SHA_SHORT="${{ steps.clone_packages.outputs.sha }}"
 
           # 从编译产物 feeds.buildinfo 提取各 feed 版本
           FEEDS_INFO=""
@@ -777,7 +845,7 @@ jobs:
             "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored }}",
             "toolchain_exact": "${{ steps.cache-refresh.outputs.toolchain_exact }}",
             "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored }}",
-            "signing_key_fingerprint": "${{ steps.signing_key.outputs.fingerprint }}",
+            "signing_key_fingerprint": "${{ steps.signing_key.outputs.fingerprint || 'none' }}",
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
             "release_tag_prefix": "${{ matrix.release_tag_prefix }}",
@@ -787,20 +855,30 @@ jobs:
           echo "📋 build-info.json 内容:"
           jq . build-info.json
 
-          # ── Action Summary ──
+          # ── Summary Feed 版本 ──
           {
-            echo "## 📋 Build Summary — ${{ matrix.target }}"
             echo ""
-            echo "| 项目 | 详情 |"
-            echo "|------|------|"
-            echo "| **目标** | ${{ matrix.target }} |"
-            echo "| **源码** | [${{ matrix.ref }}](https://github.com/${{ matrix.repo }}) @ \`${SHA_SHORT}\` |"
-            echo "| **软件包** | [${{ matrix.packages_branch }}](https://github.com/solarflows/openwrt-packages/tree/${{ matrix.packages_branch }}) @ \`${{ steps.clone_packages.outputs.packages_sha }}\` |"
-            echo "| **编译耗时** | ${{ steps.total_duration.outputs.duration_fmt }} |"
-            echo "| **工具链** | ${{ steps.cache-refresh.outputs.toolchain_restored == 'true' && '✅ 缓存命中' || '🔨 重新编译' }} |"
-            echo "| **ccache** | ${{ steps.cache-refresh.outputs.ccache_restored == 'true' && '✅ 命中' || '🔄 冷启动' }} |"
-            echo "| **APK签名** | ${{ steps.signing_key.outputs.fingerprint }} |"
+            echo "### 📌 Feed 版本"
+            echo ""
+            if [ -n "$FEEDS_MD_JSON" ] && [ "$FEEDS_MD_JSON" != '""' ]; then
+              echo "$FEEDS_MD_JSON" | jq -r '.'
+            else
+              echo "（feeds.buildinfo 缺失或为空，未记录）"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # ── 生成 release-body.md（供 publish job 直接使用，简洁美观） ──
+          cat > release-body.md <<RELEOF
+          ## ${{ matrix.target }} Build
+
+          **源码**: [${{ matrix.ref }}](https://github.com/${{ matrix.repo }}) @ \`${SHA_SHORT}\`
+          **软件包**: \`${{ steps.clone_packages.outputs.packages_sha }}\`
+          **编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}
+
+          ---
+          ℹ️ 缓存状态、Feed 版本等详细信息请查看 Actions Summary。
+          RELEOF
+          echo "📋 release-body.md 已生成"
 
       - name: 📤 Upload firmware artifact
         if: steps.evaluate.outputs.changed == 'true'
@@ -824,7 +902,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-build-info
-          path: build-info.json
+          path: |
+            build-info.json
+            release-body.md
           retention-days: 7
 
   # ========== 发布任务 ==========
@@ -946,34 +1026,13 @@ jobs:
             local FW_COUNT
             FW_COUNT=$(find "$FW_DIR" -maxdepth 1 -type f 2>/dev/null | head -1)
             if [ -d "$FW_DIR" ] && [ -n "$FW_COUNT" ]; then
-              cat > /tmp/release_body.md <<RELEOF
-          ## ${TARGET_NAME} ${TITLE}
-
-          | 项目 | 详情 |
-          |------|------|
-          | **目标** | ${TARGET_NAME} |
-          | **源码** | [${SOURCE_REF}](https://github.com/${SOURCE_REPO}) |
-          | **源码提交** | \`${SHORT_SHA}\` |
-          | **软件包** | \`${PKG_SHA}\` |
-          | **编译耗时** | ${DURATION_FMT} |
-          | **构建时间** | ${TIMESTAMP} |
-
-          ### 缓存状态
-          | 工具链 | ccache |
-          |--------|--------|
-          | ${TC_HIT_LABEL} | ${CC_HIT_LABEL} |
-          RELEOF
-
-              # 追加 feeds 版本表（从 feeds.buildinfo 提取）
-              if [ -n "$FEEDS_MD" ]; then
-                {
-                  echo ""
-                  echo "### Feed 版本"
-                  echo ""
-                  echo "| Feed | 版本 |"
-                  echo "|------|------|"
-                  echo "$FEEDS_MD"
-                } >> /tmp/release_body.md
+              # 直接从构建产物读取 release-body.md
+              local RELEASE_BODY="artifacts/${TARGET}-build-info/release-body.md"
+              if [ -f "$RELEASE_BODY" ]; then
+                cp "$RELEASE_BODY" /tmp/release_body.md
+              else
+                # 降级：文件不存在则生成最小 body
+                echo "## ${TARGET_NAME} ${TITLE}" > /tmp/release_body.md
               fi
 
               if gh release view "$TAG" --repo "$RELEASE_REPO" &>/dev/null; then
