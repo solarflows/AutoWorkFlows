@@ -838,10 +838,40 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
+        id: download
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: '*'
+
+      - name: 🔄 Retry download via gh CLI (fallback)
+        if: steps.download.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "🔄 actions/download-artifact@v8 失败，通过 gh CLI 重试..."
+          # gh run download --name 每次只下载一个 artifact，用循环重试全部
+          ARTIFACTS=$(gh run view ${{ github.run_id }} --repo ${{ github.repository }} \
+            --json artifacts --jq '.artifacts[].name' 2>/dev/null)
+          for artifact in $ARTIFACTS; do
+            max_retries=3
+            for i in $(seq 1 $max_retries); do
+              echo "📥 下载 artifact: $artifact (尝试 #$i)..."
+              gh run download ${{ github.run_id }} \
+                --repo ${{ github.repository }} \
+                --name "$artifact" \
+                --dir artifacts 2>&1 && break
+              if [ "$i" -lt "$max_retries" ]; then
+                echo "⚠️ 重试 #$i 失败，10 秒后..."
+                sleep 10
+              else
+                echo "❌ artifact $artifact 下载失败"
+                exit 1
+              fi
+            done
+          done
+          echo "✅ 所有 artifact 下载完成"
 
       - name: Remove failed build logs
         run: rm -rf artifacts/*-build-log 2>/dev/null || true
