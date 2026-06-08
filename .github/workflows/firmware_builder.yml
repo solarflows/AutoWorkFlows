@@ -48,7 +48,7 @@ on:
           - 'true'
           - 'false'
   schedule:
-    - cron: '6 15 * * 1,6'  # 每周一、六 UTC 15:06（北京时间 12:12，避开整点高峰）
+    - cron: '6 7 * * 1,6'  # 每周一和周六的 7:06 AM（UTC 时间，上海时间为 15:06）
 
 concurrency:
   group: firmware-build-${{ github.ref }}
@@ -219,6 +219,13 @@ jobs:
         id: toolchain_hash
         run: |
           HASH=$(git -C openwrt log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
+          FORCE="${{ github.event.inputs.force_rebuild }}"
+          # force_rebuild 时插入 force- 前缀，使 cache key 永不精确命中，
+          # 确保 actions/cache post-job 一定保存新缓存（cache-hit=false）
+          if [ "$FORCE" == "true" ]; then
+            HASH="force-${HASH}"
+            echo "🔧 强制重建模式 · 缓存 key 已注入 force- 前缀"
+          fi
           echo "hash=$HASH" >> $GITHUB_OUTPUT
           echo "🔧 工具链指纹: $HASH"
 
@@ -336,8 +343,6 @@ jobs:
       - name: 🔄 Verify & report cache status
         if: steps.evaluate.outputs.changed == 'true'
         id: cache-refresh
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           FORCE="${{ github.event.inputs.force_rebuild }}"
 
@@ -355,14 +360,6 @@ jobs:
               rm -rf openwrt/.ccache
               echo "  ✂️ .ccache 已清空 (ccache -C)"
             fi
-            # 远端：删除本 target 的所有缓存条目
-            for PREFIX in "immwrt-toolchain-${{ matrix.target }}-" "immwrt-ccache-${{ matrix.target }}-"; do
-              CACHE_LIST=$(gh cache list --repo "${{ github.repository }}" --key "$PREFIX" --limit 100 | cut -f 1 || true)
-              for CACHE_KEY in $CACHE_LIST; do
-                gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}" 2>/dev/null || true
-              done
-            done
-            echo "  ✂️ 远端缓存已清空"
             echo "✅ 强制清理完成 · 本次将全量编译并保存全新缓存"
           fi
 
@@ -580,6 +577,7 @@ jobs:
 
           # ── Summary ──
           echo "| ⏱️ **编译耗时** | ${TOTAL_FMT} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏁 **构建结束** | $(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S') |" >> "$GITHUB_STEP_SUMMARY"
 
           # 表格结束，追加运行环境信息
           {
@@ -625,7 +623,7 @@ jobs:
               pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
               real=$2;
               printf "%8.2fs  %s\n", real, pkg
-            }' build_time_clean.log 2>/dev/null | sort -rn | head -5 || true
+            }' build_time_clean.log 2>/dev/null | sort -rn 2>/dev/null | head -5 || true
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -636,25 +634,55 @@ jobs:
           echo "╔══════════════════════════════════════╗"
           echo "║  📈 ccache 统计与压缩测量             ║"
           echo "╚══════════════════════════════════════╝"
+
+          # ── 初始化 Summary 行供后续追加 ──
+          TC_HIT_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
+          TC_DISK=$(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo "N/A")
+
           if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
             export CCACHE_DIR="$(pwd)/openwrt/.ccache"
-            # 限制 ccache 上限为 5GiB
             ccache --max-size 5G 2>/dev/null || true
+
+            # ── 获取完整统计信息 ──
+            CC_STATS=$(ccache -s 2>/dev/null || true)
+
+            # ── 解析关键指标 ──
+            HITS_DIRECT=$(echo "$CC_STATS" | sed -n 's/^  cache hit (direct)[[:space:]]*\([0-9]*\).*/\1/p')
+            HITS_PREP=$(echo "$CC_STATS" | sed -n 's/^  cache hit (preprocessed)[[:space:]]*\([0-9]*\).*/\1/p')
+            MISSES=$(echo "$CC_STATS" | sed -n 's/^  cache miss[[:space:]]*\([0-9]*\).*/\1/p')
+            HIT_RATE=$(echo "$CC_STATS" | sed -n 's/^  cache hit rate[[:space:]]*\(.*\)/\1/p')
+            CACHE_SIZE_GB=$(echo "$CC_STATS" | sed -n 's/^  cache size (GB)[[:space:]]*\([0-9.]*\).*/\1/p')
+            [ -z "$HITS_DIRECT" ] && HITS_DIRECT=0
+            [ -z "$HITS_PREP" ] && HITS_PREP=0
+            [ -z "$MISSES" ] && MISSES=0
+            [ -z "$HIT_RATE" ] && HIT_RATE="N/A"
+            [ -z "$CACHE_SIZE_GB" ] && CACHE_SIZE_GB=0
+            TOTAL_REQUESTS=$((HITS_DIRECT + HITS_PREP + MISSES))
+
+            # ── 输出统计 ──
+            echo ""
+            echo "📊 ccache 统计摘要:"
+            echo "   命中率:       ${HIT_RATE}"
+            echo "   直接命中:     ${HITS_DIRECT}"
+            echo "   预处理命中:   ${HITS_PREP}"
+            echo "   未命中:       ${MISSES}"
+            echo "   总请求数:     ${TOTAL_REQUESTS}"
+            echo "   缓存大小:     ${CACHE_SIZE_GB} GB"
+            echo ""
 
             # ── 磁盘用量 ──
             echo "📏 磁盘占用:"
-            DISK_USAGE=$(du -sb "openwrt/.ccache" 2>/dev/null | awk '{print $1}')
+            DISK_USAGE_BYTES=$(du -sb "openwrt/.ccache" 2>/dev/null | awk '{print $1}')
             DISK_USAGE_HUMAN=$(du -sh "openwrt/.ccache" 2>/dev/null | cut -f1)
             echo "   ${DISK_USAGE_HUMAN}"
             echo ""
 
             # ── 测量 gzip 压缩后实际大小（模拟 GitHub cache 上传） ──
             echo "📦 测量压缩大小..."
-            # 用 gzip -1（快速模式）+ timeout 60s 防止 hang
             CC_GZIP_BYTES=$(timeout 60 tar cf - openwrt/.ccache 2>/dev/null | gzip -1 -c | wc -c 2>/dev/null || echo 0)
-            if [ -n "$CC_GZIP_BYTES" ] && [ "$CC_GZIP_BYTES" -gt 0 ] && [ -n "$DISK_USAGE" ] && [ "$DISK_USAGE" -gt 0 ]; then
+            if [ -n "$CC_GZIP_BYTES" ] && [ "$CC_GZIP_BYTES" -gt 0 ] && [ -n "$DISK_USAGE_BYTES" ] && [ "$DISK_USAGE_BYTES" -gt 0 ]; then
               CC_GZIP_HUMAN=$(numfmt --to=iec "$CC_GZIP_BYTES" 2>/dev/null || echo "${CC_GZIP_BYTES} B")
-              CC_REAL_RATIO=$(awk "BEGIN {printf \"%.1f\", $DISK_USAGE / $CC_GZIP_BYTES}" 2>/dev/null)
+              CC_REAL_RATIO=$(awk -v disk="$DISK_USAGE_BYTES" -v gzip="$CC_GZIP_BYTES" 'BEGIN {printf "%.1f", disk / gzip}' 2>/dev/null)
               echo "   原始: ${DISK_USAGE_HUMAN}  →  gzip 后: ${CC_GZIP_HUMAN}（压缩比 ${CC_REAL_RATIO}x）"
             else
               CC_GZIP_BYTES=0
@@ -664,39 +692,38 @@ jobs:
             echo ""
 
             # ── 清理过期缓存 ──
-            BEFORE=$(ccache -s 2>/dev/null | awk '/Cache size \(GB\):/ {print $4}' || echo 0)
             echo "🧹 清理过期缓存 (上限: 5GiB)..."
             ccache --cleanup 2>/dev/null || true
-            AFTER=$(ccache -s 2>/dev/null | awk '/Cache size \(GB\):/ {print $4}' || echo 0)
-            EVICTED=$(awk "BEGIN {printf \"%.2f\", $BEFORE - $AFTER}" 2>/dev/null || echo 0)
-            echo "   清理前: ${BEFORE} GB → 清理后: ${AFTER} GB (释放 ${EVICTED} GB)"
+            CC_STATS_AFTER=$(ccache -s 2>/dev/null || true)
+            CACHE_SIZE_AFTER_GB=$(echo "$CC_STATS_AFTER" | sed -n 's/^  cache size (GB)[[:space:]]*\([0-9.]*\).*/\1/p')
+            [ -z "$CACHE_SIZE_AFTER_GB" ] && CACHE_SIZE_AFTER_GB=0
+            EVICTED=$(awk -v before="$CACHE_SIZE_GB" -v after="$CACHE_SIZE_AFTER_GB" 'BEGIN {printf "%.2f", before - after}' 2>/dev/null)
+            echo "   清理前: ${CACHE_SIZE_GB} GB → 清理后: ${CACHE_SIZE_AFTER_GB} GB (释放 ${EVICTED} GB)"
+
+            # ── 构造 ccache 行变量 ──
+            CC_HIT=$([ "${{ steps.cache-refresh.outputs.ccache_restored }}" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
+            if [ -n "$CC_GZIP_HUMAN" ] && [ "$CC_GZIP_BYTES" -gt 0 ]; then
+              CCACHE_LINE="| **ccache** (.ccache) | ${CC_HIT} | ${DISK_USAGE_HUMAN} | ${CC_GZIP_HUMAN}（压缩比 ${CC_REAL_RATIO}x） |"
+            else
+              CCACHE_LINE="| **ccache** (.ccache) | ${CC_HIT} | ${DISK_USAGE_HUMAN} | 待下次测量 |"
+            fi
+            CCACHE_HITRATE="${HIT_RATE}（直接 ${HITS_DIRECT} + 预处理 ${HITS_PREP} = ${TOTAL_REQUESTS} 次请求）"
           else
             echo "⚠️ ccache 不可用或 .ccache 目录不存在"
+            CCACHE_LINE="| **ccache** (.ccache) | 🔄 冷启 | N/A | N/A |"
+            CCACHE_HITRATE="N/A"
           fi
 
           # ── Summary 缓存状态 ──
           {
             echo ""
             echo "### 💾 缓存状态"
-            echo "| 缓存 | 命中 | 磁盘大小 | GitHub 上传大小 |"
-            echo "|------|------|----------|----------------|"
-            # 工具链（从 cache-refresh 的输出读取）
-            TC_HIT=$([ "${{ steps.cache-refresh.outputs.toolchain_restored }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
-            TC_DISK=$(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo "N/A")
-            echo "| **工具链** (staging_dir) | ${TC_HIT} | ${TC_DISK} | ~N/A |"
+            echo "| 缓存 | 恢复状态 | 磁盘大小 | GitHub 上传大小 |"
+            echo "|------|----------|----------|----------------|"
+            echo "| **工具链** (staging_dir) | ${TC_HIT_LABEL} | ${TC_DISK} | ~N/A |"
+            echo "${CCACHE_LINE}"
+            echo "| **ccache 命中率** | ${CCACHE_HITRATE:-N/A} | — | — |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-          # ccache 信息
-          if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
-            CC_HIT=$([ "${{ steps.cache-refresh.outputs.ccache_restored }}" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
-            if [ -n "$CC_GZIP_HUMAN" ] && [ "$CC_GZIP_BYTES" -gt 0 ]; then
-              echo "| **ccache** (.ccache) | ${CC_HIT} | ${DISK_USAGE_HUMAN} | ${CC_GZIP_HUMAN}（压缩比 ${CC_REAL_RATIO}x） |" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "| **ccache** (.ccache) | ${CC_HIT} | ${DISK_USAGE_HUMAN} | 待下次测量 |" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          else
-            echo "| **ccache** (.ccache) | 🔄 冷启 | N/A | N/A |" >> "$GITHUB_STEP_SUMMARY"
-          fi
 
       # ───────── 失败处理 ─────────
       - name: 📤 Upload build log on failure
@@ -718,17 +745,18 @@ jobs:
         uses: mxschmitt/action-tmate@v3
         timeout-minutes: 30
 
-      # ───────── 清理旧缓存（失败时保留缓存作为 fallback）─────────
-      - name: 🧹 Cleanup stale caches
-        if: steps.evaluate.outputs.changed == 'true' && success() && github.event.inputs.force_rebuild != 'true'
+      # ───────── 清理远端缓存（统一入口，仅构建成功时执行）─────────
+      - name: 🧹 Purge stale remote caches
+        if: steps.evaluate.outputs.changed == 'true' && success()
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          TC_EXACT_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
-          echo "🧹 清理旧缓存..."
+          FORCE="${{ github.event.inputs.force_rebuild }}"
+          echo "🧹 清理远端缓存 (force_rebuild=${FORCE})..."
 
-          # 工具链：仅在 exact key 未命中时删除（此时 post-job 会写入新 key）
-          if [ "$TC_EXACT_HIT" != "true" ]; then
+          # 工具链：force_rebuild 时无条件全部删除，否则仅在 exact key 未命中时删除
+          TC_EXACT_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
+          if [ "$FORCE" == "true" ] || [ "$TC_EXACT_HIT" != "true" ]; then
             TC_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 | cut -f 1)
             for CACHE_KEY in $TC_LIST; do
               gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
@@ -738,9 +766,9 @@ jobs:
             echo "ℹ️ 工具链 exact key 命中 · 缓存不可变，跳过清理"
           fi
 
-          # ccache：与工具链同逻辑，仅在 exact key 未命中时删除（避免误删 post-job 正在保存的缓存）
+          # ccache：同上逻辑
           CC_EXACT_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
-          if [ "$CC_EXACT_HIT" != "true" ]; then
+          if [ "$FORCE" == "true" ] || [ "$CC_EXACT_HIT" != "true" ]; then
             CC_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 | cut -f 1)
             for CACHE_KEY in $CC_LIST; do
               gh cache delete "$CACHE_KEY" --repo "${{ github.repository }}"
@@ -784,7 +812,7 @@ jobs:
           echo "  固件: $(find release/firmware -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/firmware 2>/dev/null | cut -f1)"
           echo "  Passwall: $(find release/passwall -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/passwall 2>/dev/null | cut -f1)"
           echo "  编译耗时: $(find release/build-logs -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/build-logs 2>/dev/null | cut -f1)"
-          cd release && tar czf ../${{ matrix.target }}-release.tar.gz .
+          (cd release && tar czf ../${{ matrix.target }}-release.tar.gz .)
 
           # ── Summary 产物统计 ──
           {
@@ -859,24 +887,30 @@ jobs:
           {
             echo ""
             echo "### 📌 Feed 版本"
-            echo ""
             if [ -n "$FEEDS_MD_JSON" ] && [ "$FEEDS_MD_JSON" != '""' ]; then
+              echo ""
+              echo "| Feed | 版本 |"
+              echo "|------|------|"
               echo "$FEEDS_MD_JSON" | jq -r '.'
             else
+              echo ""
               echo "（feeds.buildinfo 缺失或为空，未记录）"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           # ── 生成 release-body.md（供 publish job 直接使用，简洁美观） ──
+          TC_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored }}" = "true" ] && echo "✅ 工具链缓存命中" || echo "🔨 工具链重新编译")
+          CC_LABEL=$([ "${{ steps.cache-refresh.outputs.ccache_restored }}" = "true" ] && echo "✅ ccache 命中" || echo "🔄 ccache 冷启动")
           cat > release-body.md <<RELEOF
           ## ${{ matrix.target }} Build
 
           **源码**: [${{ matrix.ref }}](https://github.com/${{ matrix.repo }}) @ \`${SHA_SHORT}\`
           **软件包**: \`${{ steps.clone_packages.outputs.packages_sha }}\`
           **编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}
+          **缓存**: ${TC_LABEL} / ${CC_LABEL}
 
           ---
-          ℹ️ 缓存状态、Feed 版本等详细信息请查看 Actions Summary。
+          ℹ️ 完整构建报告请查看 GitHub Actions Summary。
           RELEOF
           echo "📋 release-body.md 已生成"
 
