@@ -166,13 +166,13 @@ jobs:
           exit $EXIT_CODE
 
   # ========== 构建任务（矩阵并行） ==========
+  # 注意：矩阵 job 的 outputs 只反映最后一个完成的矩阵分片的值（不可预测顺序），
+  # 因此 publish job 不应依赖 needs.build.outputs.changed。
   build:
     name: Build ${{ matrix.target }}
     needs: define-matrix
     runs-on: ubuntu-24.04
     timeout-minutes: 480
-    outputs:
-      changed: ${{ steps.evaluate.outputs.changed }}
     strategy:
       matrix:
         include: ${{ fromJson(needs.define-matrix.outputs.matrix) }}
@@ -258,7 +258,8 @@ jobs:
             echo "changed=true" >> $GITHUB_OUTPUT
             BUILD_STATUS="🔵 源码有变更 → 继续构建"
           fi
-          touch .sha_marker
+          # 注意：.sha_marker 不在本步骤创建，而是在 build 成功后才写入（见末尾 save source marker 步骤），
+          # 避免构建失败时 actions/cache post-job 将 marker 误缓存，导致下次定时触发跳过修复后的构建。
 
           # ── Summary 标题 + 构建概述（表格保持打开，后续 step 继续追加行） ──
           {
@@ -337,6 +338,11 @@ jobs:
         id: cache-cc
         uses: actions/cache@v5
         with:
+          # 刻意使用 run_id 而非内容哈希，保证 cache-hit 永远为 false。
+          # 原因：ccache 的失效因素不可穷举（任何 package Makefile/CFLAGS/依赖版本变化
+          # 都可能导致编译输出不同），无法用单一内容哈希精确建模。
+          # run_id 确保每轮成功构建后必定保存最新缓存，restore-keys 模糊匹配回退
+          # 到最近一次快照；旧条目由后续清理步骤（见 Purge stale remote caches）删除。
           key: immwrt-ccache-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: |
             immwrt-ccache-${{ matrix.target }}-
@@ -418,6 +424,9 @@ jobs:
           echo "  ⚡ ccache (.ccache):      ${CC_ICON}"
 
           # 输出工具链精确命中标记供 release note 使用
+          # 注意：此步骤是诊断/报告性质的，设置 continue-on-error 避免瞬态 IO 错误
+          # （如 find/du 在并发环境下读到临时文件被删除）杀死整个 7 小时固件构建。
+          # 下游引用本 step 的 outputs 时（build-info.json）应容忍空值。
           echo "toolchain_exact=${TC_EXACT}" >> $GITHUB_OUTPUT
         continue-on-error: true
 
@@ -535,34 +544,52 @@ jobs:
           echo "duration=${DURATION_SEC}" >> $GITHUB_OUTPUT
           echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))"
 
-      # ───────── 单线程重试（独立步骤，兜底并行竞争）─────────
-      - name: 🔄 Retry build (serial)
+      # ───────── 重试（先更新仓库 → 并行重试 → 单线程兜底）─────────
+      - name: 🔄 Retry build
         if: steps.evaluate.outputs.changed == 'true' && steps.build.outputs.make_exit != '0'
         id: retry
         run: |
+          set -euo pipefail
           START_TIME=$(date +%s)
           cd openwrt
           export CC="ccache gcc"
           export CXX="ccache g++"
 
-          echo "⚠️ 并行编译有错误 → 单线程重试..."
+          echo "⚠️ 并行编译有错误 → 更新仓库后重试..."
+
           echo "📥 更新源码仓库 (${{ matrix.ref }})..."
           git pull origin ${{ matrix.ref }} 2>/dev/null || echo "   (无远端更新或非分支引用)"
           echo "📥 更新 openwrt-packages (${{ matrix.packages_branch }})..."
           git -C package/solarflows pull origin ${{ matrix.packages_branch }} 2>/dev/null || echo "   (无远端更新)"
           echo "📥 更新 feeds ..."
           ./scripts/feeds update -a && ./scripts/feeds install -a
-          make -j1 2>&1 | tee -a build.log || {
-            END_TIME=$(date +%s)
-            DURATION_SEC=$((END_TIME - START_TIME))
-            echo "retry_duration=${DURATION_SEC}" >> $GITHUB_OUTPUT
-            echo "💥 构建彻底失败 · 请查看 build.log 及 logs/ 目录"
-            exit 1
-          }
+
+          # 第一轮：并行重试（很多竞争错误二次就能过）
+          echo "🔄 第一轮重试：并行编译 ($(nproc) 线程)..."
+          RETRY_EXIT=1
+          set +o pipefail
+          make -j$(nproc) 2>&1 | tee -a build.log
+          RETRY_EXIT=${PIPESTATUS[0]}
+          set -o pipefail
+
+          if [ "$RETRY_EXIT" -ne 0 ]; then
+            # 第二轮：单线程重试（最后一搏）
+            echo "⚠️ 并行重试仍有错误 → 单线程最后一搏..."
+            set +o pipefail
+            make -j1 2>&1 | tee -a build.log
+            RETRY_EXIT=${PIPESTATUS[0]}
+            set -o pipefail
+          fi
+
           END_TIME=$(date +%s)
           DURATION_SEC=$((END_TIME - START_TIME))
           echo "retry_duration=${DURATION_SEC}" >> $GITHUB_OUTPUT
-          echo "✅ 单线程重试完成 · 耗时: $(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))"
+
+          if [ "$RETRY_EXIT" -ne 0 ]; then
+            echo "💥 构建彻底失败 · 请查看 build.log 及 logs/ 目录"
+            exit 1
+          fi
+          echo "✅ 重试完成 · 耗时: $(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))"
 
       # ───────── 总耗时汇总 ─────────
       - name: ⏱️ Total Build Duration
@@ -754,7 +781,7 @@ jobs:
 
       # ───────── 打包产物 ─────────
       - name: 📦 6. Package Artifacts
-        if: steps.evaluate.outputs.changed == 'true'
+        if: steps.evaluate.outputs.changed == 'true' && success()
         run: |
           echo "╔══════════════════════════════════════╗"
           echo "║  📦 6. Package Artifacts             ║"
@@ -900,7 +927,7 @@ jobs:
           echo "📋 release-body.md 已生成"
 
       - name: 📤 Upload firmware artifact
-        if: steps.evaluate.outputs.changed == 'true'
+        if: steps.evaluate.outputs.changed == 'true' && success()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-release
@@ -908,7 +935,7 @@ jobs:
           retention-days: 7
 
       - name: 📤 Upload passwall artifact
-        if: steps.evaluate.outputs.changed == 'true'
+        if: steps.evaluate.outputs.changed == 'true' && success()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-passwall
@@ -917,7 +944,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: 📤 Upload build info artifact
-        if: steps.evaluate.outputs.changed == 'true'
+        if: steps.evaluate.outputs.changed == 'true' && success()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-build-info
@@ -926,14 +953,20 @@ jobs:
             release-body.md
           retention-days: 7
 
+      - name: 💾 Save source marker on success
+        if: steps.evaluate.outputs.changed == 'true' && success()
+        run: touch .sha_marker
+
   # ========== 发布任务 ==========
+  # 使用 always() 确保即使某个矩阵分片构建失败，仍可发布其他成功的分片。
+  # 内部 publish_target() 函数会逐个目标检查产物是否存在，缺失则优雅跳过。
   publish:
     name: Publish Releases
     needs: build
     if: |
+      always() &&
       !cancelled() &&
-      needs.build.result != 'skipped' &&
-      needs.build.outputs.changed == 'true' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
       (github.event.inputs.release != 'false' || github.event_name == 'schedule')
     runs-on: ubuntu-24.04
     steps:
