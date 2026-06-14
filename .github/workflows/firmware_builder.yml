@@ -618,7 +618,7 @@ jobs:
             echo "  💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
             echo "  🐧 系统: $(uname -r)"
             echo "\`\`\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ───────── 编译日志统计（合并：耗时提取 + 日志分析，只输出到 Summary）─────────
       - name: 📊 Build Log Analysis
@@ -654,7 +654,7 @@ jobs:
               printf "%8.2fs  %s\n", real, pkg
             }' build_time_clean.log 2>/dev/null | sort -rn 2>/dev/null | head -5 || true
             echo "\`\`\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ───────── ccache 统计与清理（独立步骤，不受构建成败影响）─────────
       - name: 📈 ccache Stats & Cleanup
@@ -695,10 +695,15 @@ jobs:
             [ -z "$MISSES" ] && MISSES="?"
             [ -z "$CACHE_SIZE" ] && CACHE_SIZE="?"
 
-            # ── 输出完整原始 ccache -s 到 Summary ──
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "$CC_RAW" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # ── 输出完整原始 ccache -s（日志 + Summary 双写）──
+            echo ""
+            echo "📊 ccache -s 原始输出:"
+            echo "$CC_RAW"
+            {
+              echo '```'
+              echo "$CC_RAW"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
 
             # ── 清理过期缓存 ──
             echo "🧹 清理过期缓存 (上限: 5GiB)..."
@@ -724,7 +729,7 @@ jobs:
             echo "| **工具链** (staging_dir) | ${TC_HIT_LABEL} | ${TC_DISK} | ~N/A |"
             echo "${CCACHE_LINE}"
             echo "| **ccache 缩写** | ${CCACHE_HITRATE:-N/A} | — | — |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ───────── 失败处理 ─────────
       - name: 📤 Upload build log on failure
