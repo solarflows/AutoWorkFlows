@@ -22,8 +22,9 @@ format_git_clone_output -r https://github.com/stevenjoezhang/luci-app-cloudflare
 # D
 # dnsfilter         基于dnsmasq的去广告程序
 format_git_clone_output -r https://github.com/kiddin9/luci-app-dnsfilter
-checkout_partial_code -r https://github.com/linkease/nas-packages-luci luci/luci-app-ddnsto
-checkout_partial_code -r https://github.com/linkease/nas-packages network/services/ddnsto
+checkout_partial_code -r https://github.com/linkease/ddnsto-openwrt-package ddnsto luci-app-ddnsto
+# checkout_partial_code -r https://github.com/linkease/nas-packages-luci luci/luci-app-ddnsto
+# checkout_partial_code -r https://github.com/linkease/nas-packages network/services/ddnsto
 
 # L
 # lucky             大吉多种功能结合体
