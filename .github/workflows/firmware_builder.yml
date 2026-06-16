@@ -48,7 +48,7 @@ on:
           - 'true'
           - 'false'
   schedule:
-    - cron: '6 7 * * 1,6'  # 每周一和周六的 7:06 AM（UTC 时间，上海时间为 15:06）
+    - cron: '6 0 * * 1,6'  # 每周一和周六的 7:06 AM（UTC 时间，上海时间为 15:06）
 
 concurrency:
   group: firmware-build-${{ github.ref }}
@@ -771,6 +771,13 @@ jobs:
           else
             echo "ℹ️ 工具链 exact key 命中 · 缓存不可变，跳过清理"
           fi
+
+          # sha marker cache：源码/包 SHA 变化会产生新 key，旧条目永不被命中，每次构建成功都全清
+          SHA_LIST=$(gh cache list --repo "${{ github.repository }}" --key "sha-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id')
+          for CACHE_ID in $SHA_LIST; do
+            gh cache delete "$CACHE_ID" --repo "${{ github.repository }}"
+          done
+          echo "🧹 旧 sha marker 缓存已清理 (${SHA_LIST:+$(echo "$SHA_LIST" | wc -l) 条})"
 
           # ccache：同上逻辑
           CC_EXACT_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
