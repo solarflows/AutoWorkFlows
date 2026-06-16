@@ -48,7 +48,7 @@ on:
           - 'true'
           - 'false'
   schedule:
-    - cron: '6 7 * * 1,6'  # 每周一和周六的 7:06 AM（UTC 时间，上海时间为 15:06）
+    - cron: '6 0 * * 1,6'  # 每周一和周六的 UTC 1:00，对应北京时间 9:00
 
 concurrency:
   group: firmware-build-${{ github.ref }}
