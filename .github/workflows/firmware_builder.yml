@@ -458,8 +458,17 @@ jobs:
           fi
 
           # 1. 写入私钥（用 printf 避免 echo 可能暴露 secret）
-          printf '%s' "$APK_BUILD_KEY" > openwrt/private-key.pem
+          #    先 strip 首尾空白（GitHub 网页设置 secret 时常附带多余换行）
+          printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > openwrt/private-key.pem
           chmod 600 openwrt/private-key.pem
+
+          # 诊断：输出文件大小和行结构（不暴露密钥内容）
+          echo "📏 密钥文件: $(wc -c < openwrt/private-key.pem) 字节, $(wc -l < openwrt/private-key.pem) 行"
+          echo "📏 首行: $(head -1 openwrt/private-key.pem)"
+          echo "📏 末行: $(tail -1 openwrt/private-key.pem)"
+
+          # 确保 UNIX 换行（防止 Windows CRLF 导致 openssl 解析失败）
+          sed -i 's/\r$//' openwrt/private-key.pem
 
           # 2. 验证密钥格式：ImmortalWrt 构建系统使用 ECDSA prime256v1 (P-256)
           echo "🔍 验证密钥格式..."
