@@ -22,9 +22,10 @@
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `packages_branch` | `target` 的值 | 克隆 `openwrt-packages` 时使用的分支名 |
-| `release_repo` | `repo` 的值 | GitHub Release 发布到的仓库 |
+| `release_repo` | `repo` 的值 | 固件 GitHub Release 发布到的仓库 |
 | `release_tag_prefix` | `""` (无前缀) | Release 版本 Tag 的前缀。同一仓库有多个构建时用于区分，例如 `mt798x-` 生成 `mt798x-v20260505-1430` |
-| `passwall_tag` | `"passwall-{target}"` | Passwall 固定 Release 的 Tag 名 |
+| `passwall_repo` | `"solarflows/openwrt-packages"` | Passwall 包发布到的仓库 |
+| `passwall_tag` | `target` 的值 | Passwall 固定 Release 的 Tag 名（默认为目标名，如 `qualcommax`）。同名文件替换，不同名文件保留 |
 | `apk_signing` | `false` | 是否需要 APK 签名密钥（OpenWrt ≥ 25.12 改用 APK 时需要设为 `true`） |
 
 ---
