@@ -854,11 +854,6 @@ jobs:
             -exec cp {} release/firmware/ \; 2>/dev/null || true
           echo "📦 固件文件列表："
           ls -la release/firmware/ 2>/dev/null || echo "  (无固件文件)"
-          # 附带 APK 签名公钥（用户可下载以信任本构建的软件包）
-          if [ -f public-key.pem ]; then
-            cp public-key.pem release/firmware/solarflows-apk-public.pem
-            echo "🔑 公钥已复制到固件发布目录"
-          fi
           # passwall ipk 和 apk 均支持（mt798x 旧版用 ipk，qualcommax 新版用 apk）
           mkdir -p release/passwall
           find bin/packages -name "*passwall*.ipk" -o -name "*passwall*.apk" -exec cp {} release/passwall/ \; 2>/dev/null || true
@@ -993,8 +988,6 @@ jobs:
 
             echo ""
             echo "---"
-            echo "🔑 **APK 签名公钥**: \`solarflows-apk-public.pem\`（下载后放入 \`/etc/apk/keys/\` 即可信任本构建的软件包）"
-            echo ""
             echo "ℹ️ 完整构建报告请查看 GitHub Actions Summary。"
           } > release-body.md
           echo "📋 release-body.md 已生成"
@@ -1187,7 +1180,7 @@ jobs:
             local PW_DIR="artifacts/${TARGET}-passwall"
             if [ -d "$PW_DIR" ]; then
               local PW_FILES
-              PW_FILES=$(find "$PW_DIR" -maxdepth 1 \( -name '*.ipk' -o -name '*.apk' \) -type f 2>/dev/null || true)
+              PW_FILES=$(find "$PW_DIR" -maxdepth 1 \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) -type f 2>/dev/null || true)
               if [ -n "$PW_FILES" ]; then
                 local PW_NOTES
                 PW_NOTES="最新 passwall 及依赖，更新于 $(date +'%Y-%m-%d %H:%M')"$'\n'"🔑 APK 签名公钥: solarflows-apk-public.pem（下载后放入 /etc/apk/keys/ 即可信任这些包）"
