@@ -1,5 +1,10 @@
 name: 同步并推送
 
+# 防止并发运行导致推送冲突 (cannot lock ref 错误)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   schedule:
     - cron: '0 */12 * * *'  # 每12小时运行一次
@@ -36,7 +41,7 @@ jobs:
       - name: 克隆仓库并设置上游
         run: |
           cd $GITHUB_WORKSPACE
-          git clone --quiet --depth=1 https://github.com/solarflows/lede.git temp_rep
+          git clone --depth=1 https://github.com/solarflows/lede.git temp_rep
           cd temp_rep
 
           index=1
@@ -53,7 +58,29 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          set -e
           cd $GITHUB_WORKSPACE/temp_rep
+
+          # 推送函数：先fetch确保本地ref最新，避免浅克隆导致的 cannot lock ref 错误
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            for i in $(seq 1 $max_retries); do
+              # 先拉取目标分支最新状态，避免浅克隆+不同推送URL导致old-value过期
+              git fetch "$remote_url" "${refspec#*:}" --no-tags 2>/dev/null || true
+              if git push "$remote_url" -f "$refspec" 2>&1; then
+                return 0
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
 
           overall_patch_failed=false
           for target in $TARGETS; do
@@ -69,8 +96,7 @@ jobs:
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
-                if git apply --check "$patch_file"; then
-                  git apply  --whitespace=nowarn  "$patch_file"
+                if git apply --whitespace=nowarn "$patch_file"; then
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
@@ -89,24 +115,15 @@ jobs:
               fi
             fi
 
-            # if [[ $target == "lean" ]]; then
-            #   git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:master
-            # else
-            #   if [ -d .github ]; then
-            #       rm -rf .github
-            #       git add .
-            #       git commit -m "Removing workflows files."
-            #   fi
-            #   git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:$target
-            # fi
-
-            # LEDE 仓库（包括 lean 分支）统一删除 .github 目录
             if [ -d .github ]; then
                 rm -rf .github
                 git add .
                 git commit -m "Removing workflows files."
             fi
-            git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" -f HEAD:$target
+            retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" "HEAD:$target" || {
+              echo "::error::推送 $target 失败（已重试）"
+              overall_patch_failed=true
+            }
 
           done
           if [ "$overall_patch_failed" = true ]; then exit 1; fi
@@ -133,7 +150,7 @@ jobs:
       - name: 克隆仓库并设置上游
         run: |
           cd $GITHUB_WORKSPACE
-          git clone --quiet --depth=1 https://github.com/solarflows/luci.git temp_rep
+          git clone --depth=1 https://github.com/solarflows/luci.git temp_rep
           cd temp_rep
 
           index=1
@@ -150,7 +167,29 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          set -e
           cd $GITHUB_WORKSPACE/temp_rep
+
+          # 推送函数：先fetch确保本地ref最新，避免浅克隆导致的 cannot lock ref 错误
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            for i in $(seq 1 $max_retries); do
+              # 先拉取目标分支最新状态，避免浅克隆+不同推送URL导致old-value过期
+              git fetch "$remote_url" "${refspec#*:}" --no-tags 2>/dev/null || true
+              if git push "$remote_url" -f "$refspec" 2>&1; then
+                return 0
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
 
           overall_patch_failed=false
           for target in $TARGETS; do
@@ -161,8 +200,7 @@ jobs:
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
-                if git apply --check "$patch_file"; then
-                  git apply  --whitespace=nowarn  "$patch_file"
+                if git apply --whitespace=nowarn "$patch_file"; then
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
@@ -182,14 +220,20 @@ jobs:
             fi
 
             if [[ $target == "lean" ]]; then
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:master
+              retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" "HEAD:master" || {
+                echo "::error::推送 $target 失败（已重试）"
+                overall_patch_failed=true
+              }
             else
               if [ -d .github ]; then
                   rm -rf .github
                   git add .
                   git commit -m "Removing workflows files."
               fi
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:$target
+              retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" "HEAD:$target" || {
+                echo "::error::推送 $target 失败（已重试）"
+                overall_patch_failed=true
+              }
             fi
           done
           if [ "$overall_patch_failed" = true ]; then exit 1; fi
@@ -201,8 +245,7 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" ]; then
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
-              if git apply --check "$patch_file"; then
-                git apply  --whitespace=nowarn  "$patch_file"
+              if git apply --whitespace=nowarn "$patch_file"; then
                 git add .
                 git commit -m "Applying $(basename "$patch_file")."
               else
@@ -222,7 +265,10 @@ jobs:
                 git add .
                 git commit -m "Removing workflows files."
             fi
-            git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" -f HEAD:hanwckf
+            retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" "HEAD:hanwckf" || {
+              echo "::error::推送 hanwckf 失败（已重试）"
+              exit 1
+            }
           else
             echo "::error::hanwckf 补丁应用失败，跳过推送。"
             exit 1
@@ -250,7 +296,7 @@ jobs:
       - name: 克隆仓库并设置上游
         run: |
           cd $GITHUB_WORKSPACE
-          git clone --quiet --depth=1 https://github.com/solarflows/packages.git temp_rep
+          git clone --depth=1 https://github.com/solarflows/packages.git temp_rep
           cd temp_rep
 
           index=1
@@ -267,7 +313,30 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          set -e
           cd $GITHUB_WORKSPACE/temp_rep
+
+          # 推送函数：先fetch确保本地ref最新，避免浅克隆导致的 cannot lock ref 错误
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            for i in $(seq 1 $max_retries); do
+              # 先拉取目标分支最新状态，避免浅克隆+不同推送URL导致old-value过期
+              git fetch "$remote_url" "${refspec#*:}" --no-tags 2>/dev/null || true
+              if git push "$remote_url" -f "$refspec" 2>&1; then
+                return 0
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
+
           overall_patch_failed=false
           for target in $TARGETS; do
             echo "Target: $target"
@@ -277,8 +346,7 @@ jobs:
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
-                if git apply --check "$patch_file"; then
-                  git apply  --whitespace=nowarn  "$patch_file"
+                if git apply --whitespace=nowarn "$patch_file"; then
                   git add .
                   git commit -m "Applying $(basename "$patch_file")."
                 else
@@ -298,14 +366,20 @@ jobs:
             fi
 
             if [[ $target == "lean" ]]; then
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:master
+              retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" "HEAD:master" || {
+                echo "::error::推送 $target 失败（已重试）"
+                overall_patch_failed=true
+              }
             else
               if [ -d .github ]; then
                   rm -rf .github
                   git add .
                   git commit -m "Removing workflows files."
               fi
-              git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:$target
+              retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" "HEAD:$target" || {
+                echo "::error::推送 $target 失败（已重试）"
+                overall_patch_failed=true
+              }
             fi
 
           done
@@ -318,8 +392,7 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" ]; then
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
-              if git apply --check "$patch_file"; then
-                git apply --whitespace=nowarn "$patch_file"
+              if git apply --whitespace=nowarn "$patch_file"; then
                 git add .
                 git commit -m "Applying $(basename "$patch_file")."
               else
@@ -339,7 +412,10 @@ jobs:
                 git add .
                 git commit -m "Removing workflows files."
             fi
-            git push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" -f HEAD:hanwckf
+            retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" "HEAD:hanwckf" || {
+              echo "::error::推送 hanwckf 失败（已重试）"
+              exit 1
+            }
           else
             echo "::error::hanwckf 补丁应用失败，跳过推送。"
             exit 1
@@ -419,10 +495,32 @@ jobs:
         id: push
         continue-on-error: true
         run: |
+          set -e
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            for i in $(seq 1 $max_retries); do
+              git fetch "$remote_url" "${refspec#*:}" --no-tags 2>/dev/null || true
+              if git push "$remote_url" -f "$refspec" 2>&1; then
+                return 0
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
           echo "::group::推送 VIKINGYFY-main 到远程仓库"
-          git push origin VIKINGYFY-main --force
-          echo "push_success=true" >> $GITHUB_OUTPUT
-          echo "✅ 已推送分支 VIKINGYFY-main"
+          if retry_push origin VIKINGYFY-main; then
+            echo "push_success=true" >> $GITHUB_OUTPUT
+            echo "✅ 已推送分支 VIKINGYFY-main"
+          else
+            echo "::warning::推送失败（已重试），将尝试继续。"
+          fi
           echo "::endgroup::"
 
       - name: 推送失败警告
@@ -433,12 +531,31 @@ jobs:
       - name: 创建日期标签
         if: steps.check.outputs.has_update == 'true' && steps.push.outputs.push_success == 'true'
         run: |
+          set -e
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            for i in $(seq 1 $max_retries); do
+              git fetch "$remote_url" "${refspec#*:}" --no-tags 2>/dev/null || true
+              if git push "$remote_url" "$refspec" 2>&1; then
+                return 0
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
           TAG_NAME=$(git log -1 --format=%cd --date=format:'%Y%m%d' upstream/main)
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
             echo "⚠️ 标签 $TAG_NAME 已存在，跳过创建。"
           else
             git tag $TAG_NAME
-            git push origin $TAG_NAME
+            retry_push origin "$TAG_NAME"
             echo "✅ 已创建标签: $TAG_NAME"
           fi
 
