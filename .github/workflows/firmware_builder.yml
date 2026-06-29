@@ -573,6 +573,7 @@ jobs:
           ccache --max-size 10G
           export CC="ccache gcc"
           export CXX="ccache g++"
+          NPROC=$(($(nproc) + 1))
           # 确保 make_exit 总有值输出（防止步骤意外退出时 retry 误判）
           MAKE_EXIT=1
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
