@@ -676,7 +676,7 @@ jobs:
           TAIL_ALL=$(find logs -name 'compile.txt' -print0 | xargs -0 tail -qn1 2>/dev/null || true)
 
           TOTAL=$(find logs -name 'compile.txt' 2>/dev/null | wc -l)
-          INCOMPLETE=$((TOTAL - $(echo "$TAIL_ALL" | grep -c '^time: ')))
+          INCOMPLETE=$((TOTAL - $(echo "$TAIL_ALL" | grep -c '^time: ' || true)))
           EMPTY=$(find logs -name 'compile.txt' -size 0 2>/dev/null | wc -l)
 
           # 耗时提取
@@ -817,9 +817,11 @@ jobs:
           fi
 
           # sha marker cache：源码/包 SHA 变化会产生新 key，旧条目永不被命中，每次构建成功都全清
-          SHA_COUNT=$(gh cache list --repo "${{ github.repository }}" --key "sha-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
-            xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null | wc -l)
-          echo "🧹 旧 sha marker 缓存已清理 (${SHA_COUNT} 条)"
+          SHA_IDS=$(gh cache list --repo "${{ github.repository }}" --key "sha-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id' 2>/dev/null)
+          if [ -n "$SHA_IDS" ]; then
+            echo "$SHA_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+          fi
+          echo "🧹 旧 sha marker 缓存已清理 ($(echo "$SHA_IDS" | grep -c . || echo 0) 条)"
 
           # ccache：同上逻辑
           CC_EXACT_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
