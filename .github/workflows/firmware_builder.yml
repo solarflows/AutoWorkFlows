@@ -570,10 +570,9 @@ jobs:
           echo "╚══════════════════════════════════════╝"
           START_TIME=$(date +%s)
           cd openwrt
+          ccache --max-size 10G
           export CC="ccache gcc"
           export CXX="ccache g++"
-          NPROC=$(($(nproc) + 1))
-
           # 确保 make_exit 总有值输出（防止步骤意外退出时 retry 误判）
           MAKE_EXIT=1
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
@@ -671,15 +670,16 @@ jobs:
         if: always() && steps.evaluate.outputs.changed == 'true'
         run: |
           cd openwrt
+
+          # 一次性提取所有 compile.txt 末行，再用 awk 分流统计
+          TAIL_ALL=$(find logs -name 'compile.txt' -print0 | xargs -0 tail -qn1 2>/dev/null || true)
+
           TOTAL=$(find logs -name 'compile.txt' 2>/dev/null | wc -l)
-          INCOMPLETE=$(find logs -name 'compile.txt' -exec sh -c '
-            tail -1 "$1" 2>/dev/null | grep -q "^time: " || echo "$1"
-          ' _ {} \; 2>/dev/null | wc -l)
+          INCOMPLETE=$((TOTAL - $(echo "$TAIL_ALL" | grep -c '^time: ')))
           EMPTY=$(find logs -name 'compile.txt' -size 0 2>/dev/null | wc -l)
 
           # 耗时提取
-          find logs -name 'compile.txt' -exec sh -c 'tail -1 "$1" 2>/dev/null' _ {} \; 2>/dev/null | \
-            grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
+          echo "$TAIL_ALL" | grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
 
           # ── Summary ──
           {
@@ -716,17 +716,14 @@ jobs:
 
           if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
             export CCACHE_DIR="$(pwd)/openwrt/.ccache"
-            ccache --max-size 5G 2>/dev/null || true
 
             # ── 磁盘用量 + 压缩大小 ──
             DISK_USAGE_HUMAN=$(du -sh "openwrt/.ccache" 2>/dev/null | cut -f1)
             DISK_USAGE_BYTES=$(du -sb "openwrt/.ccache" 2>/dev/null | awk '{print $1}')
             CC_GZIP_BYTES=$(timeout 60 tar cf - openwrt/.ccache 2>/dev/null | gzip -1 -c | wc -c 2>/dev/null || echo 0)
             CC_GZIP_HUMAN=""
-            CC_REAL_RATIO=""
             if [ -n "$CC_GZIP_BYTES" ] && [ "$CC_GZIP_BYTES" -gt 0 ] && [ -n "$DISK_USAGE_BYTES" ] && [ "$DISK_USAGE_BYTES" -gt 0 ]; then
               CC_GZIP_HUMAN=$(numfmt --to=iec "$CC_GZIP_BYTES" 2>/dev/null || echo "${CC_GZIP_BYTES} B")
-              CC_REAL_RATIO=$(awk -v disk="$DISK_USAGE_BYTES" -v gzip="$CC_GZIP_BYTES" 'BEGIN {printf "%.1f", disk / gzip}' 2>/dev/null)
             fi
 
             # ── 解析关键指标（兼容 ccache 3.x 旧格式 + 4.x 新格式）──
@@ -752,7 +749,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
 
             # ── 清理过期缓存 ──
-            echo "🧹 清理过期缓存 (上限: 5GiB)..."
+            echo "🧹 清理过期缓存 (上限: 10G)..."
             ccache --cleanup 2>/dev/null || true
             echo ""
 
@@ -811,29 +808,23 @@ jobs:
           # 工具链：force_rebuild 时无条件全部删除，否则仅在 exact key 未命中时删除
           TC_EXACT_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
           if [ "$FORCE" == "true" ] || [ "$TC_EXACT_HIT" != "true" ]; then
-            TC_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id')
-            for CACHE_ID in $TC_LIST; do
-              gh cache delete "$CACHE_ID" --repo "${{ github.repository }}"
-            done
+            gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
+              xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
             echo "🧹 旧工具链缓存已清理"
           else
             echo "ℹ️ 工具链 exact key 命中 · 缓存不可变，跳过清理"
           fi
 
           # sha marker cache：源码/包 SHA 变化会产生新 key，旧条目永不被命中，每次构建成功都全清
-          SHA_LIST=$(gh cache list --repo "${{ github.repository }}" --key "sha-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id')
-          for CACHE_ID in $SHA_LIST; do
-            gh cache delete "$CACHE_ID" --repo "${{ github.repository }}"
-          done
-          echo "🧹 旧 sha marker 缓存已清理 (${SHA_LIST:+$(echo "$SHA_LIST" | wc -l) 条})"
+          SHA_COUNT=$(gh cache list --repo "${{ github.repository }}" --key "sha-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
+            xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null | wc -l)
+          echo "🧹 旧 sha marker 缓存已清理 (${SHA_COUNT} 条)"
 
           # ccache：同上逻辑
           CC_EXACT_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
           if [ "$FORCE" == "true" ] || [ "$CC_EXACT_HIT" != "true" ]; then
-            CC_LIST=$(gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id')
-            for CACHE_ID in $CC_LIST; do
-              gh cache delete "$CACHE_ID" --repo "${{ github.repository }}"
-            done
+            gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
+              xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
             echo "🧹 旧 ccache 缓存已清理"
           else
             echo "ℹ️ ccache exact key 命中 · 缓存不可变，跳过清理"
@@ -870,14 +861,10 @@ jobs:
           echo "📦 Passwall 包列表："
           ls -la release/passwall/ 2>/dev/null || echo "  (无 passwall 包)"
           echo ""
-          # 编译耗时数据已输出到 Summary，不再单独打包日志文件
-          mkdir -p release/build-logs
-          echo ""
           echo ""
           echo "📊 产物汇总："
           echo "  固件: $(find release/firmware -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/firmware 2>/dev/null | cut -f1)"
           echo "  Passwall: $(find release/passwall -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/passwall 2>/dev/null | cut -f1)"
-          echo "  编译耗时: $(find release/build-logs -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/build-logs 2>/dev/null | cut -f1)"
           (cd release && tar czf ../${{ matrix.target }}-release.tar.gz .)
 
           # ── Summary 产物统计 ──
