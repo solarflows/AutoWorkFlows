@@ -570,6 +570,7 @@ jobs:
           echo "╚══════════════════════════════════════╝"
           START_TIME=$(date +%s)
           cd openwrt
+          export CCACHE_DIR="$(pwd)/.ccache"
           ccache --max-size 10G
           export CC="ccache gcc"
           export CXX="ccache g++"
