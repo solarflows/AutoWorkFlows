@@ -98,7 +98,6 @@ jobs:
             release_repo:     (.release_repo     // .repo),
             passwall_repo:    (.passwall_repo    // "solarflows/openwrt-packages"),
             passwall_tag:     (.passwall_tag     // .target),
-            release_tag_prefix: (.release_tag_prefix // ""),
             apk_signing:      (.apk_signing      // false)
           })')
 
@@ -934,7 +933,6 @@ jobs:
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_repo": "${{ matrix.passwall_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
-            "release_tag_prefix": "${{ matrix.release_tag_prefix }}",
             "timestamp": "${NOW}"
           }
           JSONEOF
@@ -963,7 +961,7 @@ jobs:
             echo "## ${{ matrix.target }} Build"
             echo ""
             echo "**源码**: [${{ matrix.ref }}](https://github.com/${{ matrix.repo }}) @ \`${SHA_SHORT}\`"
-            echo "**软件包**: \`${{ steps.clone_packages.outputs.packages_sha }}\`"
+            echo "**软件包**: [${{ matrix.packages_branch }}](https://github.com/solarflows/openwrt-packages/tree/${{ matrix.packages_branch }}) @ [${{ steps.clone_packages.outputs.packages_sha }}](https://github.com/solarflows/openwrt-packages/commit/${{ steps.clone_packages.outputs.packages_sha_full }})"
             echo "**编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}"
             echo "**缓存**: ${TC_LABEL} / ${CC_LABEL}"
 
@@ -1088,7 +1086,7 @@ jobs:
             local TARGET_NAME CONFIG SOURCE_REPO SOURCE_REF SHORT_SHA
             local PKG_SHA FEEDS_MD DURATION_FMT
             local TOOLCHAIN_HIT TOOLCHAIN_EXACT CCACHE_HIT TIMESTAMP
-            local RELEASE_REPO PASSWALL_TAG PASSWALL_REPO TAG_PREFIX
+            local RELEASE_REPO PASSWALL_TAG PASSWALL_REPO
             TARGET_NAME=$(jq -r '.target'              "$INFO_FILE")
             CONFIG=$(jq -r '.config'                   "$INFO_FILE")
             SOURCE_REPO=$(jq -r '.source_repo'          "$INFO_FILE")
@@ -1104,7 +1102,6 @@ jobs:
             RELEASE_REPO=$(jq -r '.release_repo'        "$INFO_FILE")
             PASSWALL_REPO=$(jq -r '.passwall_repo'      "$INFO_FILE")
             PASSWALL_TAG=$(jq -r '.passwall_tag'        "$INFO_FILE")
-            TAG_PREFIX=$(jq -r '.release_tag_prefix'    "$INFO_FILE")
             echo "🏷️  [${TARGET}] Passwall → ${PASSWALL_REPO}@${PASSWALL_TAG}"
 
             # -------- 格式化图标 --------
@@ -1121,10 +1118,10 @@ jobs:
 
             # -------- 生成版本 Tag（使用构建开始时间） --------
             local DATE_TAG TAG TITLE
-            # TIMESTAMP 格式: "2026-05-28 12:30:00" → "v20260528-1230"
-            DATE_TAG="v$(echo "$TIMESTAMP" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s-%s%s", a[1],a[2],a[3],a[4],a[5]}')"
-            TAG="${TAG_PREFIX}${DATE_TAG}"
-            TITLE="${TAG_PREFIX}Build ${DATE_TAG}"
+            # TIMESTAMP 格式: "2026-05-28 12:30:00" → "V260528"
+            DATE_TAG="V$(echo "$TIMESTAMP" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')"
+            TAG="${DATE_TAG}"
+            TITLE="Build ${DATE_TAG}"
             echo "🏷️  [${TARGET}] 版本: $TAG → $RELEASE_REPO"
 
             # -------- 解包固件 --------
@@ -1148,14 +1145,13 @@ jobs:
               fi
 
               if gh release view "$TAG" --repo "$RELEASE_REPO" &>/dev/null; then
-                echo "📤 [${TARGET}] Release $TAG 已存在，清理旧 assets..."
-                # 删除所有旧固件文件，确保只有本次构建的产物
-                gh release view "$TAG" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name' 2>/dev/null | \
-                  while IFS= read -r asset; do
-                    [ -n "$asset" ] && gh release delete-asset "$TAG" --repo "$RELEASE_REPO" "$asset" --yes 2>/dev/null || true
-                  done
-                echo "📤 [${TARGET}] 上传新固件..."
-                gh release upload "$TAG" --repo "$RELEASE_REPO" "$FW_DIR"/*
+                echo "📤 [${TARGET}] Release $TAG 已存在，删除旧 Release 并重建..."
+                gh release delete "$TAG" --repo "$RELEASE_REPO" --yes 2>/dev/null || true
+                echo "🚀 [${TARGET}] 重新创建 Release $TAG ..."
+                gh release create "$TAG" --repo "$RELEASE_REPO" \
+                  --title "${TARGET_NAME} ${TITLE}" \
+                  --notes-file /tmp/release_body.md \
+                  "$FW_DIR"/*
               else
                 echo "🚀 [${TARGET}] 创建 Release $TAG ..."
                 gh release create "$TAG" --repo "$RELEASE_REPO" \
@@ -1176,24 +1172,15 @@ jobs:
                 local PW_NOTES
                 PW_NOTES="最新 passwall 及依赖，更新于 $(date +'%Y-%m-%d %H:%M')"$'\n'"🔑 APK 签名公钥: solarflows-apk-public.pem（下载后放入 /etc/apk/keys/ 即可信任这些包）"
                 if gh release view "$PASSWALL_TAG" --repo "$PASSWALL_REPO" &>/dev/null; then
-                  # 删除同名旧 asset（仅替换重名文件，不同名文件保留）
-                  echo "$PW_FILES" | while IFS= read -r f; do
-                    FNAME=$(basename "$f")
-                    if gh release view "$PASSWALL_TAG" --repo "$PASSWALL_REPO" --json assets --jq '.assets[].name' 2>/dev/null | grep -qxF "$FNAME"; then
-                      gh release delete-asset "$PASSWALL_TAG" --repo "$PASSWALL_REPO" "$FNAME" --yes 2>/dev/null || true
-                    fi
-                  done
-                  echo "📤 [${TARGET}] 上传新 Passwall 包到 ${PASSWALL_REPO}@${PASSWALL_TAG}..."
-                  echo "$PW_FILES" | xargs gh release upload "$PASSWALL_TAG" --repo "$PASSWALL_REPO"
-                  gh release edit "$PASSWALL_TAG" --repo "$PASSWALL_REPO" --latest=false --notes "$PW_NOTES"
-                else
-                  echo "🚀 [${TARGET}] 创建 Passwall Release ${PASSWALL_REPO}@${PASSWALL_TAG} ..."
-                  gh release create "$PASSWALL_TAG" --repo "$PASSWALL_REPO" \
-                    --title "Passwall Packages (${TARGET})" \
-                    --notes "$PW_NOTES" \
-                    --latest=false \
-                    $(echo "$PW_FILES")
+                  echo "📤 [${TARGET}] Passwall Release ${PASSWALL_TAG} 已存在，删除旧 Release 并重建..."
+                  gh release delete "$PASSWALL_TAG" --repo "$PASSWALL_REPO" --yes 2>/dev/null || true
                 fi
+                echo "🚀 [${TARGET}] 创建 Passwall Release ${PASSWALL_REPO}@${PASSWALL_TAG} ..."
+                gh release create "$PASSWALL_TAG" --repo "$PASSWALL_REPO" \
+                  --title "Passwall Packages (${TARGET})" \
+                  --notes "$PW_NOTES" \
+                  --latest=false \
+                  $(echo "$PW_FILES")
               else
                 echo "⚠️  [${TARGET}] 没有找到 passwall 文件，跳过。"
               fi
