@@ -276,10 +276,21 @@ jobs:
             echo "| 📌 **变更检测** | ${BUILD_STATUS} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 🕐 Record build start time
+      - name: 🕐 Record build start time And Hardware Information
         if: steps.evaluate.outputs.changed == 'true'
         id: start_time
         run: |
+          {
+            echo ""
+            echo "### 运行环境"
+            echo "\`\`\`"
+            echo "🖥️ 构建环境"
+            echo "  🧠 CPU : $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
+            echo "  💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
+            echo "  🐧 系统: $(uname -r)"
+            echo "\`\`\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
           START_FMT=$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')
           echo "timestamp=${START_FMT}" >> $GITHUB_OUTPUT
           echo "🕐 构建开始时间: ${START_FMT}"
@@ -653,18 +664,6 @@ jobs:
           # ── Summary ──
           echo "| ⏱️ **编译耗时** | ${TOTAL_FMT} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 🏁 **构建结束** | $(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S') |" >> "$GITHUB_STEP_SUMMARY"
-
-          # 表格结束，追加运行环境信息
-          {
-            echo ""
-            echo "### 运行环境"
-            echo "\`\`\`"
-            echo "🖥️ 构建环境"
-            echo "  🧠 CPU : $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
-            echo "  💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
-            echo "  🐧 系统: $(uname -r)"
-            echo "\`\`\`"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ───────── 编译日志统计（合并：耗时提取 + 日志分析，只输出到 Summary）─────────
       - name: 📊 Build Log Analysis
