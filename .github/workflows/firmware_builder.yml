@@ -177,6 +177,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 480
     strategy:
+      fail-fast: false
       matrix:
         include: ${{ fromJson(needs.define-matrix.outputs.matrix) }}
     steps:
@@ -932,6 +933,7 @@ jobs:
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_repo": "${{ matrix.passwall_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
+            "release_tag": "V$(echo "${NOW}" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')",
             "timestamp": "${NOW}"
           }
           JSONEOF
@@ -959,7 +961,7 @@ jobs:
           {
             echo "## ${{ matrix.target }} Build"
             echo ""
-            echo "**源码**: [${{ matrix.ref }}](https://github.com/${{ matrix.repo }}) @ \`${SHA_SHORT}\`"
+            echo "**源码**: [${{ matrix.ref }}](https://github.com/${{ matrix.repo }}) @ [${SHA_SHORT}](https://github.com/${{ matrix.repo }}/commit/${SHA_FULL})"
             echo "**软件包**: [${{ matrix.packages_branch }}](https://github.com/solarflows/openwrt-packages/tree/${{ matrix.packages_branch }}) @ [${{ steps.clone_packages.outputs.packages_sha }}](https://github.com/solarflows/openwrt-packages/commit/${{ steps.clone_packages.outputs.packages_sha_full }})"
             echo "**编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}"
             echo "**缓存**: ${TC_LABEL} / ${CC_LABEL}"
