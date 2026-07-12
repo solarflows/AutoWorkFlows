@@ -1235,14 +1235,14 @@ jobs:
                 echo "🚀 [${TARGET}] 重新创建 Release $TAG ..."
                 gh release create "$TAG" --repo "$RELEASE_REPO" \
                   --title "${TARGET_NAME} ${TITLE}" \
-                  --target-commit "$SOURCE_SHA" \
+                  --target "$SOURCE_SHA" \
                   --notes-file /tmp/release_body.md \
                   "$FW_DIR"/*
               else
                 echo "🚀 [${TARGET}] 创建 Release $TAG ..."
                 gh release create "$TAG" --repo "$RELEASE_REPO" \
                   --title "${TARGET_NAME} ${TITLE}" \
-                  --target-commit "$SOURCE_SHA" \
+                  --target "$SOURCE_SHA" \
                   --notes-file /tmp/release_body.md \
                   "$FW_DIR"/*
               fi
