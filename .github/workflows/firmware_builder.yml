@@ -220,6 +220,19 @@ jobs:
           echo "| 📦 **源码** | [${{ matrix.ref }}](https://github.com/${{ matrix.repo }}) @ \`${SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 📦 **软件包** | [${{ matrix.packages_branch }}](https://github.com/solarflows/openwrt-packages/tree/${{ matrix.packages_branch }}) @ \`${PKG_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
 
+      # ───────── 磁盘空间监控（第 1 阶段：初始状态）─────────
+      - name: 💽 Disk space · Initial
+        id: disk-1
+        run: |
+          echo "📊 初始磁盘空间（克隆后，环境准备前）"
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 openwrt/ : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
+
       # ───────── 计算工具链指纹（仅基于 tools/ 和 toolchain/ 目录的变更）─────────
       - name: 🔧 Compute toolchain hash
         id: toolchain_hash
@@ -344,6 +357,18 @@ jobs:
           sudo timedatectl set-timezone "$TZ"
           echo "✅ 环境准备完成"
 
+      # ───────── 磁盘空间监控（第 2 阶段：环境准备后）─────────
+      - name: 💽 Disk space · After env prep
+        if: steps.evaluate.outputs.changed == 'true'
+        id: disk-2
+        run: |
+          echo "📊 环境准备后磁盘空间"
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
 
       # ───────── 构建缓存（工具链 + ccache）─────────
       - name: 🔧 Restore toolchain cache
@@ -587,6 +612,24 @@ jobs:
           find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
           echo "✅ 下载完成"
 
+      # ───────── 磁盘空间监控（第 3 阶段：编译前）─────────
+      - name: 💽 Disk space · Before build
+        if: steps.evaluate.outputs.changed == 'true'
+        id: disk-3
+        run: |
+          echo "📊 编译前磁盘空间"
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "  📂 openwrt/        : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ staging_dir/  : $(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ .ccache/      : $(du -sh openwrt/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ dl/           : $(du -sh openwrt/dl 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+
       - name: 🔨 5. Build Firmware
         if: steps.evaluate.outputs.changed == 'true'
         id: build
@@ -617,6 +660,39 @@ jobs:
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           echo "duration=${DURATION_SEC}" >> $GITHUB_OUTPUT
           echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $((DURATION_SEC/3600)) $(((DURATION_SEC%3600)/60)) $((DURATION_SEC%60)))"
+
+      # ───────── 磁盘空间监控（第 4 阶段：编译后）─────────
+      - name: 💽 Disk space · After build
+        if: always() && steps.evaluate.outputs.changed == 'true'
+        id: disk-4
+        run: |
+          echo "📊 编译后磁盘空间"
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "  📂 openwrt/        : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ staging_dir/  : $(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ .ccache/      : $(du -sh openwrt/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ dl/           : $(du -sh openwrt/dl 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+
+          # ── Summary：磁盘空间汇总表 ──
+          {
+            echo ""
+            echo "### 💽 磁盘空间变化"
+            echo "| 阶段 | 可用空间 | 已用% |"
+            echo "|------|----------|-------|"
+            echo "| ① 初始 | ${{ steps.disk-1.outputs.avail_gb || 'N/A' }}G | ${{ steps.disk-1.outputs.used_pct || 'N/A' }}% |"
+            echo "| ② 环境准备后 | ${{ steps.disk-2.outputs.avail_gb || 'N/A' }}G | ${{ steps.disk-2.outputs.used_pct || 'N/A' }}% |"
+            echo "| ③ 编译前 | ${{ steps.disk-3.outputs.avail_gb || 'N/A' }}G | ${{ steps.disk-3.outputs.used_pct || 'N/A' }}% |"
+            echo "| ④ 编译后 | ${AVAIL_GB}G | ${USED_PCT}% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # 后续可基于此输出决定是否自动清理
+          # 例: if [ "$AVAIL_GB" -lt 30 ]; then echo "need_cleanup=true" >> $GITHUB_OUTPUT; fi
 
       # ───────── 重试（先更新仓库 → 并行重试 → 单线程兜底）─────────
       - name: 🔄 Retry build
