@@ -1083,13 +1083,14 @@ jobs:
 
             # -------- 从 build-info.json 读取所有参数 --------
             local TARGET_NAME CONFIG SOURCE_REPO SOURCE_REF SHORT_SHA
-            local PKG_SHA FEEDS_MD DURATION_FMT
+            local SOURCE_SHA PKG_SHA FEEDS_MD DURATION_FMT
             local TOOLCHAIN_HIT TOOLCHAIN_EXACT CCACHE_HIT TIMESTAMP
             local RELEASE_REPO PASSWALL_TAG PASSWALL_REPO
             TARGET_NAME=$(jq -r '.target'              "$INFO_FILE")
             CONFIG=$(jq -r '.config'                   "$INFO_FILE")
             SOURCE_REPO=$(jq -r '.source_repo'          "$INFO_FILE")
             SOURCE_REF=$(jq -r '.source_ref'            "$INFO_FILE")
+            SOURCE_SHA=$(jq -r '.source_sha'            "$INFO_FILE")
             SHORT_SHA=$(jq -r '.source_sha_short'       "$INFO_FILE")
             PKG_SHA=$(jq -r '.packages_sha'            "$INFO_FILE")
             FEEDS_MD=$(jq -r '.feeds_md'               "$INFO_FILE")
@@ -1149,12 +1150,14 @@ jobs:
                 echo "🚀 [${TARGET}] 重新创建 Release $TAG ..."
                 gh release create "$TAG" --repo "$RELEASE_REPO" \
                   --title "${TARGET_NAME} ${TITLE}" \
+                  --target-commit "$SOURCE_SHA" \
                   --notes-file /tmp/release_body.md \
                   "$FW_DIR"/*
               else
                 echo "🚀 [${TARGET}] 创建 Release $TAG ..."
                 gh release create "$TAG" --repo "$RELEASE_REPO" \
                   --title "${TARGET_NAME} ${TITLE}" \
+                  --target-commit "$SOURCE_SHA" \
                   --notes-file /tmp/release_body.md \
                   "$FW_DIR"/*
               fi
