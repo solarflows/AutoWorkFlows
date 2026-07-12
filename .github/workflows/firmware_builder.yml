@@ -48,7 +48,7 @@ on:
           - 'true'
           - 'false'
   schedule:
-    - cron: '6 0 * * 1,6'  # 每周一和周六的 7:06 AM（UTC 时间，上海时间为 15:06）
+    - cron: '6 0 * * 1,6'  # 每周一和周六的 00:06 UTC（上海时间为 08:06）
 
 concurrency:
   group: firmware-build-${{ github.ref }}
@@ -60,14 +60,16 @@ permissions:
 
 env:
   TZ: Asia/Shanghai
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ========== 构建矩阵（从 targets.json 读取） ==========
   define-matrix:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      updater_id: ${{ steps.trigger-updater.outputs.updater_id }}
+      sync_id: ${{ steps.trigger-sync.outputs.sync_id }}
     steps:
       - name: Checkout AutoWorkflows
         uses: actions/checkout@v6
@@ -143,27 +145,6 @@ jobs:
           echo "sync_id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "📋 Run ID: $RUN_ID"
 
-      - name: Wait for upstream workflows (parallel)
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          echo "⏳ 并行等待上游工作流完成..."
-          # 后台进程并行等待，不增加 runner 消耗
-          gh run watch ${{ steps.trigger-updater.outputs.updater_id }} \
-            --repo ${{ github.repository }} \
-            --exit-status &
-          PID1=$!
-          gh run watch ${{ steps.trigger-sync.outputs.sync_id }} \
-            --repo ${{ github.repository }} \
-            --exit-status &
-          PID2=$!
-          # 等待两个后台进程都完成
-          EXIT_CODE=0
-          wait $PID1 || EXIT_CODE=1
-          echo "✅ OpenWRT_Packages_Updater 完成"
-          wait $PID2 || EXIT_CODE=1
-          echo "✅ Sync_Push 完成"
-          exit $EXIT_CODE
 
   # ========== 构建任务（矩阵并行） ==========
   # 注意：
@@ -194,6 +175,21 @@ jobs:
           ref: ${{ matrix.ref }}
           path: openwrt
           fetch-depth: 1
+
+      # -------- 等待上游工作流（确保软件包仓库已同步） --------
+      - name: ⏳ Wait for upstream workflows
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "⏳ 等待上游软件包同步..."
+          gh run watch ${{ needs.define-matrix.outputs.updater_id }} \
+            --repo ${{ github.repository }} \
+            --exit-status 2>/dev/null && echo "✅ OpenWRT_Packages_Updater 完成" || echo "⚠️ 未获取到 run ID，跳过等待"
+
+          echo "⏳ 等待上游配置同步..."
+          gh run watch ${{ needs.define-matrix.outputs.sync_id }} \
+            --repo ${{ github.repository }} \
+            --exit-status 2>/dev/null && echo "✅ Sync_Push 完成" || echo "⚠️ 未获取到 run ID，跳过等待"
 
       - name: 📦 Get source & clone packages
         id: clone_packages
@@ -508,10 +504,8 @@ jobs:
           printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > openwrt/private-key.pem
           chmod 600 openwrt/private-key.pem
 
-          # 诊断：输出文件大小和行结构（不暴露密钥内容）
-          echo "📏 密钥文件: $(wc -c < openwrt/private-key.pem) 字节, $(wc -l < openwrt/private-key.pem) 行"
-          echo "📏 首行: $(head -1 openwrt/private-key.pem)"
-          echo "📏 末行: $(tail -1 openwrt/private-key.pem)"
+          # 诊断：输出文件大小（不暴露密钥内容）
+          echo "📏 密钥文件: $(wc -c < openwrt/private-key.pem) 字节"
 
           # 确保 UNIX 换行（防止 Windows CRLF 导致 openssl 解析失败）
           sed -i 's/\r$//' openwrt/private-key.pem
