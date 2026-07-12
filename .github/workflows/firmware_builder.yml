@@ -299,6 +299,16 @@ jobs:
           # ── Summary ──
           echo "| 🕐 **构建开始** | ${START_FMT} |" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 🏷️ Set build version
+        if: steps.evaluate.outputs.changed == 'true'
+        id: version
+        run: |
+          TIMESTAMP="${{ steps.start_time.outputs.timestamp }}"
+          VERSION="V$(echo "$TIMESTAMP" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "🏷️ 构建版本号: ${VERSION}"
+          echo "| 🏷️ **版本号** | ${VERSION} |" >> "$GITHUB_STEP_SUMMARY"
+
       - name: 🧹 Free Disk Space
         if: steps.evaluate.outputs.changed == 'true' && github.event.inputs.free_disk_space == 'true'
         uses: jlumbroso/free-disk-space@main
@@ -540,6 +550,12 @@ jobs:
             true
           done > .config
           sed -i 's/\r$//; s/\xef\xbb\xbf//g' .config
+          # ── 注入构建版本号（出现在固件文件名和系统信息中） ──
+          VERSION="${{ steps.version.outputs.version }}"
+          # 移除种子文件中可能已有的 CONFIG_VERSION_NUMBER，确保唯一
+          sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
+          echo "CONFIG_VERSION_NUMBER=\"${VERSION}\"" >> .config
+          echo "🏷️ 注入版本号: ${VERSION}"
           echo "✅ 已生成 .config ($(wc -l < .config) 行)"
           echo "📋 ======== 种子配置 (.config) ========"
           cat .config
@@ -933,7 +949,7 @@ jobs:
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_repo": "${{ matrix.passwall_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
-            "release_tag": "V$(echo "${NOW}" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')",
+            "release_tag": "${{ steps.version.outputs.version }}",
             "timestamp": "${NOW}"
           }
           JSONEOF
@@ -1086,7 +1102,7 @@ jobs:
             # -------- 从 build-info.json 读取所有参数 --------
             local TARGET_NAME CONFIG SOURCE_REPO SOURCE_REF SHORT_SHA
             local SOURCE_SHA PKG_SHA FEEDS_MD DURATION_FMT
-            local TOOLCHAIN_HIT TOOLCHAIN_EXACT CCACHE_HIT TIMESTAMP
+            local TOOLCHAIN_HIT TOOLCHAIN_EXACT CCACHE_HIT
             local RELEASE_REPO PASSWALL_TAG PASSWALL_REPO
             TARGET_NAME=$(jq -r '.target'              "$INFO_FILE")
             CONFIG=$(jq -r '.config'                   "$INFO_FILE")
@@ -1100,7 +1116,6 @@ jobs:
             TOOLCHAIN_HIT=$(jq -r '.toolchain_hit'      "$INFO_FILE")
             TOOLCHAIN_EXACT=$(jq -r '.toolchain_exact'   "$INFO_FILE")
             CCACHE_HIT=$(jq -r '.ccache_hit'             "$INFO_FILE")
-            TIMESTAMP=$(jq -r '.timestamp'             "$INFO_FILE")
             RELEASE_REPO=$(jq -r '.release_repo'        "$INFO_FILE")
             PASSWALL_REPO=$(jq -r '.passwall_repo'      "$INFO_FILE")
             PASSWALL_TAG=$(jq -r '.passwall_tag'        "$INFO_FILE")
@@ -1118,12 +1133,10 @@ jobs:
             fi
             CC_HIT_LABEL=$([ "$CCACHE_HIT" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
 
-            # -------- 生成版本 Tag（使用构建开始时间） --------
-            local DATE_TAG TAG TITLE
-            # TIMESTAMP 格式: "2026-05-28 12:30:00" → "V260528"
-            DATE_TAG="V$(echo "$TIMESTAMP" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')"
-            TAG="${DATE_TAG}"
-            TITLE="Build ${DATE_TAG}"
+            # -------- 生成版本 Tag（直接从 build-info.json 读取） --------
+            local TAG TITLE
+            TAG=$(jq -r '.release_tag' "$INFO_FILE")
+            TITLE="Build ${TAG}"
             echo "🏷️  [${TARGET}] 版本: $TAG → $RELEASE_REPO"
 
             # -------- 解包固件 --------
