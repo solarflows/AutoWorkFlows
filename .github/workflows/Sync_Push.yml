@@ -421,13 +421,10 @@ jobs:
             exit 1
           fi
 
-  sync_and_tag:
-    name: 同步VIKINGYFY仓库并打标签
+  sync_vikingyfy:
+    name: 同步VIKINGYFY仓库
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     runs-on: ubuntu-latest
-    # env:
-    #   TARGETS: "VIKINGYFY"
-    #   UPSTREAMS: "https://github.com/VIKINGYFY/immortalwrt.git"
 
     steps:
       - name: 检出目标仓库
@@ -435,7 +432,7 @@ jobs:
         with:
           repository: solarflows/ImmortalWRT-QualcommAX
           ref: VIKINGYFY-main
-          fetch-depth: 0
+          fetch-depth: 1
           token: ${{ secrets.ACCESS_TOKEN }}
 
       - name: 配置环境
@@ -526,43 +523,12 @@ jobs:
       - name: 推送失败警告
         if: steps.check.outputs.has_update == 'true' && steps.push.outputs.push_success != 'true'
         run: |
-          echo "::error::推送 VIKINGYFY-main 失败，跳过创建标签。"
-
-      - name: 创建日期标签
-        if: steps.check.outputs.has_update == 'true' && steps.push.outputs.push_success == 'true'
-        run: |
-          set -e
-          retry_push() {
-            local remote_url="$1"
-            local refspec="$2"
-            local max_retries=3
-            local retry_delay=10
-            for i in $(seq 1 $max_retries); do
-              git fetch "$remote_url" "${refspec#*:}" --no-tags 2>/dev/null || true
-              if git push "$remote_url" "$refspec" 2>&1; then
-                return 0
-              fi
-              if [[ $i -lt $max_retries ]]; then
-                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
-                sleep $retry_delay
-                retry_delay=$((retry_delay * 2))
-              fi
-            done
-            return 1
-          }
-          TAG_NAME=$(git log -1 --format=%cd --date=format:'%Y%m%d' upstream/main)
-          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "⚠️ 标签 $TAG_NAME 已存在，跳过创建。"
-          else
-            git tag $TAG_NAME
-            retry_push origin "$TAG_NAME"
-            echo "✅ 已创建标签: $TAG_NAME"
-          fi
+          echo "::error::推送 VIKINGYFY-main 失败。"
 
   del_runs:
     name: 删除旧运行记录
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
-    needs: [sync_lede, sync_luci, sync_packages, sync_and_tag]
+    needs: [sync_lede, sync_luci, sync_packages, sync_vikingyfy]
     runs-on: ubuntu-latest
     permissions:
       actions: write
