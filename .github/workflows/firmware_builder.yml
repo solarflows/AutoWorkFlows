@@ -1154,14 +1154,13 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "feeds_md_json=${FEEDS_MD_JSON}" >> $GITHUB_OUTPUT
-
       # ───────── 生成 Release Notes ─────────
       - name: 📝 Generate release notes
         run: |
           SHA_FULL="${{ steps.clone_packages.outputs.sha_full }}"
           SHA_SHORT="${{ steps.clone_packages.outputs.sha }}"
-          FEEDS_MD_JSON="${{ steps.build-info.outputs.feeds_md_json }}"
+          # 直接从 build-info.json 读取，避免通过 output 传递导致 bash 转义问题
+          FEEDS_MD_JSON=$(jq -r '.feeds_md // empty' build-info.json)
 
           TC_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}" = "true" ] && echo "✅ 工具链缓存命中" || echo "🔨 工具链重新编译")
           CC_LABEL=$([ "${{ steps.cache-refresh.outputs.ccache_restored || 'false' }}" = "true" ] && echo "✅ ccache 命中" || echo "🔄 ccache 冷启动")
