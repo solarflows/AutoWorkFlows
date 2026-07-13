@@ -3,6 +3,7 @@
 on:
   workflow_dispatch:
     inputs:
+      # ── 选择类 ──
       target:
         description: '选择构建目标'
         required: true
@@ -30,24 +31,6 @@ on:
           - 'clean-toolchain'  # 清除工具链缓存
           - 'clean-ccache'     # 清除编译缓存
           - 'clean-all'        # 清除所有缓存
-      skip_upstream:
-        description: '跳过上游同步（节省时间）'
-        required: false
-        default: false
-        type: boolean
-      use_ccache:
-        description: '是否启用 ccache 编译缓存'
-        required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      free_disk_space:
-        description: '清理磁盘空间（编译仅需约30G，Runner默认约89G可用，通常无需开启）'
-        required: false
-        default: false
-        type: boolean
       enable_tmate:
         description: '失败时启动 tmate 调试会话（auto=仅手动触发时启动）'
         required: false
@@ -57,6 +40,22 @@ on:
           - 'auto'
           - 'true'
           - 'false'
+      # ── 开关类 ──
+      skip_upstream:
+        description: '跳过上游同步（节省时间）'
+        required: false
+        default: false
+        type: boolean
+      use_ccache:
+        description: '启用 ccache 编译缓存'
+        required: false
+        default: true
+        type: boolean
+      free_disk_space:
+        description: '清理磁盘空间（编译仅需约30G，Runner默认约89G可用，通常无需开启）'
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: '6 0 * * 1,6'  # 每周一和周六的 00:06 UTC（上海时间为 08:06）
 
