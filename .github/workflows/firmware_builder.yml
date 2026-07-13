@@ -1477,9 +1477,8 @@ jobs:
             echo "✅ [${TARGET}] 发布流程完成。"
           }
 
-          # 按目标依次发布固件（排除 SDK 构建产物）
+          # 按目标依次发布（参数全从 build-info.json 读取）
           for target_dir in artifacts/*-build-info; do
-            case "$(basename "$target_dir")" in *-sdk-*) continue ;; esac
             TARGET_NAME=$(basename "$target_dir" | sed 's/-build-info//')
             publish_target "$TARGET_NAME"
           done
