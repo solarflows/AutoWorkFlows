@@ -85,9 +85,9 @@ jobs:
           sparse-checkout: openwrt-configs/immortalwrt/targets.json
           path: AutoWorkFlows
 
-      # -------- 触发上游同步工作流（packages-only 模式跳过） --------
+      # -------- 触发上游同步工作流 --------
       - name: Trigger OpenWRT_Packages_Updater
-        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'packages-only'
+        if: github.event.inputs.skip_upstream != 'true'
         id: trigger-updater
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -128,18 +128,24 @@ jobs:
 
       # -------- 等待上游同步（串行，可跳过） --------
       - name: ⏳ Wait for upstream workflows
-        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'packages-only'
+        if: github.event.inputs.skip_upstream != 'true'
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          echo "⏳ 等待 OpenWRT_Packages_Updater..."
-          gh run watch ${{ steps.trigger-updater.outputs.updater_id }} \
-            --repo ${{ github.repository }} --exit-status \
-            && echo "✅ 完成" || echo "⚠️ 失败，继续"
-          echo "⏳ 等待 Sync_Push..."
-          gh run watch ${{ steps.trigger-sync.outputs.sync_id }} \
-            --repo ${{ github.repository }} --exit-status \
-            && echo "✅ 完成" || echo "⚠️ 失败，继续"
+          UPDATER_ID="${{ steps.trigger-updater.outputs.updater_id }}"
+          SYNC_ID="${{ steps.trigger-sync.outputs.sync_id }}"
+          if [ -n "$UPDATER_ID" ]; then
+            echo "⏳ 等待 OpenWRT_Packages_Updater..."
+            gh run watch "$UPDATER_ID" \
+              --repo ${{ github.repository }} --exit-status \
+              && echo "✅ 完成" || echo "⚠️ 失败，继续"
+          fi
+          if [ -n "$SYNC_ID" ]; then
+            echo "⏳ 等待 Sync_Push..."
+            gh run watch "$SYNC_ID" \
+              --repo ${{ github.repository }} --exit-status \
+              && echo "✅ 完成" || echo "⚠️ 失败，继续"
+          fi
         continue-on-error: true
 
       # -------- 生成版本号 --------
