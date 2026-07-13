@@ -1,4 +1,4 @@
-name: ImmortalWrt Builder
+﻿name: ImmortalWrt Builder
 
 on:
   workflow_dispatch:
@@ -12,14 +12,29 @@ on:
           - 'mt798x'
           - 'qualcommax'
           - 'both'
-      release:
-        description: '是否发布到 Release'
+      trigger:
+        description: '触发模式'
         required: false
-        default: 'true'
+        default: 'full'
         type: choice
         options:
-          - 'true'
-          - 'false'
+          - 'full'           # 完整固件 + 软件包
+          - 'packages-only'  # 仅 SDK 编译 passwall
+      cache_strategy:
+        description: '缓存策略'
+        required: false
+        default: 'smart'
+        type: choice
+        options:
+          - 'smart'            # 智能缓存（默认）
+          - 'clean-toolchain'  # 清除工具链缓存
+          - 'clean-ccache'     # 清除编译缓存
+          - 'clean-all'        # 清除所有缓存
+      skip_upstream:
+        description: '跳过上游同步（节省时间）'
+        required: false
+        default: false
+        type: boolean
       use_ccache:
         description: '是否启用 ccache 编译缓存'
         required: false
@@ -28,11 +43,6 @@ on:
         options:
           - 'true'
           - 'false'
-      force_rebuild:
-        description: '强制重新编译（忽略所有缓存，用于修复工具链损坏）'
-        required: false
-        default: false
-        type: boolean
       free_disk_space:
         description: '清理磁盘空间（编译仅需约30G，Runner默认约89G可用，通常无需开启）'
         required: false
@@ -60,16 +70,23 @@ permissions:
 
 env:
   TZ: Asia/Shanghai
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ========== 构建矩阵（从 targets.json 读取） ==========
-  define-matrix:
+  plan:
+    name: Plan build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-      updater_id: ${{ steps.trigger-updater.outputs.updater_id }}
-      sync_id: ${{ steps.trigger-sync.outputs.sync_id }}
+      full_matrix: ${{ steps.set-matrix.outputs.full_matrix }}
+      pkgs_matrix: ${{ steps.set-matrix.outputs.pkgs_matrix }}
+      version: ${{ steps.version.outputs.version }}
+      source_changed: ${{ steps.set-matrix.outputs.source_changed }}
+      packages_changed: ${{ steps.set-matrix.outputs.packages_changed }}
+      should_build_firmware: ${{ steps.set-matrix.outputs.should_build_firmware }}
+      should_build_sdk: ${{ steps.set-matrix.outputs.should_build_sdk }}
+      should_publish: ${{ steps.set-matrix.outputs.should_publish }}
     steps:
       - name: Checkout AutoWorkflows
         uses: actions/checkout@v6
@@ -78,36 +95,9 @@ jobs:
           sparse-checkout: openwrt-configs/immortalwrt/targets.json
           path: AutoWorkFlows
 
-      - id: set-matrix
-        run: |
-          TARGET_FILTER="${{ github.event.inputs.target || 'both' }}"
-          JSON_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/targets.json"
-
-          if [ ! -f "$JSON_FILE" ]; then
-            echo "❌ 配置文件不存在: $JSON_FILE"
-            exit 1
-          fi
-          echo "📋 加载构建目标: $JSON_FILE ($(jq '.targets | length' "$JSON_FILE") 个目标)"
-          echo "🎯 过滤条件: $TARGET_FILTER"
-
-          FILTERED=$(jq -c --arg t "$TARGET_FILTER" '
-            if $t == "both" then .targets
-            else [.targets[] | select(.target == $t)] end
-          ' "$JSON_FILE")
-
-          MATRIX=$(echo "$FILTERED" | jq -c 'map(. + {
-            packages_branch:   (.packages_branch   // .target),
-            release_repo:     (.release_repo     // .repo),
-            passwall_repo:    (.passwall_repo    // "solarflows/openwrt-packages"),
-            passwall_tag:     (.passwall_tag     // .target),
-            apk_signing:      (.apk_signing      // false)
-          })')
-
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "✅ 矩阵: $MATRIX"
-
-      # -------- 触发上游同步工作流 --------
+      # -------- 触发上游同步工作流（packages-only 模式跳过） --------
       - name: Trigger OpenWRT_Packages_Updater
+        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'packages-only'
         id: trigger-updater
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -127,6 +117,7 @@ jobs:
           echo "📋 Run ID: $RUN_ID"
 
       - name: Trigger Sync_Push
+        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'packages-only'
         id: trigger-sync
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -145,22 +136,171 @@ jobs:
           echo "sync_id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "📋 Run ID: $RUN_ID"
 
+      # -------- 等待上游同步（串行，可跳过） --------
+      - name: ⏳ Wait for upstream workflows
+        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'packages-only'
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "⏳ 等待 OpenWRT_Packages_Updater..."
+          gh run watch ${{ steps.trigger-updater.outputs.updater_id }} \
+            --repo ${{ github.repository }} --exit-status \
+            && echo "✅ 完成" || echo "⚠️ 失败，继续"
+          echo "⏳ 等待 Sync_Push..."
+          gh run watch ${{ steps.trigger-sync.outputs.sync_id }} \
+            --repo ${{ github.repository }} --exit-status \
+            && echo "✅ 完成" || echo "⚠️ 失败，继续"
+        continue-on-error: true
 
-  # ========== 构建任务（矩阵并行） ==========
-  # 注意：
-  #   - 矩阵 job 的 outputs 只反映最后一个完成的矩阵分片的值（不可预测顺序），
-  #     因此 publish job 不应依赖 needs.build.outputs.changed。
-  #   - schedule 触发时 github.event.inputs 为空，所有依赖 inputs 的条件
-  #     求值为空字符串（非 'true'），相应步骤会被跳过。
-  build:
-    name: Build ${{ matrix.target }}
-    needs: define-matrix
+      # -------- 生成版本号 --------
+      - name: 🏷️ Set build version
+        id: version
+        run: |
+          NOW=$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')
+          VERSION="V$(echo "$NOW" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "🏷️ 版本号: ${VERSION}"
+
+      # -------- 检查 SHA 变更 + 拆分矩阵 --------
+      - id: set-matrix
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          TARGET_FILTER="${{ github.event.inputs.target || 'both' }}"
+          JSON_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/targets.json"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          if [ ! -f "$JSON_FILE" ]; then
+            echo "❌ 配置文件不存在: $JSON_FILE"
+            exit 1
+          fi
+          echo "📋 加载构建目标: $JSON_FILE ($(jq '.targets | length' "$JSON_FILE") 个目标)"
+          echo "🎯 过滤条件: $TARGET_FILTER"
+
+          FILTERED=$(jq -c --arg t "$TARGET_FILTER" '
+            if $t == "both" then .targets
+            else [.targets[] | select(.target == $t)] end
+          ' "$JSON_FILE")
+
+          # ── SHA 状态检查 ──
+          SRC_CHANGED=false
+          PKG_CHANGED=false
+          for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
+            gh release download _build-state --repo ${{ github.repository }} \
+              --pattern "${TARGET}-state.json" -D /tmp/state 2>/dev/null || true
+            if [ -f "/tmp/state/${TARGET}-state.json" ]; then
+              LAST_SRC=$(jq -r '.source_sha' "/tmp/state/${TARGET}-state.json")
+              LAST_PKG=$(jq -r '.packages_sha' "/tmp/state/${TARGET}-state.json")
+              CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .repo')
+              CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
+              CURR_SRC=$(git ls-remote "https://github.com/${CURR_REPO}" "${CURR_REF}" 2>/dev/null | cut -f1)
+              CURR_PKG=$(git ls-remote https://github.com/solarflows/openwrt-packages.git "$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.packages_branch // .target)')" 2>/dev/null | cut -f1)
+              [ "$LAST_SRC" != "$CURR_SRC" ] && SRC_CHANGED=true
+              [ "$LAST_PKG" != "$CURR_PKG" ] && PKG_CHANGED=true
+            else
+              SRC_CHANGED=true
+              PKG_CHANGED=true
+            fi
+          done
+
+          # 手动触发也走正常 SHA 检查（不强制全量）
+          # 只在无状态文件时（首次运行）才强制全量
+
+          echo "source_changed=${SRC_CHANGED}" >> $GITHUB_OUTPUT
+          echo "packages_changed=${PKG_CHANGED}" >> $GITHUB_OUTPUT
+          echo "🔍 source_changed=${SRC_CHANGED}, packages_changed=${PKG_CHANGED}"
+
+          # ── 拆分矩阵 ──
+          FULL_MATRIX=$(echo "$FILTERED" | jq -c 'map(. + {
+            packages_branch:   (.packages_branch   // .target),
+            release_repo:     (.release_repo     // .repo),
+            passwall_repo:    (.passwall_repo    // "solarflows/openwrt-packages"),
+            passwall_tag:     (.passwall_tag     // .target),
+            apk_signing:      (.apk_signing      // false),
+            sdk_container:    (.sdk_container    // null)
+          })')
+          PKGS_MATRIX=$(echo "$FILTERED" | jq -c '[.[] | select(.sdk_container != null) | . + {
+            packages_branch: (.packages_branch // .target),
+            passwall_repo:   (.passwall_repo   // "solarflows/openwrt-packages"),
+            passwall_tag:    (.passwall_tag    // .target),
+            apk_signing:     (.apk_signing     // false)
+          }]')
+
+          echo "full_matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
+          echo "pkgs_matrix=$PKGS_MATRIX" >> $GITHUB_OUTPUT
+          echo "✅ full_matrix: $FULL_MATRIX"
+          echo "✅ pkgs_matrix: $PKGS_MATRIX"
+
+          # ── Job 控制信号 ──
+          TRIGGER="${{ github.event.inputs.trigger || 'full' }}"
+          IS_SCHEDULE="${{ github.event_name }}"
+
+          if [ "$TRIGGER" = "packages-only" ] && [ "$IS_SCHEDULE" != "schedule" ]; then
+            # 手动 packages-only：强制 SDK 构建
+            echo "should_build_firmware=false" >> $GITHUB_OUTPUT
+            if [ "$(echo "$PKGS_MATRIX" | jq 'length')" -gt 0 ]; then
+              echo "should_build_sdk=true" >> $GITHUB_OUTPUT
+            else
+              echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+            fi
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          elif [ "$IS_SCHEDULE" = "schedule" ]; then
+            # 定时触发：根据 SHA 检查决定
+            if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "false" ]; then
+              echo "should_build_firmware=false" >> $GITHUB_OUTPUT
+              echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+              echo "should_publish=false" >> $GITHUB_OUTPUT
+            elif [ "$SRC_CHANGED" = "true" ]; then
+              echo "should_build_firmware=true" >> $GITHUB_OUTPUT
+              echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+              echo "should_publish=true" >> $GITHUB_OUTPUT
+            else
+              # 仅软件包变更 → SDK 构建
+              echo "should_build_firmware=false" >> $GITHUB_OUTPUT
+              if [ "$(echo "$PKGS_MATRIX" | jq 'length')" -gt 0 ]; then
+                echo "should_build_sdk=true" >> $GITHUB_OUTPUT
+              else
+                echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+              fi
+              echo "should_publish=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            # 手动 full：强制全量固件编译
+            echo "should_build_firmware=true" >> $GITHUB_OUTPUT
+            echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi
+
+          # ── 创建 Draft Release（仅固件构建时需要，排除 packages-only）──
+          if [ "$TRIGGER" != "packages-only" ] && { [ "$SRC_CHANGED" = "true" ] || [ "$PKG_CHANGED" = "true" ]; }; then
+            for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
+              REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
+              if ! gh release view "${VERSION}" --repo "$REPO" &>/dev/null; then
+                if gh release create "${VERSION}" --repo "$REPO" \
+                  --title "${TARGET} Build ${VERSION}" --draft \
+                  --notes "🔨 构建中..." 2>/dev/null; then
+                  echo "📝 创建 Draft Release: ${REPO}@${VERSION}"
+                else
+                  echo "⚠️ Release ${VERSION} 已存在（并发创建），跳过"
+                fi
+              fi
+            done
+          fi
+
+  # ========== 固件构建任务（矩阵并行） ==========
+  compile-firmware:
+    name: Compile firmware ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.should_build_firmware == 'true'
+    concurrency:
+      group: build-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 480
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.define-matrix.outputs.matrix) }}
+        include: ${{ fromJson(needs.plan.outputs.full_matrix) }}
     steps:
       - name: Checkout AutoWorkflows
         uses: actions/checkout@v6
@@ -175,21 +315,6 @@ jobs:
           ref: ${{ matrix.ref }}
           path: openwrt
           fetch-depth: 1
-
-      # -------- 等待上游工作流（确保软件包仓库已同步） --------
-      - name: ⏳ Wait for upstream workflows
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          echo "⏳ 等待上游软件包同步..."
-          gh run watch ${{ needs.define-matrix.outputs.updater_id }} \
-            --repo ${{ github.repository }} \
-            --exit-status 2>/dev/null && echo "✅ OpenWRT_Packages_Updater 完成" || echo "⚠️ 未获取到 run ID，跳过等待"
-
-          echo "⏳ 等待上游配置同步..."
-          gh run watch ${{ needs.define-matrix.outputs.sync_id }} \
-            --repo ${{ github.repository }} \
-            --exit-status 2>/dev/null && echo "✅ Sync_Push 完成" || echo "⚠️ 未获取到 run ID，跳过等待"
 
       - name: 📦 Get source & clone packages
         id: clone_packages
@@ -222,11 +347,17 @@ jobs:
         run: |
           echo "📊 初始磁盘空间（克隆后，环境准备前）"
           df -h / | awk 'NR==1{print} NR==2{print}'
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
           AVAIL_KB=$(df --output=avail / | tail -1)
           AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
           USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
           echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
           echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
           echo "📊 openwrt/ : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
 
       # ───────── 计算工具链指纹（仅基于 tools/ 和 toolchain/ 目录的变更）─────────
@@ -234,47 +365,26 @@ jobs:
         id: toolchain_hash
         run: |
           HASH=$(git -C openwrt log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
-          FORCE="${{ github.event.inputs.force_rebuild }}"
-          # force_rebuild 时插入 force- 前缀，使 cache key 永不精确命中，
-          # 确保 actions/cache post-job 一定保存新缓存（cache-hit=false）
-          if [ "$FORCE" == "true" ]; then
+          CACHE_STRATEGY="${{ github.event.inputs.cache_strategy || 'smart' }}"
+          # clean-all / clean-toolchain 时注入 force- 前缀，使 cache key 永不精确命中
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
             HASH="force-${HASH}"
-            echo "🔧 强制重建模式 · 缓存 key 已注入 force- 前缀"
+            echo "🔧 缓存策略: ${CACHE_STRATEGY} · 工具链缓存 key 已注入 force- 前缀"
           fi
           echo "hash=$HASH" >> $GITHUB_OUTPUT
           echo "🔧 工具链指纹: $HASH"
 
-      - name: 💾 Cache source marker
-        id: check
-        uses: actions/cache@v5
-        with:
-          path: .sha_marker
-          key: sha-${{ matrix.target }}-${{ steps.clone_packages.outputs.sha }}-${{ steps.clone_packages.outputs.packages_sha }}
-
-      - name: 📋 Evaluate changes
-        id: evaluate
+      - name: 📋 Record build start time And Hardware Information
+        id: start_time
         run: |
-          SHA_SHORT="${{ steps.clone_packages.outputs.sha }}"
-          SHA_FULL="${{ steps.clone_packages.outputs.sha_full }}"
-          PKG_SHA="${{ steps.clone_packages.outputs.packages_sha }}"
-          echo "📋 源码:   $SHA_FULL"
-          echo "📋 软件包: ${{ steps.clone_packages.outputs.packages_sha_full }}"
-
-          # 判断是否跳过构建
-          if [ "${{ steps.check.outputs.cache-hit }}" = "true" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            BUILD_STATUS="⏭️ 缓存命中，定时触发无变更 → 跳过构建"
-          elif [ "${{ steps.check.outputs.cache-hit }}" = "true" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            BUILD_STATUS="🟢 缓存命中，但手动触发 → 强制构建"
+          # ── Summary ──
+          TRIGGER="${{ github.event.inputs.trigger || 'full' }}"
+          SRC_CHANGED="${{ needs.plan.outputs.source_changed }}"
+          if [ "$SRC_CHANGED" = "true" ]; then
+            BUILD_STATUS="🔵 源码有变更 → 完整固件构建"
           else
-            echo "changed=true" >> $GITHUB_OUTPUT
-            BUILD_STATUS="🔵 源码有变更 → 继续构建"
+            BUILD_STATUS="🟡 仅软件包变更 → 固件重编"
           fi
-          # 注意：.sha_marker 不在本步骤创建，而是在 build 成功后才写入（见末尾 save source marker 步骤），
-          # 避免构建失败时 actions/cache post-job 将 marker 误缓存，导致下次定时触发跳过修复后的构建。
-
-          # ── Summary 标题 + 构建概述（表格保持打开，后续 step 继续追加行） ──
           {
             echo "---"
             echo "## 📋 ${{ matrix.target }} — Build Summary"
@@ -282,14 +392,10 @@ jobs:
             echo "| 项目 | 详情 |"
             echo "|------|------|"
             echo "| 🎯 **目标** | ${{ matrix.target }} |"
+            echo "| 🏷️ **版本号** | ${{ needs.plan.outputs.version }} |"
             echo "| 🔄 **触发方式** | ${{ github.event_name }} |"
             echo "| 📌 **变更检测** | ${BUILD_STATUS} |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🕐 Record build start time And Hardware Information
-        if: steps.evaluate.outputs.changed == 'true'
-        id: start_time
-        run: |
           {
             echo ""
             echo "### 运行环境"
@@ -308,18 +414,8 @@ jobs:
           # ── Summary ──
           echo "| 🕐 **构建开始** | ${START_FMT} |" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 🏷️ Set build version
-        if: steps.evaluate.outputs.changed == 'true'
-        id: version
-        run: |
-          TIMESTAMP="${{ steps.start_time.outputs.timestamp }}"
-          VERSION="V$(echo "$TIMESTAMP" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')"
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "🏷️ 构建版本号: ${VERSION}"
-          echo "| 🏷️ **版本号** | ${VERSION} |" >> "$GITHUB_STEP_SUMMARY"
-
       - name: 🧹 Free Disk Space
-        if: steps.evaluate.outputs.changed == 'true' && github.event.inputs.free_disk_space == 'true'
+        if: github.event.inputs.free_disk_space == 'true'
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
@@ -330,7 +426,6 @@ jobs:
           swap-storage: true
 
       - name: 🛠️ 1. Prepare Environment
-        if: steps.evaluate.outputs.changed == 'true'
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -355,20 +450,24 @@ jobs:
 
       # ───────── 磁盘空间监控（第 2 阶段：环境准备后）─────────
       - name: 💽 Disk space · After env prep
-        if: steps.evaluate.outputs.changed == 'true'
         id: disk-2
         run: |
           echo "📊 环境准备后磁盘空间"
           df -h / | awk 'NR==1{print} NR==2{print}'
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
           AVAIL_KB=$(df --output=avail / | tail -1)
           AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
           USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
           echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
           echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
 
       # ───────── 构建缓存（工具链 + ccache）─────────
       - name: 🔧 Restore toolchain cache
-        if: steps.evaluate.outputs.changed == 'true'
         id: cache-tc
         uses: actions/cache@v5
         with:
@@ -380,7 +479,7 @@ jobs:
             openwrt/staging_dir/tool*
 
       - name: 🗄️ Restore ccache
-        if: steps.evaluate.outputs.changed == 'true' && github.event.inputs.use_ccache != 'false'
+        if: github.event.inputs.use_ccache != 'false'
         id: cache-cc
         uses: actions/cache@v5
         with:
@@ -395,31 +494,30 @@ jobs:
           path: openwrt/.ccache
 
       - name: 🔄 Verify & report cache status
-        if: steps.evaluate.outputs.changed == 'true'
         id: cache-refresh
         run: |
-          FORCE="${{ github.event.inputs.force_rebuild }}"
+          CACHE_STRATEGY="${{ github.event.inputs.cache_strategy || 'smart' }}"
 
-          # ====== 强制重建：清除已恢复的缓存文件 + 删除远端缓存 =====
-          if [ "$FORCE" == "true" ]; then
-            echo "🧹 强制重建模式 · 清除所有缓存..."
-            # 工具链：用 make 官方指令清理 staging_dir
+          # ====== 缓存清理 ======
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
+            echo "🧹 缓存策略: ${CACHE_STRATEGY} · 清除工具链缓存..."
             if [ -d openwrt/staging_dir ]; then
               rm -rf openwrt/staging_dir/host* openwrt/staging_dir/tool*
               echo "  ✂️ staging_dir/host* 和 tool* 已删除"
             fi
-            # ccache：用官方指令清理缓存目录
+          fi
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ]; then
+            echo "🧹 缓存策略: ${CACHE_STRATEGY} · 清除编译缓存..."
             if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
-              ccache -C 2>/dev/null || true  # --clear: 完全清空缓存
+              ccache -C 2>/dev/null || true
               rm -rf openwrt/.ccache
-              echo "  ✂️ .ccache 已清空 (ccache -C)"
+              echo "  ✂️ .ccache 已清空"
             fi
-            echo "✅ 强制清理完成 · 本次将全量编译并保存全新缓存"
           fi
 
           # ====== 工具链：检测 staging_dir ======
           TOOLCHAIN_RESTORED="false"
-          if [ "$FORCE" != "true" ] && [ -d "openwrt/staging_dir" ] && [ "$(find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | head -1)" ]; then
+          if [ "$CACHE_STRATEGY" != "clean-all" ] && [ "$CACHE_STRATEGY" != "clean-toolchain" ] && [ -d "openwrt/staging_dir" ] && [ "$(find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | head -1)" ]; then
             find openwrt/staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | while read -r d; do
               find "$d" -type f -exec touch {} +
             done
@@ -441,7 +539,7 @@ jobs:
 
           # ====== ccache：检测 .ccache 目录 ======
           CCACHE_RESTORED="false"
-          if [ "$FORCE" != "true" ] && [ -d "openwrt/.ccache" ] && [ "$(find openwrt/.ccache -type f 2>/dev/null | head -1)" ]; then
+          if [ "$CACHE_STRATEGY" != "clean-all" ] && [ "$CACHE_STRATEGY" != "clean-ccache" ] && [ -d "openwrt/.ccache" ] && [ "$(find openwrt/.ccache -type f 2>/dev/null | head -1)" ]; then
             CCACHE_RESTORED="true"
             echo "⚡ ccache 已恢复（来自上次构建）"
           fi
@@ -478,7 +576,7 @@ jobs:
 
       # ───────── 构建 ─────────
       - name: 🔑 Setup APK Signing Key
-        if: steps.evaluate.outputs.changed == 'true' && fromJson(matrix.apk_signing)
+        if: fromJson(matrix.apk_signing)
         id: signing_key
         env:
           APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
@@ -539,7 +637,6 @@ jobs:
           echo "📋 构建系统会将此公钥安装到目标设备的 /etc/apk/keys/"
 
       - name: 📥 2. Update Feeds & Packages
-        if: steps.evaluate.outputs.changed == 'true'
         id: feeds
         run: |
           set -euo pipefail
@@ -549,7 +646,6 @@ jobs:
           echo "✅ feeds 准备完成"
 
       - name: ⚙️ 3. Apply Configuration
-        if: steps.evaluate.outputs.changed == 'true'
         run: |
           set -euo pipefail
           echo "╔══════════════════════════════════════╗"
@@ -570,7 +666,7 @@ jobs:
           done > .config
           sed -i 's/\r$//; s/\xef\xbb\xbf//g' .config
           # ── 注入构建版本号（出现在固件文件名和系统信息中） ──
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.plan.outputs.version }}"
           # 移除种子文件中可能已有的 CONFIG_VERSION_NUMBER，确保唯一
           sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
           echo "CONFIG_VERSION_NUMBER=\"${VERSION}\"" >> .config
@@ -587,7 +683,6 @@ jobs:
           cat .config
 
       - name: 📥 4. Download Source Packages
-        if: steps.evaluate.outputs.changed == 'true'
         run: |
           set -euo pipefail
           echo "╔══════════════════════════════════════╗"
@@ -608,16 +703,21 @@ jobs:
 
       # ───────── 磁盘空间监控（第 3 阶段：编译前）─────────
       - name: 💽 Disk space · Before build
-        if: steps.evaluate.outputs.changed == 'true'
         id: disk-3
         run: |
           echo "📊 编译前磁盘空间"
           df -h / | awk 'NR==1{print} NR==2{print}'
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
           AVAIL_KB=$(df --output=avail / | tail -1)
           AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
           USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
           echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
           echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
           echo "  📂 openwrt/        : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
           echo "    ├─ staging_dir/  : $(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
           echo "    ├─ .ccache/      : $(du -sh openwrt/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
@@ -625,7 +725,6 @@ jobs:
           echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
 
       - name: 🔨 5. Build Firmware
-        if: steps.evaluate.outputs.changed == 'true'
         id: build
         run: |
           set -euo pipefail
@@ -657,32 +756,49 @@ jobs:
 
       # ───────── 磁盘空间监控（第 4 阶段：编译后）─────────
       - name: 💽 Disk space · After build
-        if: always() && steps.evaluate.outputs.changed == 'true'
+        if: always()
         id: disk-4
         run: |
           echo "📊 编译后磁盘空间"
           df -h / | awk 'NR==1{print} NR==2{print}'
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
           AVAIL_KB=$(df --output=avail / | tail -1)
           AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
           USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
           echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
           echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
           echo "  📂 openwrt/        : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
           echo "    ├─ staging_dir/  : $(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
           echo "    ├─ .ccache/      : $(du -sh openwrt/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
           echo "    ├─ dl/           : $(du -sh openwrt/dl 2>/dev/null | cut -f1 || echo 'N/A')"
           echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
 
+          # ── 计算各阶段空间消耗差值 ──
+          D1_USED=${{ steps.disk-1.outputs.used_gb || 0 }}
+          D2_USED=${{ steps.disk-2.outputs.used_gb || 0 }}
+          D3_USED=${{ steps.disk-3.outputs.used_gb || 0 }}
+          D4_USED=${USED_GB}
+          DELTA_1_2=$((D2_USED - D1_USED))
+          DELTA_2_3=$((D3_USED - D2_USED))
+          DELTA_3_4=$((D4_USED - D3_USED))
+          # 格式化差值（带符号）
+          fmt_delta() { local d=$1; if [ "$d" -ge 0 ]; then echo "+${d}G"; else echo "${d}G"; fi; }
+
           # ── Summary：磁盘空间汇总表 ──
           {
             echo ""
             echo "### 💽 磁盘空间变化"
-            echo "| 阶段 | 可用空间 | 已用% |"
-            echo "|------|----------|-------|"
-            echo "| ① 初始 | ${{ steps.disk-1.outputs.avail_gb || 'N/A' }}G | ${{ steps.disk-1.outputs.used_pct || 'N/A' }}% |"
-            echo "| ② 环境准备后 | ${{ steps.disk-2.outputs.avail_gb || 'N/A' }}G | ${{ steps.disk-2.outputs.used_pct || 'N/A' }}% |"
-            echo "| ③ 编译前 | ${{ steps.disk-3.outputs.avail_gb || 'N/A' }}G | ${{ steps.disk-3.outputs.used_pct || 'N/A' }}% |"
-            echo "| ④ 编译后 | ${AVAIL_GB}G | ${USED_PCT}% |"
+            echo "| 阶段 | 总容量 | 已用 | 已用% | 阶段消耗 |"
+            echo "|------|--------|------|-------|----------|"
+            echo "| ① 初始 | ${TOTAL_GB}G | ${D1_USED}G | ${{ steps.disk-1.outputs.used_pct || 'N/A' }}% | — |"
+            echo "| ② 环境准备后 | ${TOTAL_GB}G | ${D2_USED}G | ${{ steps.disk-2.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_1_2) |"
+            echo "| ③ 编译前 | ${TOTAL_GB}G | ${D3_USED}G | ${{ steps.disk-3.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_2_3) |"
+            echo "| ④ 编译后 | ${TOTAL_GB}G | ${D4_USED}G | ${USED_PCT}% | $(fmt_delta $DELTA_3_4) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           # 后续可基于此输出决定是否自动清理
@@ -690,7 +806,7 @@ jobs:
 
       # ───────── 重试（先更新仓库 → 并行重试 → 单线程兜底）─────────
       - name: 🔄 Retry build
-        if: steps.evaluate.outputs.changed == 'true' && steps.build.outputs.make_exit != '0'
+        if: always() && steps.build.outputs.make_exit != '0'
         id: retry
         run: |
           set -euo pipefail
@@ -737,7 +853,7 @@ jobs:
 
       # ───────── 总耗时汇总 ─────────
       - name: ⏱️ Total Build Duration
-        if: always() && steps.evaluate.outputs.changed == 'true'
+        if: always()
         id: total_duration
         run: |
           BUILD_DUR="${{ steps.build.outputs.duration }}"
@@ -754,7 +870,7 @@ jobs:
 
       # ───────── 编译日志统计（合并：耗时提取 + 日志分析，只输出到 Summary）─────────
       - name: 📊 Build Log Analysis
-        if: always() && steps.evaluate.outputs.changed == 'true'
+        if: always()
         run: |
           cd openwrt
 
@@ -791,14 +907,14 @@ jobs:
 
       # ───────── ccache 统计与清理（独立步骤，不受构建成败影响）─────────
       - name: 📈 ccache Stats & Cleanup
-        if: always() && steps.evaluate.outputs.changed == 'true'
+        if: always()
         run: |
           echo "╔══════════════════════════════════════╗"
           echo "║  📈 ccache 统计与压缩测量             ║"
           echo "╚══════════════════════════════════════╝"
 
           # ── 初始化 Summary 行供后续追加 ──
-          TC_HIT_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
+          TC_HIT_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
           TC_DISK=$(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo "N/A")
 
           if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
@@ -841,7 +957,7 @@ jobs:
             echo ""
 
             # ── 构造 ccache 行变量 ──
-            CC_HIT=$([ "${{ steps.cache-refresh.outputs.ccache_restored }}" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
+            CC_HIT=$([ "${{ steps.cache-refresh.outputs.ccache_restored || 'false' }}" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
             CCACHE_LINE="| **ccache** (.ccache) | ${CC_HIT} | ${DISK_USAGE_HUMAN:-N/A} | ${CC_GZIP_HUMAN:-N/A} |"
             CCACHE_HITRATE="direct=${HITS_DIRECT} preprocessed=${HITS_PREP} miss=${MISSES} size=${CACHE_SIZE}"
           else
@@ -885,16 +1001,16 @@ jobs:
       # gh cache 操作的是 GitHub Actions 的缓存存储（actions/cache@v5 的后端），
       # 目标仓库 ${{ github.repository }} 即当前 workflow 所属仓库。
       - name: 🧹 Purge stale GitHub Actions caches
-        if: steps.evaluate.outputs.changed == 'true' && success()
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          FORCE="${{ github.event.inputs.force_rebuild }}"
-          echo "🧹 清理远端缓存 (force_rebuild=${FORCE})..."
+          CACHE_STRATEGY="${{ github.event.inputs.cache_strategy || 'smart' }}"
+          echo "🧹 清理远端缓存 (cache_strategy=${CACHE_STRATEGY})..."
 
-          # 工具链：force_rebuild 时无条件全部删除，否则仅在 exact key 未命中时删除
+          # 工具链：clean-all/clean-toolchain 时全删，否则仅在 exact key 未命中时删除
           TC_EXACT_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
-          if [ "$FORCE" == "true" ] || [ "$TC_EXACT_HIT" != "true" ]; then
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ] || [ "$TC_EXACT_HIT" != "true" ]; then
             gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
               xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
             echo "🧹 旧工具链缓存已清理"
@@ -902,16 +1018,9 @@ jobs:
             echo "ℹ️ 工具链 exact key 命中 · 缓存不可变，跳过清理"
           fi
 
-          # sha marker cache：源码/包 SHA 变化会产生新 key，旧条目永不被命中，每次构建成功都全清
-          SHA_IDS=$(gh cache list --repo "${{ github.repository }}" --key "sha-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id' 2>/dev/null)
-          if [ -n "$SHA_IDS" ]; then
-            echo "$SHA_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
-          fi
-          echo "🧹 旧 sha marker 缓存已清理 ($(echo "$SHA_IDS" | grep -c . || echo 0) 条)"
-
           # ccache：同上逻辑
           CC_EXACT_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
-          if [ "$FORCE" == "true" ] || [ "$CC_EXACT_HIT" != "true" ]; then
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ] || [ "$CC_EXACT_HIT" != "true" ]; then
             gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${{ matrix.target }}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
               xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
             echo "🧹 旧 ccache 缓存已清理"
@@ -921,7 +1030,7 @@ jobs:
 
       # ───────── 打包产物 ─────────
       - name: 📦 6. Package Artifacts
-        if: steps.evaluate.outputs.changed == 'true' && success()
+        if: success()
         run: |
           echo "╔══════════════════════════════════════╗"
           echo "║  📦 6. Package Artifacts             ║"
@@ -968,7 +1077,6 @@ jobs:
 
       # ───────── 构建信息 JSON（独立 artifact）─────────
       - name: 📋 Generate build info
-        if: steps.evaluate.outputs.changed == 'true'
         run: |
           NOW="${{ steps.start_time.outputs.timestamp }}"
           SHA_FULL="${{ steps.clone_packages.outputs.sha_full }}"
@@ -982,11 +1090,17 @@ jobs:
             # 验证文件内容是否有效（至少包含一行 feed 条目）
             if grep -q '^src-git\b' "$FW_FEEDS_FILE" 2>/dev/null; then
               FEEDS_INFO=$(jq -Rs '.' "$FW_FEEDS_FILE")
-              FEEDS_MD_JSON=$(awk '{
+              FEEDS_MD_RAW=$(awk '{
                 n=split($NF,a,"^"); url=a[1]; hash=a[2]
                 sub(/\.git$/,"",url)
                 printf "| [%s](%s/tree/%s) | `%s` |\n", $2, url, hash, hash
-              }' "$FW_FEEDS_FILE" | jq -Rs '.')
+              }' "$FW_FEEDS_FILE")
+              if [ -n "$FEEDS_MD_RAW" ]; then
+                FEEDS_MD_JSON=$(echo "$FEEDS_MD_RAW" | jq -Rs '.')
+              else
+                echo "⚠️ feeds.buildinfo 格式异常，无法解析 feed 版本"
+                FEEDS_MD_JSON='""'
+              fi
             else
               echo "⚠️ feeds.buildinfo 内容不完整（无 src-git 条目），跳过 feed 版本记录"
               FEEDS_INFO='""'
@@ -1012,14 +1126,15 @@ jobs:
             "feeds_md": ${FEEDS_MD_JSON},
             "duration_sec": "${{ steps.total_duration.outputs.duration }}",
             "duration_fmt": "${{ steps.total_duration.outputs.duration_fmt }}",
-            "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored }}",
-            "toolchain_exact": "${{ steps.cache-refresh.outputs.toolchain_exact }}",
-            "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored }}",
+            "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}",
+            "toolchain_exact": "${{ steps.cache-refresh.outputs.toolchain_exact || 'false' }}",
+            "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored || 'false' }}",
             "signing_key_fingerprint": "${{ steps.signing_key.outputs.fingerprint || 'none' }}",
             "release_repo": "${{ matrix.release_repo }}",
             "passwall_repo": "${{ matrix.passwall_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
-            "release_tag": "${{ steps.version.outputs.version }}",
+            "release_tag": "${{ needs.plan.outputs.version }}",
+            "source_changed": "${{ needs.plan.outputs.source_changed }}",
             "timestamp": "${NOW}"
           }
           JSONEOF
@@ -1042,8 +1157,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # ── 生成 release-body.md（供 publish job 直接使用，简洁美观） ──
-          TC_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored }}" = "true" ] && echo "✅ 工具链缓存命中" || echo "🔨 工具链重新编译")
-          CC_LABEL=$([ "${{ steps.cache-refresh.outputs.ccache_restored }}" = "true" ] && echo "✅ ccache 命中" || echo "🔄 ccache 冷启动")
+          TC_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}" = "true" ] && echo "✅ 工具链缓存命中" || echo "🔨 工具链重新编译")
+          CC_LABEL=$([ "${{ steps.cache-refresh.outputs.ccache_restored || 'false' }}" = "true" ] && echo "✅ ccache 命中" || echo "🔄 ccache 冷启动")
           {
             echo "## ${{ matrix.target }} Build"
             echo ""
@@ -1069,7 +1184,7 @@ jobs:
           echo "📋 release-body.md 已生成"
 
       - name: 📤 Upload firmware artifact
-        if: steps.evaluate.outputs.changed == 'true' && success()
+        if: success()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-release
@@ -1077,7 +1192,7 @@ jobs:
           retention-days: 7
 
       - name: 📤 Upload passwall artifact
-        if: steps.evaluate.outputs.changed == 'true' && success()
+        if: success()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-passwall
@@ -1086,7 +1201,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: 📤 Upload build info artifact
-        if: steps.evaluate.outputs.changed == 'true' && success()
+        if: success()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-build-info
@@ -1095,21 +1210,121 @@ jobs:
             release-body.md
           retention-days: 7
 
-      - name: 💾 Save source marker on success
-        if: steps.evaluate.outputs.changed == 'true' && success()
-        run: touch .sha_marker
+      # ───────── 更新构建状态（替代旧的 sha marker）─────────
+      - name: 📤 Upload build state
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          VERSION="${{ needs.plan.outputs.version }}"
+          cat > "${{ matrix.target }}-state.json" <<JSONEOF
+          {
+            "source_sha": "${{ steps.clone_packages.outputs.sha_full }}",
+            "packages_sha": "${{ steps.clone_packages.outputs.packages_sha_full }}",
+            "last_build": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')",
+            "version": "${VERSION}"
+          }
+          JSONEOF
+          gh release upload "${VERSION}" "${{ matrix.target }}-state.json" \
+            --repo ${{ matrix.release_repo }} --clobber 2>/dev/null || true
+          echo "💾 构建状态已上传到 Release ${VERSION}"
+
+  # ========== SDK 软件包构建（仅软件包变更时） ==========
+  compile-packages:
+    name: Compile packages ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.should_build_sdk == 'true'
+    concurrency:
+      group: build-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.pkgs_matrix) }}
+    steps:
+      - name: Checkout packages repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.passwall_repo }}
+          ref: ${{ matrix.packages_branch }}
+
+      - name: ⚙️ Generate .config
+        run: |
+          cat > .config <<EOF
+          CONFIG_ALL_NONSHARED=n
+          CONFIG_ALL_KMODS=n
+          CONFIG_ALL=n
+          CONFIG_AUTOREMOVE=n
+          CONFIG_LUCI_LANG_zh_Hans=y
+          CONFIG_PACKAGE_luci-app-passwall=m
+          EOF
+
+      - name: 🔨 Build with OpenWrt SDK
+        id: compile
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.sdk_container }}
+          PACKAGES: luci-app-passwall
+          PRIVATE_KEY: ${{ secrets.APK_BUILD_KEY }}
+
+      - name: 📦 Collect artifacts
+        id: artifacts
+        run: |
+          mkdir -p upload
+          find bin/packages/ -type f \( \
+            -name "luci-app-passwall*" -o \
+            -name "luci-i18n-passwall*" \
+          \) -exec cp {} upload/ \; 2>/dev/null || true
+          FILE_COUNT=$(find upload/ -type f 2>/dev/null | wc -l)
+          echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
+          echo "📦 收集到 ${FILE_COUNT} 个文件"
+          ls -la upload/
+
+      - name: 📤 Upload passwall artifact
+        if: steps.artifacts.outputs.file_count > 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-passwall-sdk
+          path: upload/
+          retention-days: 7
+
+      - name: 📋 Generate build info
+        if: steps.artifacts.outputs.file_count > 0
+        run: |
+          cat > build-info.json <<JSONEOF
+          {
+            "target": "${{ matrix.target }}",
+            "packages_branch": "${{ matrix.packages_branch }}",
+            "sdk_container": "${{ matrix.sdk_container }}",
+            "passwall_repo": "${{ matrix.passwall_repo }}",
+            "passwall_tag": "${{ matrix.passwall_tag }}",
+            "release_repo": "${{ matrix.release_repo }}",
+            "apk_signing": ${{ matrix.apk_signing }},
+            "file_count": "${{ steps.artifacts.outputs.file_count }}",
+            "timestamp": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')"
+          }
+          JSONEOF
+
+      - name: 📤 Upload build info
+        if: steps.artifacts.outputs.file_count > 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-sdk-build-info
+          path: build-info.json
+          retention-days: 7
 
   # ========== 发布任务 ==========
   # 使用 always() 确保即使某个矩阵分片构建失败，仍可发布其他成功的分片。
   # 内部 publish_target() 函数会逐个目标检查产物是否存在，缺失则优雅跳过。
-  publish:
-    name: Publish Releases
-    needs: build
+  release:
+    name: Release
+    needs: [compile-firmware, compile-packages]
     if: |
       always() &&
       !cancelled() &&
-      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
-      (github.event.inputs.release != 'false' || github.event_name == 'schedule')
+      needs.plan.outputs.should_publish == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
@@ -1169,17 +1384,13 @@ jobs:
               return 0
             fi
 
-            # -------- 从 build-info.json 读取所有参数 --------
-            local TARGET_NAME CONFIG SOURCE_REPO SOURCE_REF SHORT_SHA
-            local SOURCE_SHA PKG_SHA FEEDS_MD DURATION_FMT
+            # -------- 从 build-info.json 读取参数 --------
+            local TARGET_NAME SOURCE_SHA PKG_SHA
+            local FEEDS_MD DURATION_FMT
             local TOOLCHAIN_HIT TOOLCHAIN_EXACT CCACHE_HIT
             local RELEASE_REPO PASSWALL_TAG PASSWALL_REPO
             TARGET_NAME=$(jq -r '.target'              "$INFO_FILE")
-            CONFIG=$(jq -r '.config'                   "$INFO_FILE")
-            SOURCE_REPO=$(jq -r '.source_repo'          "$INFO_FILE")
-            SOURCE_REF=$(jq -r '.source_ref'            "$INFO_FILE")
             SOURCE_SHA=$(jq -r '.source_sha'            "$INFO_FILE")
-            SHORT_SHA=$(jq -r '.source_sha_short'       "$INFO_FILE")
             PKG_SHA=$(jq -r '.packages_sha'            "$INFO_FILE")
             FEEDS_MD=$(jq -r '.feeds_md'               "$INFO_FILE")
             DURATION_FMT=$(jq -r '.duration_fmt'        "$INFO_FILE")
@@ -1191,17 +1402,17 @@ jobs:
             PASSWALL_TAG=$(jq -r '.passwall_tag'        "$INFO_FILE")
             echo "🏷️  [${TARGET}] Passwall → ${PASSWALL_REPO}@${PASSWALL_TAG}"
 
-            # -------- 格式化图标 --------
+            # -------- 格式化图标（用于日志） --------
             if [ "$TOOLCHAIN_HIT" = "true" ]; then
               if [ "$TOOLCHAIN_EXACT" = "true" ]; then
-                TC_HIT_LABEL="✅ 精确命中"
+                echo "  🔧 工具链: ✅ 精确命中"
               else
-                TC_HIT_LABEL="♻️ 模糊恢复"
+                echo "  🔧 工具链: ♻️ 模糊恢复"
               fi
             else
-              TC_HIT_LABEL="🔨 重编"
+              echo "  🔧 工具链: 🔨 重编"
             fi
-            CC_HIT_LABEL=$([ "$CCACHE_HIT" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
+            [ "$CCACHE_HIT" = "true" ] && echo "  ⚡ ccache: ✅ 命中" || echo "  ⚡ ccache: 🔄 冷启"
 
             # -------- 生成版本 Tag（直接从 build-info.json 读取） --------
             local TAG TITLE
@@ -1230,15 +1441,12 @@ jobs:
               fi
 
               if gh release view "$TAG" --repo "$RELEASE_REPO" &>/dev/null; then
-                echo "📤 [${TARGET}] Release $TAG 已存在，删除旧 Release 并重建..."
-                gh release delete "$TAG" --repo "$RELEASE_REPO" --yes 2>/dev/null || true
-                echo "🚀 [${TARGET}] 重新创建 Release $TAG ..."
-                gh release create "$TAG" --repo "$RELEASE_REPO" \
-                  --title "${TARGET_NAME} ${TITLE}" \
-                  --target "$SOURCE_SHA" \
-                  --notes-file /tmp/release_body.md \
-                  "$FW_DIR"/*
+                # Draft release 已由 plan 创建，上传固件
+                echo "📤 [${TARGET}] 上传固件到 Release $TAG ..."
+                gh release upload "$TAG" --repo "$RELEASE_REPO" \
+                  "$FW_DIR"/* --clobber 2>/dev/null || true
               else
+                # 降级：Release 不存在时直接创建
                 echo "🚀 [${TARGET}] 创建 Release $TAG ..."
                 gh release create "$TAG" --repo "$RELEASE_REPO" \
                   --title "${TARGET_NAME} ${TITLE}" \
@@ -1246,6 +1454,12 @@ jobs:
                   --notes-file /tmp/release_body.md \
                   "$FW_DIR"/*
               fi
+              # 更新 notes 并发布（draft → published）
+              gh release edit "$TAG" --repo "$RELEASE_REPO" \
+                --title "${TARGET_NAME} ${TITLE}" \
+                --notes-file /tmp/release_body.md \
+                --draft=false 2>/dev/null || true
+              echo "✅ [${TARGET}] Release $TAG 已发布"
             else
               echo "⚠️  [${TARGET}] 没有找到固件文件，跳过固件发布。"
             fi
@@ -1280,6 +1494,37 @@ jobs:
           for target_dir in artifacts/*-build-info; do
             TARGET_NAME=$(basename "$target_dir" | sed 's/-build-info//')
             publish_target "$TARGET_NAME"
+          done
+
+          # ── 发布 SDK 构建的 passwall ──
+          for sdk_dir in artifacts/*-sdk-build-info; do
+            [ -d "$sdk_dir" ] || continue
+            TARGET=$(basename "$sdk_dir" | sed 's/-sdk-build-info//')
+            INFO_FILE="$sdk_dir/build-info.json"
+            [ -f "$INFO_FILE" ] || continue
+
+            PW_REPO=$(jq -r '.passwall_repo' "$INFO_FILE")
+            PW_TAG=$(jq -r '.passwall_tag' "$INFO_FILE")
+            APK_SIGNING=$(jq -r '.apk_signing' "$INFO_FILE")
+            SDK_DIR="artifacts/${TARGET}-passwall-sdk"
+            [ -d "$SDK_DIR" ] || { echo "⏭️ [${TARGET}] SDK 产物不存在"; continue; }
+
+            SDK_FILES=$(find "$SDK_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) 2>/dev/null || true)
+            [ -n "$SDK_FILES" ] || { echo "⏭️ [${TARGET}] 无 SDK 文件"; continue; }
+
+            echo "📤 [${TARGET}] 上传 SDK passwall 到 ${PW_REPO}@${PW_TAG} ..."
+            PW_NOTES="最新 passwall (SDK 构建)，更新于 $(date +'%Y-%m-%d %H:%M')"
+            if [ "$APK_SIGNING" = "true" ]; then
+              PW_NOTES="${PW_NOTES}"$'\n'"🔑 APK 签名公钥: solarflows-apk-public.pem"
+            fi
+            if gh release view "$PW_TAG" --repo "$PW_REPO" &>/dev/null; then
+              gh release delete "$PW_TAG" --repo "$PW_REPO" --yes 2>/dev/null || true
+            fi
+            gh release create "$PW_TAG" --repo "$PW_REPO" \
+              --title "Passwall Packages (${TARGET})" \
+              --notes "$PW_NOTES" --latest=false \
+              $(echo "$SDK_FILES")
+            echo "✅ [${TARGET}] SDK passwall 发布完成"
           done
 
           echo "🎉 全部发布流程完成！"
