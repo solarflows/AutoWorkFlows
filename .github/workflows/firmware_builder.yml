@@ -1147,7 +1147,7 @@ jobs:
               echo ""
               echo "| Feed | 版本 |"
               echo "|------|------|"
-              echo "$FEEDS_MD_JSON" | jq -r '.'
+              printf '%s\n' "$FEEDS_MD_JSON" | jq -r '.'
             else
               echo ""
               echo "（feeds.buildinfo 缺失或为空，未记录）"
@@ -1179,7 +1179,7 @@ jobs:
               echo ""
               echo "| Feed | 版本 |"
               echo "|------|------|"
-              echo "$FEEDS_MD_JSON" | jq -r '.'
+              printf '%s\n' "$FEEDS_MD_JSON" | jq -r '.'
             fi
 
             echo ""
