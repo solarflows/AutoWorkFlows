@@ -814,7 +814,7 @@ jobs:
 
       # ───────── 重试（先更新仓库 → 并行重试 → 单线程兜底）─────────
       - name: 🔄 Retry build
-        if: always() && steps.build.outputs.make_exit != '0'
+        if: always() && !cancelled() && steps.build.outputs.make_exit != '0'
         id: retry
         run: |
           set -euo pipefail
