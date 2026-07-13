@@ -285,7 +285,7 @@ jobs:
 
   # ========== 固件构建任务（矩阵并行） ==========
   compile-firmware:
-    name: Compile firmware ${{ matrix.target }}
+    name: Compile firmware
     needs: plan
     if: needs.plan.outputs.should_build_firmware == 'true'
     concurrency:
@@ -1217,7 +1217,7 @@ jobs:
 
   # ========== SDK 软件包构建（仅软件包变更时） ==========
   compile-packages:
-    name: Compile packages ${{ matrix.target }}
+    name: Compile packages
     needs: plan
     if: needs.plan.outputs.should_build_sdk == 'true'
     concurrency:
