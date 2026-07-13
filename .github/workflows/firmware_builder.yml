@@ -1284,6 +1284,7 @@ jobs:
             "target": "${{ matrix.target }}",
             "packages_branch": "${{ matrix.packages_branch }}",
             "sdk_container": "${{ matrix.sdk_container }}",
+            "release_tag": "${{ needs.plan.outputs.version }}",
             "passwall_repo": "${{ matrix.passwall_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
             "release_repo": "${{ matrix.release_repo }}",
