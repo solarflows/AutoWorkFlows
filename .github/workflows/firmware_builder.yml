@@ -69,14 +69,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
-      full_matrix: ${{ steps.set-matrix.outputs.full_matrix }}
-      pkgs_matrix: ${{ steps.set-matrix.outputs.pkgs_matrix }}
+      full_matrix: ${{ steps.build-matrix.outputs.full_matrix }}
+      pkgs_matrix: ${{ steps.build-matrix.outputs.pkgs_matrix }}
       version: ${{ steps.version.outputs.version }}
-      source_changed: ${{ steps.set-matrix.outputs.source_changed }}
-      packages_changed: ${{ steps.set-matrix.outputs.packages_changed }}
-      should_build_firmware: ${{ steps.set-matrix.outputs.should_build_firmware }}
-      should_build_sdk: ${{ steps.set-matrix.outputs.should_build_sdk }}
-      should_publish: ${{ steps.set-matrix.outputs.should_publish }}
+      source_changed: ${{ steps.build-matrix.outputs.source_changed }}
+      packages_changed: ${{ steps.build-matrix.outputs.packages_changed }}
+      should_build_firmware: ${{ steps.build-matrix.outputs.should_build_firmware }}
+      should_build_sdk: ${{ steps.build-matrix.outputs.should_build_sdk }}
+      should_publish: ${{ steps.build-matrix.outputs.should_publish }}
     steps:
       - name: Checkout AutoWorkflows
         uses: actions/checkout@v6
@@ -157,14 +157,14 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "🏷️ 版本号: ${VERSION}"
 
-      # -------- 检查 SHA 变更 + 拆分矩阵 --------
-      - id: set-matrix
+      # -------- 加载目标 + SHA 状态检查 --------
+      - name: Load targets & check changes
+        id: load-targets
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           TARGET_FILTER="${{ github.event.inputs.target || 'both' }}"
           JSON_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/targets.json"
-          VERSION="${{ steps.version.outputs.version }}"
 
           if [ ! -f "$JSON_FILE" ]; then
             echo "❌ 配置文件不存在: $JSON_FILE"
@@ -177,6 +177,7 @@ jobs:
             if $t == "both" then .targets
             else [.targets[] | select(.target == $t)] end
           ' "$JSON_FILE")
+          echo "$FILTERED" > /tmp/filtered_targets.json
 
           # ── SHA 状态检查 ──
           SRC_CHANGED=false
@@ -199,12 +200,17 @@ jobs:
             fi
           done
 
-          # 手动触发也走正常 SHA 检查（不强制全量）
-          # 只在无状态文件时（首次运行）才强制全量
-
           echo "source_changed=${SRC_CHANGED}" >> $GITHUB_OUTPUT
           echo "packages_changed=${PKG_CHANGED}" >> $GITHUB_OUTPUT
           echo "🔍 source_changed=${SRC_CHANGED}, packages_changed=${PKG_CHANGED}"
+
+      # -------- 拆分矩阵 + 生成控制信号 --------
+      - name: Build matrix & control signals
+        id: build-matrix
+        run: |
+          FILTERED=$(cat /tmp/filtered_targets.json)
+          SRC_CHANGED="${{ steps.load-targets.outputs.source_changed }}"
+          PKG_CHANGED="${{ steps.load-targets.outputs.packages_changed }}"
 
           # ── 拆分矩阵 ──
           FULL_MATRIX=$(echo "$FILTERED" | jq -c 'map(. + {
@@ -224,15 +230,14 @@ jobs:
 
           echo "full_matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
           echo "pkgs_matrix=$PKGS_MATRIX" >> $GITHUB_OUTPUT
-          echo "✅ full_matrix: $FULL_MATRIX"
-          echo "✅ pkgs_matrix: $PKGS_MATRIX"
+          echo "source_changed=${SRC_CHANGED}" >> $GITHUB_OUTPUT
+          echo "packages_changed=${PKG_CHANGED}" >> $GITHUB_OUTPUT
 
           # ── Job 控制信号 ──
           TRIGGER="${{ github.event.inputs.trigger || 'full' }}"
           IS_SCHEDULE="${{ github.event_name }}"
 
           if [ "$TRIGGER" = "packages-only" ] && [ "$IS_SCHEDULE" != "schedule" ]; then
-            # 手动 packages-only：强制 SDK 构建
             echo "should_build_firmware=false" >> $GITHUB_OUTPUT
             if [ "$(echo "$PKGS_MATRIX" | jq 'length')" -gt 0 ]; then
               echo "should_build_sdk=true" >> $GITHUB_OUTPUT
@@ -241,7 +246,6 @@ jobs:
             fi
             echo "should_publish=true" >> $GITHUB_OUTPUT
           elif [ "$IS_SCHEDULE" = "schedule" ]; then
-            # 定时触发：根据 SHA 检查决定
             if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "false" ]; then
               echo "should_build_firmware=false" >> $GITHUB_OUTPUT
               echo "should_build_sdk=false" >> $GITHUB_OUTPUT
@@ -251,7 +255,6 @@ jobs:
               echo "should_build_sdk=false" >> $GITHUB_OUTPUT
               echo "should_publish=true" >> $GITHUB_OUTPUT
             else
-              # 仅软件包变更 → SDK 构建
               echo "should_build_firmware=false" >> $GITHUB_OUTPUT
               if [ "$(echo "$PKGS_MATRIX" | jq 'length')" -gt 0 ]; then
                 echo "should_build_sdk=true" >> $GITHUB_OUTPUT
@@ -261,13 +264,22 @@ jobs:
               echo "should_publish=true" >> $GITHUB_OUTPUT
             fi
           else
-            # 手动 full：强制全量固件编译
             echo "should_build_firmware=true" >> $GITHUB_OUTPUT
             echo "should_build_sdk=false" >> $GITHUB_OUTPUT
             echo "should_publish=true" >> $GITHUB_OUTPUT
           fi
 
-          # ── 创建 Draft Release（仅固件构建时需要，排除 packages-only）──
+      # -------- 创建 Draft Release --------
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          FILTERED=$(cat /tmp/filtered_targets.json)
+          VERSION="${{ steps.version.outputs.version }}"
+          TRIGGER="${{ github.event.inputs.trigger || 'full' }}"
+          SRC_CHANGED="${{ steps.load-targets.outputs.source_changed }}"
+          PKG_CHANGED="${{ steps.load-targets.outputs.packages_changed }}"
+
           if [ "$TRIGGER" != "packages-only" ] && { [ "$SRC_CHANGED" = "true" ] || [ "$PKG_CHANGED" = "true" ]; }; then
             for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
               REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
@@ -1063,6 +1075,7 @@ jobs:
 
       # ───────── 构建信息 JSON（独立 artifact）─────────
       - name: 📋 Generate build info
+        id: build-info
         run: |
           NOW="${{ steps.start_time.outputs.timestamp }}"
           SHA_FULL="${{ steps.clone_packages.outputs.sha_full }}"
@@ -1073,7 +1086,6 @@ jobs:
           FEEDS_MD_JSON=""
           FW_FEEDS_FILE=$(find openwrt/bin/targets -name "feeds.buildinfo" 2>/dev/null | head -1)
           if [ -f "$FW_FEEDS_FILE" ] && [ -s "$FW_FEEDS_FILE" ]; then
-            # 验证文件内容是否有效（至少包含一行 feed 条目）
             if grep -q '^src-git\b' "$FW_FEEDS_FILE" 2>/dev/null; then
               FEEDS_INFO=$(jq -Rs '.' "$FW_FEEDS_FILE")
               FEEDS_MD_RAW=$(awk '{
@@ -1142,7 +1154,15 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # ── 生成 release-body.md（供 publish job 直接使用，简洁美观） ──
+          echo "feeds_md_json=${FEEDS_MD_JSON}" >> $GITHUB_OUTPUT
+
+      # ───────── 生成 Release Notes ─────────
+      - name: 📝 Generate release notes
+        run: |
+          SHA_FULL="${{ steps.clone_packages.outputs.sha_full }}"
+          SHA_SHORT="${{ steps.clone_packages.outputs.sha }}"
+          FEEDS_MD_JSON="${{ steps.build-info.outputs.feeds_md_json }}"
+
           TC_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}" = "true" ] && echo "✅ 工具链缓存命中" || echo "🔨 工具链重新编译")
           CC_LABEL=$([ "${{ steps.cache-refresh.outputs.ccache_restored || 'false' }}" = "true" ] && echo "✅ ccache 命中" || echo "🔄 ccache 冷启动")
           {
@@ -1153,7 +1173,6 @@ jobs:
             echo "**编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}"
             echo "**缓存**: ${TC_LABEL} / ${CC_LABEL}"
 
-            # Feed 版本
             if [ -n "$FEEDS_MD_JSON" ] && [ "$FEEDS_MD_JSON" != '""' ]; then
               echo ""
               echo "### 📌 Feed 版本"
@@ -1477,8 +1496,9 @@ jobs:
             echo "✅ [${TARGET}] 发布流程完成。"
           }
 
-          # 按目标依次发布（参数全从 build-info.json 读取）
+          # 按目标依次发布固件（排除 SDK 构建产物）
           for target_dir in artifacts/*-build-info; do
+            case "$(basename "$target_dir")" in *-sdk-*) continue ;; esac
             TARGET_NAME=$(basename "$target_dir" | sed 's/-build-info//')
             publish_target "$TARGET_NAME"
           done
