@@ -1178,7 +1178,7 @@ jobs:
               echo ""
               echo "| Feed | 版本 |"
               echo "|------|------|"
-              printf '%s\n' "$FEEDS_MD_JSON" | jq -r '.'
+              printf '%s\n' "$FEEDS_MD_JSON"
             fi
 
             echo ""
