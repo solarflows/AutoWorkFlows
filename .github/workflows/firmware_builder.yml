@@ -418,23 +418,13 @@ jobs:
             echo "| 🔄 **触发方式** | ${{ github.event_name }} |"
             echo "| 📌 **变更检测** | ${BUILD_STATUS} |"
           } >> "$GITHUB_STEP_SUMMARY"
-          {
-            echo ""
-            echo "### 运行环境"
-            echo "\`\`\`"
-            echo "🖥️ 构建环境"
-            echo "  🧠 CPU : $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
-            echo "  💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
-            echo "  🐧 系统: $(uname -r)"
-            echo "\`\`\`"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # 运行环境仅输出到终端日志，不写 Summary
+          echo "🖥️ CPU: $(nproc) 核 | $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
+          echo "💾 内存: $(free -h | awk '/^Mem:/ {print $2}') | 磁盘: $(df -h / | awk 'NR==2 {print $4}') 可用"
 
           START_FMT=$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')
           echo "timestamp=${START_FMT}" >> $GITHUB_OUTPUT
           echo "🕐 构建开始时间: ${START_FMT}"
-
-          # ── Summary ──
-          echo "| 🕐 **构建开始** | ${START_FMT} |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 🧹 Free Disk Space
         if: github.event.inputs.free_disk_space == 'true'
@@ -757,6 +747,18 @@ jobs:
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
           ccache --max-size 10G
+          # ── ccache 优化配置（提高 OpenWrt 构建命中率）──
+          ccache --set-config=compiler_check=content       # 按编译器内容校验，忽略 mtime
+          ccache --set-config=hash_dir=false               # 不把工作目录纳入 hash（GHA 路径每次不同）
+          ccache --set-config=compression=true             # 压缩缓存条目，10GB 能存更多
+          ccache --set-config=compression_level=6          # 压缩级别（0-19，6 为平衡点）
+          ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
+          # file_stat_matches   : 用文件内容校验而非 mtime（cache restore 后 mtime 全变）
+          # include_file_mtime  : 忽略 #include 文件的 mtime 变化
+          # include_file_ctime  : 忽略 #include 文件的 ctime 变化
+          # time_macros         : 忽略 __DATE__ / __TIME__ 宏（每次构建时间不同）
+          echo "📋 ccache 配置:"
+          ccache --show-config | grep -E 'max_size|compiler_check|hash_dir|compression|sloppiness'
           export CC="ccache gcc"
           export CXX="ccache g++"
           NPROC=$(($(nproc) + 1))
@@ -886,11 +888,7 @@ jobs:
           echo "duration_fmt=${TOTAL_FMT}" >> $GITHUB_OUTPUT
           echo "⏱️ 总编译耗时: ${TOTAL_FMT} (并行 ${BUILD_DUR}s + 重试 ${RETRY_DUR}s)"
 
-          # ── Summary ──
-          echo "| ⏱️ **编译耗时** | ${TOTAL_FMT} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏁 **构建结束** | $(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S') |" >> "$GITHUB_STEP_SUMMARY"
-
-      # ───────── 编译日志统计（合并：耗时提取 + 日志分析，只输出到 Summary）─────────
+      # ───────── 编译日志统计 ─────────
       - name: 📊 Build Log Analysis
         if: always()
         run: |
@@ -906,18 +904,13 @@ jobs:
           # 耗时提取
           echo "$TAIL_ALL" | grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
 
-          # ── Summary ──
+          # 统计输出到终端日志
+          echo "📊 compile.txt: 总计 ${TOTAL}, 未完成 ${INCOMPLETE}, 空 ${EMPTY}"
+
+          # Summary 只保留 Top 5
           {
             echo ""
-            echo "### 📊 编译统计"
-            echo "| 指标 | 数值 |"
-            echo "|------|------|"
-            echo "| compile.txt 总数 | ${TOTAL} |"
-            echo "| 未完成（末行无 time:） | ${INCOMPLETE} |"
-            echo "| 空日志 | ${EMPTY} |"
-            echo "| 耗时记录数 | $(wc -l < build_time_clean.log 2>/dev/null || echo 0) |"
-            echo ""
-            echo "🐌 编译耗时 Top 5:"
+            echo "### 📊 编译耗时 Top 5"
             echo "\`\`\`"
             awk -F'#' '{
               pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
@@ -963,41 +956,44 @@ jobs:
             [ -z "$MISSES" ] && MISSES="?"
             [ -z "$CACHE_SIZE" ] && CACHE_SIZE="?"
 
-            # ── 输出完整原始 ccache -s（日志 + Summary 双写）──
+            # ── ccache -s 完整输出到终端日志 ──
             echo ""
             echo "📊 ccache -s 原始输出:"
             echo "$CC_RAW"
-            {
-              echo '```'
-              echo "$CC_RAW"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+
+            # ── 计算命中率百分比 ──
+            CC_TOTAL=$((HITS_DIRECT + HITS_PREP + MISSES))
+            if [ "$CC_TOTAL" -gt 0 ]; then
+              HIT_RATE=$(( (HITS_DIRECT + HITS_PREP) * 100 / CC_TOTAL ))
+            else
+              HIT_RATE=0
+            fi
 
             # ── 清理过期缓存 ──
             echo "🧹 清理过期缓存 (上限: 10G)..."
             ccache --cleanup 2>/dev/null || true
-            echo ""
 
-            # ── 构造 ccache 行变量 ──
+            # ── Summary 精简缓存状态 ──
             CC_HIT=$([ "${{ steps.cache-refresh.outputs.ccache_restored || 'false' }}" = "true" ] && echo "✅ 命中" || echo "🔄 冷启")
-            CCACHE_LINE="| **ccache** (.ccache) | ${CC_HIT} | ${DISK_USAGE_HUMAN:-N/A} | ${CC_GZIP_HUMAN:-N/A} |"
-            CCACHE_HITRATE="direct=${HITS_DIRECT} preprocessed=${HITS_PREP} miss=${MISSES} size=${CACHE_SIZE}"
+            {
+              echo ""
+              echo "### 💾 缓存状态"
+              echo "| 缓存 | 恢复 | 命中率 | 磁盘大小 |"
+              echo "|------|------|--------|---------|"
+              echo "| **工具链** | ${TC_HIT_LABEL} | — | ${TC_DISK} |"
+              echo "| **ccache** | ${CC_HIT} | ${HIT_RATE}% (${HITS_DIRECT}+${HITS_PREP}/${CC_TOTAL}) | ${DISK_USAGE_HUMAN:-N/A} |"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "⚠️ ccache 不可用或 .ccache 目录不存在"
-            CCACHE_LINE="| **ccache** (.ccache) | 🔄 冷启 | N/A | N/A |"
-            CCACHE_HITRATE="N/A"
+            {
+              echo ""
+              echo "### 💾 缓存状态"
+              echo "| 缓存 | 恢复 | 命中率 | 磁盘大小 |"
+              echo "|------|------|--------|---------|"
+              echo "| **工具链** | ${TC_HIT_LABEL} | — | ${TC_DISK} |"
+              echo "| **ccache** | 🔄 冷启 | — | — |"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-
-          # ── Summary 缓存状态（日志 + Summary 双写）──
-          {
-            echo ""
-            echo "### 💾 缓存状态"
-            echo "| 缓存 | 恢复状态 | 磁盘大小 | GitHub 上传大小 |"
-            echo "|------|----------|----------|----------------|"
-            echo "| **工具链** (staging_dir) | ${TC_HIT_LABEL} | ${TC_DISK} | ~N/A |"
-            echo "${CCACHE_LINE}"
-            echo "| **ccache 缩写** | ${CCACHE_HITRATE:-N/A} | — | — |"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ───────── 失败处理 ─────────
       - name: 📤 Upload build log on failure
