@@ -264,6 +264,7 @@ jobs:
           })')
           PKGS_MATRIX=$(echo "$FILTERED" | jq -c '[.[] | select(.sdk_container != null) | . + {
             packages_branch: (.packages_branch // .target),
+            release_repo:    (.release_repo    // .repo),
             passwall_repo:   (.passwall_repo   // "solarflows/openwrt-packages"),
             passwall_tag:    (.passwall_tag    // .target),
             apk_signing:     (.apk_signing     // false),
@@ -325,7 +326,7 @@ jobs:
         run: |
           FILTERED=$(cat /tmp/filtered_targets.json)
           VERSION="${{ steps.version.outputs.version }}"
-          TRIGGER="${{ github.event.inputs.trigger || 'full' }}"
+          TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
           SRC_CHANGED="${{ steps.load-targets.outputs.source_changed }}"
           PKG_CHANGED="${{ steps.load-targets.outputs.packages_changed }}"
 
@@ -333,12 +334,15 @@ jobs:
             for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
               REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
               REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
+              # 将分支名/ref 解析为 commit SHA，确保 targetCommitish 是 SHA 而非分支名
+              RESOLVED_SHA=$(git ls-remote "https://github.com/${REPO}" "${REF}" 2>/dev/null | cut -f1)
+              [ -z "$RESOLVED_SHA" ] && RESOLVED_SHA="$REF"  # 降级：ls-remote 失败时用原始 ref
               if ! gh release view "${VERSION}" --repo "$REPO" &>/dev/null; then
                 if gh release create "${VERSION}" --repo "$REPO" \
-                  --target "${REF}" \
+                  --target "${RESOLVED_SHA}" \
                   --title "${TARGET} Build ${VERSION}" --draft \
                   --notes "🔨 构建中..." 2>/dev/null; then
-                  echo "📝 创建 Draft Release: ${REPO}@${VERSION} → ${REF}"
+                  echo "📝 创建 Draft Release: ${REPO}@${VERSION} → ${RESOLVED_SHA:0:7}"
                 else
                   echo "⚠️ Release ${VERSION} 已存在（并发创建），跳过"
                 fi
@@ -925,7 +929,7 @@ jobs:
         if: always()
         id: total_duration
         run: |
-          BUILD_DUR="${{ steps.build.outputs.duration }}"
+          BUILD_DUR="${{ steps.build.outputs.duration || '0' }}"
           RETRY_DUR="${{ steps.retry.outputs.retry_duration || '0' }}"
           TOTAL_SEC=$((BUILD_DUR + RETRY_DUR))
           TOTAL_FMT=$(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60)))
@@ -1006,12 +1010,17 @@ jobs:
             echo "📊 ccache -s 原始输出:"
             echo "$CC_RAW"
 
-            # ── 计算命中率百分比 ──
-            CC_TOTAL=$((HITS_DIRECT + HITS_PREP + MISSES))
-            if [ "$CC_TOTAL" -gt 0 ]; then
-              HIT_RATE=$(( (HITS_DIRECT + HITS_PREP) * 100 / CC_TOTAL ))
+            # ── 计算命中率百分比（仅在指标可解析时计算）──
+            if [ "$HITS_DIRECT" != "?" ] && [ "$HITS_PREP" != "?" ] && [ "$MISSES" != "?" ]; then
+              CC_TOTAL=$((HITS_DIRECT + HITS_PREP + MISSES))
+              if [ "$CC_TOTAL" -gt 0 ]; then
+                HIT_RATE=$(( (HITS_DIRECT + HITS_PREP) * 100 / CC_TOTAL ))
+              else
+                HIT_RATE=0
+              fi
+              HIT_DETAIL="${HIT_RATE}% (${HITS_DIRECT}+${HITS_PREP}/${CC_TOTAL})"
             else
-              HIT_RATE=0
+              HIT_DETAIL="N/A"
             fi
 
             # ── 清理过期缓存 ──
@@ -1026,7 +1035,7 @@ jobs:
               echo "| 缓存 | 恢复 | 命中率 | 磁盘大小 |"
               echo "|------|------|--------|---------|"
               echo "| **工具链** | ${TC_HIT_LABEL} | — | ${TC_DISK} |"
-              echo "| **ccache** | ${CC_HIT} | ${HIT_RATE}% (${HITS_DIRECT}+${HITS_PREP}/${CC_TOTAL}) | ${DISK_USAGE_HUMAN:-N/A} |"
+              echo "| **ccache** | ${CC_HIT} | ${HIT_DETAIL} | ${DISK_USAGE_HUMAN:-N/A} |"
             } | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "⚠️ ccache 不可用或 .ccache 目录不存在"
@@ -1440,6 +1449,31 @@ jobs:
           path: build-info.json
           retention-days: 7
 
+      # SDK 编译也需上传 state，防止下次 plan 检测时因 packages_sha 未更新导致无限重建循环
+      - name: 📤 Upload build state
+        if: steps.artifacts.outputs.file_count > 0
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          TAG="${{ needs.plan.outputs.sdk_version }}"
+          PKG_SHA=$(git rev-parse HEAD)
+          cat > "${{ matrix.target }}-state.json" <<JSONEOF
+          {
+            "packages_sha": "${PKG_SHA}",
+            "last_build": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')",
+            "version": "${TAG}"
+          }
+          JSONEOF
+          # 上传到 release_repo 的最新 Release（与 plan 检测时下载位置一致）
+          LATEST_TAG=$(gh release list --repo "${{ matrix.release_repo }}" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            gh release upload "$LATEST_TAG" "${{ matrix.target }}-state.json" \
+              --repo "${{ matrix.release_repo }}" --clobber 2>/dev/null || true
+            echo "💾 SDK 构建状态已上传到 ${{ matrix.release_repo }}@${LATEST_TAG}"
+          else
+            echo "⚠️ 未找到已有 Release，跳过状态上传（下次仍会触发 SDK 构建）"
+          fi
+
   # ========== 发布任务 ==========
   # 使用 always() 确保即使某个矩阵分片构建失败，仍可发布其他成功的分片。
   # 内部 publish_target() 函数会逐个目标检查产物是否存在，缺失则优雅跳过。
@@ -1449,7 +1483,8 @@ jobs:
     if: |
       always() &&
       !cancelled() &&
-      needs.plan.outputs.should_publish == 'true'
+      needs.plan.outputs.should_publish == 'true' &&
+      (needs.plan.outputs.should_build_firmware == 'true' || needs.plan.outputs.should_build_sdk == 'true')
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
