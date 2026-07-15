@@ -183,24 +183,60 @@ jobs:
           ' "$JSON_FILE")
           echo "$FILTERED" > /tmp/filtered_targets.json
 
-          # ── SHA 状态检查 ──
+          # ── SHA 状态检查（带熔断）──
+          # 源码变更：比较 Release 的 targetCommitish（上次构建时的源码 commit SHA）
+          #   与当前远端 HEAD SHA，无需额外状态文件。
+          # 软件包变更：从 Release 下载 state JSON 比对（仅源码未变更时才下载）。
+          # 熔断：一旦两个标志都为 true，跳过剩余 target 的检查。
           SRC_CHANGED=false
           PKG_CHANGED=false
           for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
-            gh release download _build-state --repo ${{ github.repository }} \
-              --pattern "${TARGET}-state.json" -D /tmp/state 2>/dev/null || true
-            if [ -f "/tmp/state/${TARGET}-state.json" ]; then
-              LAST_SRC=$(jq -r '.source_sha' "/tmp/state/${TARGET}-state.json")
-              LAST_PKG=$(jq -r '.packages_sha' "/tmp/state/${TARGET}-state.json")
-              CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .repo')
-              CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
-              CURR_SRC=$(git ls-remote "https://github.com/${CURR_REPO}" "${CURR_REF}" 2>/dev/null | cut -f1)
-              CURR_PKG=$(git ls-remote https://github.com/solarflows/openwrt-packages.git "$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.packages_branch // .target)')" 2>/dev/null | cut -f1)
-              [ "$LAST_SRC" != "$CURR_SRC" ] && SRC_CHANGED=true
-              [ "$LAST_PKG" != "$CURR_PKG" ] && PKG_CHANGED=true
+            # 熔断：两个都已变更，无需继续
+            [ "$SRC_CHANGED" = "true" ] && [ "$PKG_CHANGED" = "true" ] && break
+
+            CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
+            CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
+            CURR_PKG_BRANCH=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.packages_branch // .target)')
+
+            # 获取远端当前源码 SHA
+            CURR_SRC=$(git ls-remote "https://github.com/${CURR_REPO}" "${CURR_REF}" 2>/dev/null | cut -f1)
+
+            # ── 源码变更检测：比较 Release 的 targetCommitish ──
+            # Release 通过 gh release create --target "$SOURCE_SHA" 创建，
+            # 其 targetCommitish 即上次构建时的源码 commit SHA，无需额外状态文件。
+            LATEST_TAG=$(gh release list --repo "$CURR_REPO" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+            LAST_SRC=""
+            if [ -n "$LATEST_TAG" ]; then
+              LAST_SRC=$(gh release view "$LATEST_TAG" --repo "$CURR_REPO" --json targetCommitish --jq '.targetCommitish' 2>/dev/null || echo "")
+            fi
+
+            if [ -n "$LAST_SRC" ] && [ "$LAST_SRC" = "$CURR_SRC" ]; then
+              echo "  ✅ [${TARGET}] 源码未变更 (${CURR_SRC:0:7})"
             else
+              echo "  🔵 [${TARGET}] 源码有变更: ${LAST_SRC:-无记录} → ${CURR_SRC:0:7}"
               SRC_CHANGED=true
-              PKG_CHANGED=true
+            fi
+
+            # ── 软件包变更检测（仅源码未变更且 PKG 尚未标记变更时下载）──
+            if [ "$PKG_CHANGED" != "true" ]; then
+              CURR_PKG=$(git ls-remote https://github.com/solarflows/openwrt-packages.git "${CURR_PKG_BRANCH}" 2>/dev/null | cut -f1)
+              rm -rf /tmp/state 2>/dev/null || true
+              if [ -n "$LATEST_TAG" ]; then
+                gh release download "$LATEST_TAG" --repo "$CURR_REPO" \
+                  --pattern "${TARGET}-state.json" -D /tmp/state 2>/dev/null || true
+              fi
+              if [ -f "/tmp/state/${TARGET}-state.json" ]; then
+                LAST_PKG=$(jq -r '.packages_sha' "/tmp/state/${TARGET}-state.json")
+                if [ "$LAST_PKG" != "$CURR_PKG" ]; then
+                  echo "  🟡 [${TARGET}] 软件包有变更: ${LAST_PKG:0:7} → ${CURR_PKG:0:7}"
+                  PKG_CHANGED=true
+                else
+                  echo "  ✅ [${TARGET}] 软件包未变更 (${CURR_PKG:0:7})"
+                fi
+              else
+                echo "  ⚠️ [${TARGET}] 未找到软件包状态（首次构建？）"
+                PKG_CHANGED=true
+              fi
             fi
           done
 
@@ -1134,7 +1170,6 @@ jobs:
             "source_repo": "${{ matrix.repo }}",
             "source_ref": "${{ matrix.ref }}",
             "source_sha": "${SHA_FULL}",
-            "source_sha_short": "${SHA_SHORT}",
             "packages_repo": "solarflows/openwrt-packages",
             "packages_branch": "${{ matrix.packages_branch }}",
             "packages_sha": "${{ steps.clone_packages.outputs.packages_sha }}",
@@ -1241,7 +1276,6 @@ jobs:
           VERSION="${{ needs.plan.outputs.version }}"
           cat > "${{ matrix.target }}-state.json" <<JSONEOF
           {
-            "source_sha": "${{ steps.clone_packages.outputs.sha_full }}",
             "packages_sha": "${{ steps.clone_packages.outputs.packages_sha_full }}",
             "last_build": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')",
             "version": "${VERSION}"
