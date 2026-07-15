@@ -26,7 +26,8 @@
 | `passwall_repo` | `"solarflows/openwrt-packages"` | Passwall 包发布到的仓库 |
 | `passwall_tag` | `target` 的值 | Passwall 固定 Release 的 Tag 名（默认为目标名，如 `qualcommax`）。同名文件替换，不同名文件保留 |
 | `apk_signing` | `false` | 是否需要 APK 签名密钥（OpenWrt ≥ 25.12 改用 APK 时需要设为 `true`） |
-| `sdk_container` | _(不启用)_ | OpenWrt SDK 容器标签（如 `aarch64_cortex-a53-21.02.7`）。设置后当仅软件包变更时启用 SDK 独立编译 passwall，跳过完整固件构建。参见 [openwrt/gh-action-sdk](https://github.com/openwrt/gh-action-sdk) |
+| `sdk_container` | _(不启用)_ | OpenWrt SDK 容器标签（如 `aarch64_cortex-a53-21.02.7`）。设置后当仅软件包变更时启用 SDK 独立编译，跳过完整固件构建。参见 [openwrt/gh-action-sdk](https://github.com/openwrt/gh-action-sdk) |
+| `sdk_packages` | `"*"` | SDK 编译时收集的软件包 glob 模式。`"*"` 表示收集 feed 中所有编译产物；也可指定具体包名如 `"luci-app-passwall"` |
 
 ---
 
@@ -52,10 +53,19 @@
 openwrt-configs/immortalwrt/newdevice/
 ├── 00-target.seed     ← 必须：至少一个 .seed 文件
 ├── 01-packages.seed   ← 可选：按需拆分
+├── sdk.config         ← 可选：SDK 编译配置（见下方说明）
 └── ...
 ```
 
 `.seed` 文件按**文件名排序**后依次拼接，序号建议使用 `00-`、`01-` 前缀控制顺序。
+
+### SDK 编译配置（`sdk.config`）
+
+当 `sdk_container` 已设置时，`compile-packages` job 会使用 `sdk.config` 作为 SDK 构建的额外配置。
+
+此文件与 `.seed` 文件**完全独立**，仅用于 SDK 编译场景，不会影响全量固件构建。
+
+典型用途：从 `.seed` 中提取 passwall 相关的 `CONFIG_PACKAGE_*` 选项，使 SDK 编译的软件包与全量固件保持一致的编译参数。
 
 ### 步骤 3：更新 `workflow_dispatch` 的 `target` 选项（可选）
 

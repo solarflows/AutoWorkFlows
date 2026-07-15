@@ -220,13 +220,15 @@ jobs:
             passwall_repo:    (.passwall_repo    // "solarflows/openwrt-packages"),
             passwall_tag:     (.passwall_tag     // .target),
             apk_signing:      (.apk_signing      // false),
-            sdk_container:    (.sdk_container    // null)
+            sdk_container:    (.sdk_container    // null),
+            sdk_packages:     (.sdk_packages     // "*")
           })')
           PKGS_MATRIX=$(echo "$FILTERED" | jq -c '[.[] | select(.sdk_container != null) | . + {
             packages_branch: (.packages_branch // .target),
             passwall_repo:   (.passwall_repo   // "solarflows/openwrt-packages"),
             passwall_tag:    (.passwall_tag    // .target),
-            apk_signing:     (.apk_signing     // false)
+            apk_signing:     (.apk_signing     // false),
+            sdk_packages:    (.sdk_packages    // "*")
           }]')
 
           echo "full_matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
@@ -1260,6 +1262,12 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.plan.outputs.pkgs_matrix) }}
     steps:
+      - name: Checkout AutoWorkflows
+        uses: actions/checkout@v6
+        with:
+          repository: solarflows/AutoWorkFlows
+          path: AutoWorkFlows
+
       - name: Checkout packages repo
         uses: actions/checkout@v6
         with:
@@ -1268,31 +1276,91 @@ jobs:
 
       - name: ⚙️ Generate .config
         run: |
+          CONFIG_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}"
           cat > .config <<EOF
           CONFIG_ALL_NONSHARED=n
           CONFIG_ALL_KMODS=n
           CONFIG_ALL=n
           CONFIG_AUTOREMOVE=n
           CONFIG_LUCI_LANG_zh_Hans=y
-          CONFIG_PACKAGE_luci-app-passwall=m
           EOF
+          if [ -f "$CONFIG_DIR/sdk.config" ] && [ -s "$CONFIG_DIR/sdk.config" ]; then
+            grep -v '^#' "$CONFIG_DIR/sdk.config" | grep -v '^$' >> .config
+            # SDK 编译：CONFIG_PACKAGE_*=y → =m（编译为独立 .ipk/.apk，不内建到固件）
+            # 只改 CONFIG_PACKAGE_ 开头的行，避免误改 CONFIG_ALL_ 等系统配置
+            sed -i '/^CONFIG_PACKAGE_/s/=y$/=m/' .config
+            echo "📋 已注入 sdk.config ($(grep -c '^CONFIG' "$CONFIG_DIR/sdk.config") 项，PACKAGE_*=y 已转为 =m)"
+          else
+            echo "⚠️ $CONFIG_DIR/sdk.config 不存在或为空，使用默认最小配置"
+          fi
+          echo "📋 .config 内容:"
+          cat .config
+
+      - name: 🔑 Derive APK public key
+        if: ${{ matrix.apk_signing }}
+        env:
+          APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
+        run: |
+          if [ -z "$APK_BUILD_KEY" ]; then
+            echo "⚠️ APK_BUILD_KEY 未设置，跳过公钥派生"
+            exit 0
+          fi
+          printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > private-key.pem
+          chmod 600 private-key.pem
+          sed -i 's/\r$//' private-key.pem
+          openssl ec -in private-key.pem -pubout -out public-key.pem 2>/dev/null || \
+            openssl rsa -in private-key.pem -pubout -out public-key.pem
+          chmod 644 public-key.pem
+          FP=$(openssl sha256 < public-key.pem | awk '{print $NF}')
+          echo "🔑 APK 公钥已派生 (SHA256: ${FP:0:16}...)"
+
+      - name: 📦 Resolve SDK packages
+        id: resolve-pkgs
+        run: |
+          SDK_PKGS="${{ matrix.sdk_packages }}"
+          if [ "$SDK_PKGS" = "*" ]; then
+            CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}/sdk.config"
+            if [ -f "$CONFIG_FILE" ]; then
+              SDK_PKGS=$(grep '^CONFIG_PACKAGE_.*=[ym]' "$CONFIG_FILE" | sed 's/CONFIG_PACKAGE_\(.*\)=[ym]/\1/' | tr '\n' ' ')
+            fi
+            [ -z "$SDK_PKGS" ] && SDK_PKGS="luci-app-passwall"
+          fi
+          echo "packages=$SDK_PKGS" >> $GITHUB_OUTPUT
+          echo "📦 PACKAGES=$SDK_PKGS"
 
       - name: 🔨 Build with OpenWrt SDK
         id: compile
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.sdk_container }}
-          PACKAGES: luci-app-passwall
+          PACKAGES: ${{ steps.resolve-pkgs.outputs.packages }}
           PRIVATE_KEY: ${{ secrets.APK_BUILD_KEY }}
 
       - name: 📦 Collect artifacts
         id: artifacts
         run: |
           mkdir -p upload
-          find bin/packages/ -type f \( \
-            -name "luci-app-passwall*" -o \
-            -name "luci-i18n-passwall*" \
-          \) -exec cp {} upload/ \; 2>/dev/null || true
+          SDK_PKGS="${{ matrix.sdk_packages }}"
+          if [ "$SDK_PKGS" = "*" ]; then
+            # 收集所有 .ipk 和 .apk
+            find bin/packages/ -type f \( -name '*.ipk' -o -name '*.apk' \) \
+              -exec cp {} upload/ \; 2>/dev/null || true
+          else
+            # 按包名匹配，同时支持 .ipk 和 .apk
+            for pkg in $SDK_PKGS; do
+              find bin/packages/ -type f \( \
+                -name "${pkg}_*.ipk" -o \
+                -name "${pkg}_*.apk" -o \
+                -name "${pkg}*.ipk" -o \
+                -name "${pkg}*.apk" \
+              \) -exec cp {} upload/ \; 2>/dev/null || true
+            done
+          fi
+          # 附带 APK 签名公钥
+          if [ -f public-key.pem ]; then
+            cp public-key.pem upload/solarflows-apk-public.pem
+            echo "🔑 公钥已复制到上传目录"
+          fi
           FILE_COUNT=$(find upload/ -type f 2>/dev/null | wc -l)
           echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
           echo "📦 收集到 ${FILE_COUNT} 个文件"
@@ -1314,10 +1382,11 @@ jobs:
             "target": "${{ matrix.target }}",
             "packages_branch": "${{ matrix.packages_branch }}",
             "sdk_container": "${{ matrix.sdk_container }}",
+            "sdk_packages": "${{ matrix.sdk_packages }}",
             "release_tag": "${{ needs.plan.outputs.version }}",
             "passwall_repo": "${{ matrix.passwall_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
-            "release_repo": "${{ matrix.release_repo }}",
+            "release_repo": "${{ matrix.passwall_repo }}",
             "apk_signing": ${{ matrix.apk_signing }},
             "file_count": "${{ steps.artifacts.outputs.file_count }}",
             "timestamp": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')"
@@ -1337,7 +1406,7 @@ jobs:
   # 内部 publish_target() 函数会逐个目标检查产物是否存在，缺失则优雅跳过。
   release:
     name: Release
-    needs: [compile-firmware, compile-packages]
+    needs: [plan, compile-firmware, compile-packages]
     if: |
       always() &&
       !cancelled() &&

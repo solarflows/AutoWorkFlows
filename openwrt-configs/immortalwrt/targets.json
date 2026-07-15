@@ -12,7 +12,8 @@
       "release_repo": "solarflows/immortalwrt-mt798x",
       "passwall_repo": "solarflows/openwrt-packages",
       "apk_signing": false,
-      "sdk_container": "aarch64_cortex-a53-21.02.7"
+      "sdk_container": "aarch64_cortex-a53-21.02.7",
+      "sdk_packages": "*"
     },
     {
       "target": "qualcommax",
@@ -24,7 +25,8 @@
       "release_repo": "solarflows/ImmortalWrt-QualcommAX",
       "passwall_repo": "solarflows/openwrt-packages",
       "apk_signing": true,
-      "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
+      "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
+      "sdk_packages": "*"
     }
   ]
 }
