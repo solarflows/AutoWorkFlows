@@ -73,6 +73,7 @@ jobs:
       full_matrix: ${{ steps.build-matrix.outputs.full_matrix }}
       pkgs_matrix: ${{ steps.build-matrix.outputs.pkgs_matrix }}
       version: ${{ steps.version.outputs.version }}
+      sdk_version: ${{ steps.version.outputs.sdk_version }}
       source_changed: ${{ steps.build-matrix.outputs.source_changed }}
       packages_changed: ${{ steps.build-matrix.outputs.packages_changed }}
       should_build_firmware: ${{ steps.build-matrix.outputs.should_build_firmware }}
@@ -155,8 +156,10 @@ jobs:
         run: |
           NOW=$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')
           VERSION="V$(echo "$NOW" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')"
+          SDK_VERSION="V$(echo "$NOW" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s%s%s", substr(a[1],3), a[2], a[3], a[4], a[5]}')"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "🏷️ 版本号: ${VERSION}"
+          echo "sdk_version=${SDK_VERSION}" >> $GITHUB_OUTPUT
+          echo "🏷️ 固件版本: ${VERSION} | SDK 版本: ${SDK_VERSION}"
 
       # -------- 加载目标 + SHA 状态检查 --------
       - name: Load targets & check changes
@@ -679,10 +682,6 @@ jobs:
           sed -i 's/\r$//; s/\xef\xbb\xbf//g' .config
           # ── 注入构建版本号（出现在固件文件名和系统信息中） ──
           VERSION="${{ needs.plan.outputs.version }}"
-          # 移除种子文件中可能已有的 CONFIG_VERSION_NUMBER，确保唯一
-          sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
-          echo "CONFIG_VERSION_NUMBER=\"${VERSION}\"" >> .config
-          echo "🏷️ 注入版本号: ${VERSION}"
           echo "✅ 已生成 .config ($(wc -l < .config) 行)"
           echo "📋 ======== 种子配置 (.config) ========"
           cat .config
@@ -693,6 +692,15 @@ jobs:
           }
           echo "📋 ======== defconfig 后 .config ========"
           cat .config
+
+          # ── 直接 patch image.mk：在 IMG_PREFIX 中替换 SNAPSHOT 为版本号 ──
+          # IMG_PREFIX 中的 $(IMG_PREFIX_VERNUM) 来自 VERSION_NUMBER（默认 SNAPSHOT）
+          # ── 直接 patch version.mk：在 SNAPSHOT 前插入版本号 ──
+          # VERSION_NUMBER 默认 SNAPSHOT，patch 后变为 V260715-SNAPSHOT
+          # 效果：ImmortalWrt-v260715-snapshot-<target>-combined-*.bin
+          sed -i "s/\(VERSION_NUMBER:=.*,\)SNAPSHOT)/\1${VERSION}-SNAPSHOT)/" include/version.mk
+          echo "📋 version.mk VERSION_NUMBER:"
+          grep 'VERSION_NUMBER:=' include/version.mk
 
       - name: 📥 4. Download Source Packages
         run: |
@@ -1379,7 +1387,7 @@ jobs:
             "packages_branch": "${{ matrix.packages_branch }}",
             "sdk_container": "${{ matrix.sdk_container }}",
             "sdk_packages": "${{ matrix.sdk_packages }}",
-            "release_tag": "${{ needs.plan.outputs.version }}",
+            "release_tag": "${{ needs.plan.outputs.sdk_version }}",
             "passwall_repo": "${{ matrix.passwall_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
             "release_repo": "${{ matrix.passwall_repo }}",
@@ -1588,6 +1596,7 @@ jobs:
 
             PW_REPO=$(jq -r '.passwall_repo' "$INFO_FILE")
             PW_TAG=$(jq -r '.passwall_tag' "$INFO_FILE")
+            RELEASE_TAG=$(jq -r '.release_tag' "$INFO_FILE")
             APK_SIGNING=$(jq -r '.apk_signing' "$INFO_FILE")
             SDK_DIR="artifacts/${TARGET}-passwall-sdk"
             [ -d "$SDK_DIR" ] || { echo "⏭️ [${TARGET}] SDK 产物不存在"; continue; }
@@ -1595,19 +1604,23 @@ jobs:
             SDK_FILES=$(find "$SDK_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) 2>/dev/null || true)
             [ -n "$SDK_FILES" ] || { echo "⏭️ [${TARGET}] 无 SDK 文件"; continue; }
 
-            echo "📤 [${TARGET}] 上传 SDK passwall 到 ${PW_REPO}@${PW_TAG} ..."
-            PW_NOTES="最新 passwall (SDK 构建)，更新于 $(date +'%Y-%m-%d %H:%M')"
-            if [ "$APK_SIGNING" = "true" ]; then
-              PW_NOTES="${PW_NOTES}"$'\n'"🔑 APK 签名公钥: solarflows-apk-public.pem"
+            echo "📤 [${TARGET}] 上传 SDK passwall 到版本 Release ${RELEASE_TAG} ..."
+            if gh release view "$RELEASE_TAG" --repo "$PW_REPO" &>/dev/null; then
+              # 版本 Release 已存在（固件已发布），直接追加 SDK 文件
+              gh release upload "$RELEASE_TAG" --repo "$PW_REPO" \
+                $(echo "$SDK_FILES") --clobber 2>/dev/null || true
+            else
+              # 版本 Release 不存在（纯 SDK 模式），创建新 Release
+              PW_NOTES="SDK 构建，更新于 $(date +'%Y-%m-%d %H:%M')"
+              if [ "$APK_SIGNING" = "true" ]; then
+                PW_NOTES="${PW_NOTES}"$'\n'"🔑 APK 签名公钥: solarflows-apk-public.pem"
+              fi
+              gh release create "$RELEASE_TAG" --repo "$PW_REPO" \
+                --title "${TARGET} Build ${RELEASE_TAG}" \
+                --notes "$PW_NOTES" --latest=false \
+                $(echo "$SDK_FILES")
             fi
-            if gh release view "$PW_TAG" --repo "$PW_REPO" &>/dev/null; then
-              gh release delete "$PW_TAG" --repo "$PW_REPO" --yes 2>/dev/null || true
-            fi
-            gh release create "$PW_TAG" --repo "$PW_REPO" \
-              --title "Passwall Packages (${TARGET})" \
-              --notes "$PW_NOTES" --latest=false \
-              $(echo "$SDK_FILES")
-            echo "✅ [${TARGET}] SDK passwall 发布完成"
+            echo "✅ [${TARGET}] SDK passwall 已发布到 ${RELEASE_TAG}"
           done
 
           echo "🎉 全部发布流程完成！"
