@@ -332,11 +332,13 @@ jobs:
           if [ "$TRIGGER" != "packages" ] && { [ "$SRC_CHANGED" = "true" ] || [ "$PKG_CHANGED" = "true" ]; }; then
             for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
               REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
+              REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
               if ! gh release view "${VERSION}" --repo "$REPO" &>/dev/null; then
                 if gh release create "${VERSION}" --repo "$REPO" \
+                  --target "${REF}" \
                   --title "${TARGET} Build ${VERSION}" --draft \
                   --notes "🔨 构建中..." 2>/dev/null; then
-                  echo "📝 创建 Draft Release: ${REPO}@${VERSION}"
+                  echo "📝 创建 Draft Release: ${REPO}@${VERSION} → ${REF}"
                 else
                   echo "⚠️ Release ${VERSION} 已存在（并发创建），跳过"
                 fi
@@ -732,9 +734,8 @@ jobs:
           # ── 直接 patch image.mk：在 IMG_PREFIX 中替换 SNAPSHOT 为版本号 ──
           # IMG_PREFIX 中的 $(IMG_PREFIX_VERNUM) 来自 VERSION_NUMBER（默认 SNAPSHOT）
           # ── 直接 patch version.mk：在 SNAPSHOT 前插入版本号 ──
-          # VERSION_NUMBER 默认 SNAPSHOT，patch 后变为 V260715-SNAPSHOT
-          # 效果：ImmortalWrt-v260715-snapshot-<target>-combined-*.bin
-          sed -i "s/\(VERSION_NUMBER:=.*,\)SNAPSHOT)/\1${VERSION}-SNAPSHOT)/" include/version.mk
+          # 只改 VERSION_NUMBER 行，兼容 SNAPSHOT 和 21.02-SNAPSHOT
+          sed -i "/^VERSION_NUMBER:=/s/SNAPSHOT)/${VERSION}-SNAPSHOT)/" include/version.mk
           echo "📋 version.mk VERSION_NUMBER:"
           grep 'VERSION_NUMBER:=' include/version.mk
 
