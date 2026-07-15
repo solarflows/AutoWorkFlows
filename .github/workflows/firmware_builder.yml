@@ -16,11 +16,12 @@ on:
       trigger:
         description: '触发模式'
         required: false
-        default: 'full'
+        default: 'smart'
         type: choice
         options:
-          - 'full'           # 完整固件 + 软件包
-          - 'packages-only'  # 仅 SDK 编译 passwall
+          - 'smart'      # 智能检测变更（定时任务同款逻辑）
+          - 'firmware'   # 强制编译固件
+          - 'packages'   # 强制仅编译软件包 (SDK)
       cache_strategy:
         description: '缓存策略'
         required: false
@@ -107,7 +108,7 @@ jobs:
           echo "📋 Run ID: $RUN_ID"
 
       - name: Trigger Sync_Push
-        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'packages-only'
+        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'packages'
         id: trigger-sync
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -234,10 +235,11 @@ jobs:
           echo "packages_changed=${PKG_CHANGED}" >> $GITHUB_OUTPUT
 
           # ── Job 控制信号 ──
-          TRIGGER="${{ github.event.inputs.trigger || 'full' }}"
+          TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
           IS_SCHEDULE="${{ github.event_name }}"
 
-          if [ "$TRIGGER" = "packages-only" ] && [ "$IS_SCHEDULE" != "schedule" ]; then
+          if [ "$TRIGGER" = "packages" ]; then
+            # 强制仅编译软件包
             echo "should_build_firmware=false" >> $GITHUB_OUTPUT
             if [ "$(echo "$PKGS_MATRIX" | jq 'length')" -gt 0 ]; then
               echo "should_build_sdk=true" >> $GITHUB_OUTPUT
@@ -245,11 +247,21 @@ jobs:
               echo "should_build_sdk=false" >> $GITHUB_OUTPUT
             fi
             echo "should_publish=true" >> $GITHUB_OUTPUT
-          elif [ "$IS_SCHEDULE" = "schedule" ]; then
+          elif [ "$TRIGGER" = "firmware" ]; then
+            # 强制编译固件
+            echo "should_build_firmware=true" >> $GITHUB_OUTPUT
+            echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          else
+            # smart：智能检测变更（定时任务和手动触发共用逻辑）
             if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "false" ]; then
               echo "should_build_firmware=false" >> $GITHUB_OUTPUT
               echo "should_build_sdk=false" >> $GITHUB_OUTPUT
-              echo "should_publish=false" >> $GITHUB_OUTPUT
+              if [ "$IS_SCHEDULE" = "schedule" ]; then
+                echo "should_publish=false" >> $GITHUB_OUTPUT
+              else
+                echo "should_publish=true" >> $GITHUB_OUTPUT
+              fi
             elif [ "$SRC_CHANGED" = "true" ]; then
               echo "should_build_firmware=true" >> $GITHUB_OUTPUT
               echo "should_build_sdk=false" >> $GITHUB_OUTPUT
@@ -263,10 +275,6 @@ jobs:
               fi
               echo "should_publish=true" >> $GITHUB_OUTPUT
             fi
-          else
-            echo "should_build_firmware=true" >> $GITHUB_OUTPUT
-            echo "should_build_sdk=false" >> $GITHUB_OUTPUT
-            echo "should_publish=true" >> $GITHUB_OUTPUT
           fi
 
       # -------- 创建 Draft Release --------
@@ -280,7 +288,7 @@ jobs:
           SRC_CHANGED="${{ steps.load-targets.outputs.source_changed }}"
           PKG_CHANGED="${{ steps.load-targets.outputs.packages_changed }}"
 
-          if [ "$TRIGGER" != "packages-only" ] && { [ "$SRC_CHANGED" = "true" ] || [ "$PKG_CHANGED" = "true" ]; }; then
+          if [ "$TRIGGER" != "packages" ] && { [ "$SRC_CHANGED" = "true" ] || [ "$PKG_CHANGED" = "true" ]; }; then
             for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
               REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
               if ! gh release view "${VERSION}" --repo "$REPO" &>/dev/null; then
@@ -386,9 +394,13 @@ jobs:
         id: start_time
         run: |
           # ── Summary ──
-          TRIGGER="${{ github.event.inputs.trigger || 'full' }}"
+          TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
           SRC_CHANGED="${{ needs.plan.outputs.source_changed }}"
-          if [ "$SRC_CHANGED" = "true" ]; then
+          if [ "$TRIGGER" = "firmware" ]; then
+            BUILD_STATUS="🔵 强制模式 → 完整固件构建"
+          elif [ "$TRIGGER" = "packages" ]; then
+            BUILD_STATUS="🟢 强制模式 → 仅编译软件包"
+          elif [ "$SRC_CHANGED" = "true" ]; then
             BUILD_STATUS="🔵 源码有变更 → 完整固件构建"
           else
             BUILD_STATUS="🟡 仅软件包变更 → 固件重编"
