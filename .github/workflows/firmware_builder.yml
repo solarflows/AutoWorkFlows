@@ -1295,6 +1295,24 @@ jobs:
             --repo ${{ matrix.release_repo }} --clobber 2>/dev/null || true
           echo "💾 构建状态已上传到 Release ${VERSION}"
 
+      # ───────── 失败/取消时清理 Draft Release ─────────
+      - name: 🧹 Cleanup draft release on failure
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          VERSION="${{ needs.plan.outputs.version }}"
+          echo "🧹 构建失败或取消，清理 draft release ${VERSION} ..."
+          # 仅删除仍为 draft 状态的 release（已被其他 job 发布的则跳过）
+          IS_DRAFT=$(gh release view "${VERSION}" --repo ${{ matrix.release_repo }} \
+            --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
+          if [ "$IS_DRAFT" = "true" ]; then
+            gh release delete "${VERSION}" --repo ${{ matrix.release_repo }} --yes 2>/dev/null || true
+            echo "🗑️ Draft release ${VERSION} 已删除"
+          else
+            echo "ℹ️ Release ${VERSION} 非 draft 或已不存在，跳过清理"
+          fi
+
   # ========== SDK 软件包构建（仅软件包变更时） ==========
   compile-packages:
     name: Compile packages ${{ matrix.target }}
