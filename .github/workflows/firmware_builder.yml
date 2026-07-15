@@ -330,7 +330,7 @@ jobs:
           SRC_CHANGED="${{ steps.load-targets.outputs.source_changed }}"
           PKG_CHANGED="${{ steps.load-targets.outputs.packages_changed }}"
 
-          if [ "$TRIGGER" != "packages" ] && { [ "$SRC_CHANGED" = "true" ] || [ "$PKG_CHANGED" = "true" ]; }; then
+          if [ "$TRIGGER" = "firmware" ] || { [ "$TRIGGER" != "packages" ] && [ "$SRC_CHANGED" = "true" ]; }; then
             for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
               REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
               REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
@@ -1489,7 +1489,18 @@ jobs:
               --repo "${{ matrix.release_repo }}" --clobber 2>/dev/null || true
             echo "💾 SDK 构建状态已上传到 ${{ matrix.release_repo }}@${LATEST_TAG}"
           else
-            echo "⚠️ 未找到已有 Release，跳过状态上传（下次仍会触发 SDK 构建）"
+            # release_repo 没有任何 Release（纯 SDK target，从未跑过固件构建），
+            # 创建一个最小 Release 用于挂载 state.json，避免下一轮无限重建循环。
+            echo "📝 release_repo 无已存在 Release，创建最小 Release 用于状态持久化..."
+            if gh release create "${TAG}" --repo "${{ matrix.release_repo }}" \
+              --title "SDK Build State (${TARGET})" \
+              --notes "此 Release 仅用于持久化 SDK 构建状态，不包含固件。\n更新于 $(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')" \
+              --latest=false \
+              "${{ matrix.target }}-state.json" 2>/dev/null; then
+              echo "💾 SDK 构建状态已创建: ${{ matrix.release_repo }}@${TAG}"
+            else
+              echo "⚠️ 创建 Release 失败，下次仍会触发 SDK 构建"
+            fi
           fi
 
   # ========== 发布任务 ==========
