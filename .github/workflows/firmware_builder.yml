@@ -735,13 +735,19 @@ jobs:
           echo "📋 ======== defconfig 后 .config ========"
           cat .config
 
-          # ── 直接 patch image.mk：在 IMG_PREFIX 中替换 SNAPSHOT 为版本号 ──
-          # IMG_PREFIX 中的 $(IMG_PREFIX_VERNUM) 来自 VERSION_NUMBER（默认 SNAPSHOT）
-          # ── 直接 patch version.mk：在 SNAPSHOT 前插入版本号 ──
-          # 只改 VERSION_NUMBER 行，兼容 SNAPSHOT 和 21.02-SNAPSHOT
-          sed -i "/^VERSION_NUMBER:=/s/SNAPSHOT)/${VERSION}-SNAPSHOT)/" include/version.mk
-          echo "📋 version.mk VERSION_NUMBER:"
-          grep 'VERSION_NUMBER:=' include/version.mk
+          # ── 1. patch version.mk：将 SNAPSHOT 替换为版本号 ──
+          # 两个仓库默认值：mt798x=21.02-SNAPSHOT, qualcommax=SNAPSHOT
+          # 只改 VERSION_NUMBER 行，避免误伤 URL 等其他位置的 SNAPSHOT
+          sed -i "/^VERSION_NUMBER:=/s/SNAPSHOT/${VERSION}/g" include/version.mk
+          echo "📋 version.mk:"
+          grep 'VERSION_NUMBER' include/version.mk || true
+
+          # ── 2. patch image.mk：移除 CONFIG_VERSION_FILENAMES guard ──
+          # IMG_PREFIX_VERNUM 默认只在 CONFIG_VERSION_FILENAMES=y 时才非空，
+          # 种子配置未设此项导致版本号永不进入文件名。直接 hack 掉 guard。
+          sed -i 's/^IMG_PREFIX_VERNUM:=.*/IMG_PREFIX_VERNUM:=$(call sanitize,$(VERSION_NUMBER))-/' include/image.mk
+          echo "📋 image.mk IMG_PREFIX_VERNUM:"
+          grep 'IMG_PREFIX_VERNUM' include/image.mk || true
 
       - name: 📥 4. Download Source Packages
         run: |
