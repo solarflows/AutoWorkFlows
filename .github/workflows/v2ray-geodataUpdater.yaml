@@ -52,9 +52,7 @@ jobs:
         run: |
           echo "版本号: ${{ env.VERSION }}"
           echo "GeoIP URL: $GEOIP_URL"
-          echo "GeoIP SHA256: $GEOIP_SHA"
           echo "GeoSite URL: $GEOSITE_URL"
-          echo "GeoSite SHA256: $GEOSITE_SHA"
 
       # （已移动）Update patch files 步骤将会在下载并计算 SHA 后执行
 
@@ -93,9 +91,29 @@ jobs:
             exit 1
           fi
 
-          sed -i -E "s/^(GEO_VER:=).*/\1${{ env.VERSION }}/" "$PATCH_PATH"
-          sed -i -E "/define Download\/geoip-full/,/endef/ s/^(  HASH:=).*/\1${GEOIP_SHA}/" "$PATCH_PATH"
-          sed -i -E "/define Download\/geosite-full/,/endef/ s/^(  HASH:=).*/\1${GEOSITE_SHA}/" "$PATCH_PATH"
+          echo "Updating patch: $PATCH_PATH"
+          echo "  VERSION    = ${VERSION}"
+          echo "  GEOIP_SHA  = ${GEOIP_SHA}"
+          echo "  GEOSITE_SHA= ${GEOSITE_SHA}"
+
+          # patch 文件中每行以 + 开头，正则需要匹配 + 前缀
+          sed -i -E "s/^(\+GEO_VER:=).*/\1${VERSION}/" "$PATCH_PATH"
+          sed -i -E "/^\+define Download\/geoip-full/,/^\+endef/ s/^(\+  HASH:=).*/\1${GEOIP_SHA}/" "$PATCH_PATH"
+          sed -i -E "/^\+define Download\/geosite-full/,/^\+endef/ s/^(\+  HASH:=).*/\1${GEOSITE_SHA}/" "$PATCH_PATH"
+
+          echo "Patch file updated successfully."
+          grep -E '^\+(GEO_VER|HASH)' "$PATCH_PATH" || true
+
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ## 📦 v2ray-geodata Update
+
+          | Item | Value |
+          |------|-------|
+          | Version | \`${VERSION}\` |
+          | GeoIP SHA256 | \`${GEOIP_SHA}\` |
+          | GeoSite SHA256 | \`${GEOSITE_SHA}\` |
+          | Patch | \`${PATCH_PATH}\` |
+          EOF
 
       - name: 检查仓库更改
         id: check_changes
@@ -106,8 +124,13 @@ jobs:
             echo "没有检测到文件更改，跳过提交"
             echo "changes_exist=false" >> $GITHUB_OUTPUT
           else
-            echo "检测到仓库更改，准备提交"
+            echo "检测到仓库更改，准备提交:"
+            git diff --stat
             echo "changes_exist=true" >> $GITHUB_OUTPUT
+            echo "### 📝 Changed Files" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            git diff --stat >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: 提交并推送更改
@@ -321,3 +344,6 @@ jobs:
           git commit -m "${{ env.VERSION }}"
           git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
           git push -f -u origin release
+          echo "Release branch pushed successfully: ${{ env.VERSION }}"
+          echo "### ✅ Release Published" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`release\` → \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
