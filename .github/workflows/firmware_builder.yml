@@ -1127,9 +1127,12 @@ jobs:
           # passwall ipk 和 apk 均支持（mt798x 旧版用 ipk，qualcommax 新版用 apk）
           mkdir -p release/passwall
           find bin/packages -name "*passwall*.ipk" -o -name "*passwall*.apk" -exec cp {} release/passwall/ \; 2>/dev/null || true
-          # Passwall 的依赖链：这些包会被 luci-app-passwall 动态调用，
-          # 不在 passwall 自身的 Makefile 依赖中（运行时按需加载），需手动收集。
-          DEPS=(chinadns-ng dns2socks geoview hysteria ipt2socks microsocks naiveproxy shadowsocksr simple-obfs sing-box tcping xray-core)
+          # passwall + passwall2 依赖链：基于两个 Makefile 的 select 条目（并集）。
+          # 与 sdk.config 中的 CONFIG_PACKAGE_*=y 保持一致。
+          # passwall2 相对于 passwall 额外硬依赖: v2ray-geoip, v2ray-geosite
+          DEPS=(chinadns-ng dns2socks geoview haproxy hysteria ipt2socks microsocks naiveproxy \
+                shadowsocks-rust-sslocal shadowsocksr-libev simple-obfs shadow-tls sing-box \
+                tcping tuic-client v2ray-geoip v2ray-geosite v2ray-plugin xray-core)
           for dep in "${DEPS[@]}"; do
             find bin/packages \( -name "*${dep}*.ipk" -o -name "*${dep}*.apk" \) -exec cp {} release/passwall/ \; 2>/dev/null || true
           done
@@ -1412,13 +1415,20 @@ jobs:
             CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}/sdk.config"
             if [ -f "$CONFIG_FILE" ]; then
               SDK_PKGS=$(grep '^CONFIG_PACKAGE_.*=[ym]' "$CONFIG_FILE" | sed 's/CONFIG_PACKAGE_\(.*\)=[ym]/\1/' | tr '\n' ' ')
+            else
+              echo "⚠️ sdk.config 不存在，跳过 SDK 构建 (target=${{ matrix.target }})"
+              SDK_PKGS=""
             fi
-            [ -z "$SDK_PKGS" ] && SDK_PKGS="luci-app-passwall"
+            # 提取后仍为空（sdk.config 无 CONFIG_PACKAGE_ 条目）
+            if [ -z "$SDK_PKGS" ]; then
+              echo "⚠️ sdk.config 中无 CONFIG_PACKAGE_ 条目，跳过 SDK 构建"
+            fi
           fi
           echo "packages=$SDK_PKGS" >> $GITHUB_OUTPUT
           echo "📦 PACKAGES=$SDK_PKGS"
 
       - name: 🔨 Build with OpenWrt SDK
+        if: steps.resolve-pkgs.outputs.packages != ''
         id: compile
         uses: openwrt/gh-action-sdk@main
         env:
@@ -1430,13 +1440,11 @@ jobs:
         id: artifacts
         run: |
           mkdir -p upload
-          SDK_PKGS="${{ matrix.sdk_packages }}"
-          if [ "$SDK_PKGS" = "*" ]; then
-            # 收集所有 .ipk 和 .apk
-            find bin/packages/ -type f \( -name '*.ipk' -o -name '*.apk' \) \
-              -exec cp {} upload/ \; 2>/dev/null || true
+          # 使用 resolve-pkgs 解析后的包列表（而非 matrix.sdk_packages 的原始 * 通配符）
+          SDK_PKGS="${{ steps.resolve-pkgs.outputs.packages }}"
+          if [ -z "$SDK_PKGS" ]; then
+            echo "⚠️ 无软件包列表，跳过收集"
           else
-            # 按包名匹配，同时支持 .ipk 和 .apk
             for pkg in $SDK_PKGS; do
               find bin/packages/ -type f \( \
                 -name "${pkg}_*.ipk" -o \
