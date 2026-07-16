@@ -1355,17 +1355,17 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.plan.outputs.pkgs_matrix) }}
     steps:
-      - name: Checkout AutoWorkflows
-        uses: actions/checkout@v6
-        with:
-          repository: solarflows/AutoWorkFlows
-          path: AutoWorkFlows
-
       - name: Checkout packages repo
         uses: actions/checkout@v6
         with:
           repository: ${{ matrix.passwall_repo }}
           ref: ${{ matrix.packages_branch }}
+
+      - name: Checkout AutoWorkflows
+        uses: actions/checkout@v6
+        with:
+          repository: solarflows/AutoWorkFlows
+          path: AutoWorkFlows
 
       - name: ⚙️ Generate .config
         run: |
