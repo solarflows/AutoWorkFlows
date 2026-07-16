@@ -205,8 +205,8 @@ jobs:
             CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
             CURR_PKG_BRANCH=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.packages_branch // .target)')
 
-            # 获取远端当前源码 SHA
-            CURR_SRC=$(git ls-remote "https://github.com/${CURR_REPO}" "${CURR_REF}" 2>/dev/null | cut -f1)
+            # 获取远端当前源码 SHA（head -1 防止分支名同时匹配 branch + tag 时返回多行）
+            CURR_SRC=$(git ls-remote "https://github.com/${CURR_REPO}" "${CURR_REF}" 2>/dev/null | cut -f1 | head -1)
 
             # ── 源码变更检测：比较 Release 的 targetCommitish ──
             # Release 通过 gh release create --target "$SOURCE_SHA" 创建，
@@ -226,7 +226,7 @@ jobs:
 
             # ── 软件包变更检测（仅源码未变更且 PKG 尚未标记变更时下载）──
             if [ "$PKG_CHANGED" != "true" ]; then
-              CURR_PKG=$(git ls-remote https://github.com/solarflows/openwrt-packages.git "${CURR_PKG_BRANCH}" 2>/dev/null | cut -f1)
+              CURR_PKG=$(git ls-remote https://github.com/solarflows/openwrt-packages.git "${CURR_PKG_BRANCH}" 2>/dev/null | cut -f1 | head -1)
               rm -rf /tmp/state 2>/dev/null || true
               if [ -n "$LATEST_TAG" ]; then
                 gh release download "$LATEST_TAG" --repo "$CURR_REPO" \
@@ -342,7 +342,7 @@ jobs:
               REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
               REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
               # 将分支名/ref 解析为 commit SHA，确保 targetCommitish 是 SHA 而非分支名
-              RESOLVED_SHA=$(git ls-remote "https://github.com/${REPO}" "${REF}" 2>/dev/null | cut -f1)
+              RESOLVED_SHA=$(git ls-remote "https://github.com/${REPO}" "${REF}" 2>/dev/null | cut -f1 | head -1)
               [ -z "$RESOLVED_SHA" ] && RESOLVED_SHA="$REF"  # 降级：ls-remote 失败时用原始 ref
               if ! gh release view "${VERSION}" --repo "$REPO" &>/dev/null; then
                 if gh release create "${VERSION}" --repo "$REPO" \
