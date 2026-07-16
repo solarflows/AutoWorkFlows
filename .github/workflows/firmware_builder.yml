@@ -53,15 +53,17 @@ on:
 
 concurrency:
   group: firmware-build-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: false   # 不允许取消进行中的构建（避免编译一半被后续提交打断）。
+                               # 如需手动取消，通过 GitHub Actions 面板操作。
 
 permissions:
-  actions: write
-  contents: write
+  actions: write   # 允许 gh workflow run / gh cache delete 操作
+  contents: write  # 允许创建 Release 和上传资产
 
 env:
   TZ: Asia/Shanghai
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 强制 Actions runner 使用 Node24，
+                                              # 解决某些 action 在 Node20 上的兼容性问题
 
 jobs:
   # ========== 构建矩阵（从 targets.json 读取） ==========
@@ -98,6 +100,8 @@ jobs:
           gh workflow run OpenWRT_Packages_Updater.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }}
+          # gh workflow run 不返回 run ID，通过 gh run list --limit 1 获取最新 run。
+          # sleep 5 等待 GitHub 后台创建 run 记录。
           sleep 5
           RUN_ID=$(gh run list \
             --repo ${{ github.repository }} \
@@ -118,6 +122,7 @@ jobs:
           gh workflow run Sync_Push.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }}
+          # 同上：gh workflow run 不返回 run ID
           sleep 5
           RUN_ID=$(gh run list \
             --repo ${{ github.repository }} \
@@ -151,6 +156,8 @@ jobs:
         continue-on-error: true
 
       # -------- 生成版本号 --------
+      # 版本号格式: V + YYMMDD (如 2026-07-16 14:30:00 → V260716)
+      # SDK 版本: V + YYMMDDhhmm (精确到分钟，避免 SDK 和固件版本冲突)
       - name: 🏷️ Set build version
         id: version
         run: |
@@ -471,11 +478,13 @@ jobs:
           echo "timestamp=${START_FMT}" >> $GITHUB_OUTPUT
           echo "🕐 构建开始时间: ${START_FMT}"
 
+      # 编译仅需约 30G，Runner 默认约 89G 可用，通常无需开启。
+      # 启用后额外耗时约 2-3 分钟。
       - name: 🧹 Free Disk Space
         if: github.event.inputs.free_disk_space == 'true'
         uses: jlumbroso/free-disk-space@main
         with:
-          tool-cache: false
+          tool-cache: false  # 保留 Actions 缓存工具链（如 node/go 等 action 依赖）
           android: true
           dotnet: true
           haskell: true
@@ -524,6 +533,8 @@ jobs:
           echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
 
       # ───────── 构建缓存（工具链 + ccache）─────────
+      # 工具链缓存 key 基于 tools/ & toolchain/ 目录的 git hash，
+      # 仅这两个目录变更时才重新编译工具链，大幅节省时间（~30 分钟）。
       - name: 🔧 Restore toolchain cache
         id: cache-tc
         uses: actions/cache@v5
@@ -896,6 +907,8 @@ jobs:
 
           echo "⚠️ 并行编译有错误 → 更新仓库后重试..."
 
+          # 重试时拉取最新代码：并行编译失败常见于上游包版本冲突，
+          # pull 到最新的 Makefile/patches 后再重试往往能解决。
           echo "📥 更新源码仓库 (${{ matrix.ref }})..."
           git pull origin ${{ matrix.ref }} 2>/dev/null || echo "   (无远端更新或非分支引用)"
           echo "📥 更新 openwrt-packages (${{ matrix.packages_branch }})..."
@@ -1114,6 +1127,8 @@ jobs:
           # passwall ipk 和 apk 均支持（mt798x 旧版用 ipk，qualcommax 新版用 apk）
           mkdir -p release/passwall
           find bin/packages -name "*passwall*.ipk" -o -name "*passwall*.apk" -exec cp {} release/passwall/ \; 2>/dev/null || true
+          # Passwall 的依赖链：这些包会被 luci-app-passwall 动态调用，
+          # 不在 passwall 自身的 Makefile 依赖中（运行时按需加载），需手动收集。
           DEPS=(chinadns-ng dns2socks geoview hysteria ipt2socks microsocks naiveproxy shadowsocksr simple-obfs sing-box tcping xray-core)
           for dep in "${DEPS[@]}"; do
             find bin/packages \( -name "*${dep}*.ipk" -o -name "*${dep}*.apk" \) -exec cp {} release/passwall/ \; 2>/dev/null || true
@@ -1320,6 +1335,9 @@ jobs:
           fi
 
   # ========== SDK 软件包构建（仅软件包变更时） ==========
+  # 使用 OpenWrt 官方 SDK action 交叉编译单个软件包，
+  # 速度快于全量固件编译（约 15-30 分钟 vs 2-6 小时）。
+  # 仅当智能检测到源码未变更、仅 packages 分支有更新时触发。
   compile-packages:
     name: Compile packages ${{ matrix.target }}
     needs: plan
@@ -1510,8 +1528,9 @@ jobs:
           fi
 
   # ========== 发布任务 ==========
-  # 使用 always() 确保即使某个矩阵分片构建失败，仍可发布其他成功的分片。
-  # 内部 publish_target() 函数会逐个目标检查产物是否存在，缺失则优雅跳过。
+  # 使用 always() 而非 success()：矩阵构建中某个分片失败不应阻止其他成功分片的发布。
+  # 内部 publish_target() 会检查产物是否存在，缺失则跳过。
+  # Release 的创建由 plan 负责（draft），compile 上传产物，此 job 负责 draft→published。
   release:
     name: Release
     needs: [plan, compile-firmware, compile-packages]
