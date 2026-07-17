@@ -561,6 +561,6 @@ CONFIG_PACKAGE_luci-theme-aurora=y
 CONFIG_PACKAGE_luci-theme-material=y
 
 # ════════════════════════════════════════════════════════════
-# solarflows/openwrt-packages 自定义包请见同目录 03-solarflows.seed
-# (INCLUDE_* 选项自动 select 后端包, 注释即可禁用)
+# passwall 最小安装          → 03-passwall.seed
+# 其余后端 (强制预装不进依赖) → 04-extras.seed
 # ════════════════════════════════════════════════════════════

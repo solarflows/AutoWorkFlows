@@ -1,0 +1,21 @@
+# ────────────────────────────────────────────────────────────
+# mt798x — 额外后端（=m 编译但不安装，全量编译 DEPS 收集）
+#
+# 注意: sing-box 由 04-passwall.seed 的 INCLUDE_SingBox=y select，
+#       不在本文件列出（会导致 =m 覆盖 =y，SingBox 无法安装）。
+# ────────────────────────────────────────────────────────────
+
+# 未启用的 INCLUDE_* 对应包 → =m
+CONFIG_PACKAGE_haproxy=m
+CONFIG_PACKAGE_shadow-tls=m
+CONFIG_PACKAGE_shadowsocksr-libev-ssr-server=m
+CONFIG_PACKAGE_simple-obfs-client=m
+CONFIG_PACKAGE_tuic-client=m
+CONFIG_PACKAGE_v2ray-plugin=m
+CONFIG_PACKAGE_xray-plugin=m
+
+# Rust 工具链不可用 → 显式禁用
+# CONFIG_PACKAGE_shadowsocks-rust-sslocal is not set
+# CONFIG_PACKAGE_shadowsocks-rust-ssserver is not set
+
+CONFIG_PACKAGE_lua-cjson=y

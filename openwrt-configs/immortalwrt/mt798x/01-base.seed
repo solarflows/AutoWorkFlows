@@ -1,7 +1,7 @@
 # ────────────────────────────────────────────────────────────
 # mt798x / MT7981 — 基础构建配置
-# 此文件包含目标平台、构建选项、MTK 无线驱动等全局开关。
-# 软件包选择请编辑同目录 02-pkgs.seed。
+# 此文件包含目标平台、构建选项、加密/TLS 等全局开关。
+# MTK 无线驱动参见 03-mtk.seed，软件包参见 02-pkgs.seed。
 # ────────────────────────────────────────────────────────────
 
 # ═══════ 目标平台 ═══════
@@ -95,28 +95,21 @@ CONFIG_MBEDTLS_THREADING_C=y
 CONFIG_MBEDTLS_THREADING_PTHREAD=y
 # CONFIG_WOLFSSL_HAS_ECC25519 is not set
 
-# ═══════ MediaTek MT7981 无线驱动 ── ═══════
-# 以下为 MTK 闭源 Wi-Fi 驱动的编译选项，请勿随意修改。
-CONFIG_MTK_ACK_CTS_TIMEOUT_SUPPORT=y
-CONFIG_MTK_AIR_MONITOR=y
-CONFIG_MTK_AMPDU_CONF_SUPPORT=y
-CONFIG_MTK_ANTENNA_CONTROL_SUPPORT=y
-CONFIG_MTK_APCLI_SUPPORT=y
-CONFIG_MTK_ATE_SUPPORT=y
-CONFIG_MTK_BACKGROUND_SCAN_SUPPORT=y
-CONFIG_MTK_BAND_STEERING=y
-CONFIG_MTK_CAL_BIN_FILE_SUPPORT=y
-CONFIG_MTK_CFG_SUPPORT_FALCON_MURU=y
-CONFIG_MTK_CFG_SUPPORT_FALCON_PP=y
-CONFIG_MTK_CFG_SUPPORT_FALCON_SR=y
-CONFIG_MTK_CFG_SUPPORT_FALCON_TXCMD_DBG=y
-CONFIG_MTK_CHIP_MT7981=y
-CONFIG_MTK_CONNINFRA_APSOC=y
-CONFIG_MTK_CONNINFRA_APSOC_MT7981=y
-CONFIG_MTK_CON_WPS_SUPPORT=y
-CONFIG_MTK_DBDC_MODE=y
-CONFIG_MTK_DOT11K_RRM_SUPPORT=y
-CONFIG_MTK_DOT11R_FT_SUPPORT=y
-CONFIG_MTK_DOT11W_PMF_SUPPORT=y
-CONFIG_MTK_DOT11_HE_AX=y
-CONFIG_MTK_DOT11_N_SUPPORT=y
+# ═══════ OpenSSL ═══════
+# CONFIG_OPENSSL_ENGINE_BUILTIN is not set
+# CONFIG_OPENSSL_PREFER_CHACHA_OVER_GCM is not set
+CONFIG_OPENSSL_WITH_NPN=y
+
+# ═══════ 编译安全选项 ═══════
+# CONFIG_PKG_CHECK_FORMAT_SECURITY is not set
+# CONFIG_PKG_FORTIFY_SOURCE_1 is not set
+CONFIG_PKG_FORTIFY_SOURCE_2=y
+
+# ═══════ 其他内核/构建选项 ═══════
+# CONFIG_AFALG_FALLBACK is not set
+# CONFIG_PACKAGE_TURBOACC_INCLUDE_FLOW_OFFLOADING is not set
+CONFIG_PACKAGE_TURBOACC_INCLUDE_NO_FASTPATH=y
+
+# ════════════════════════════════════════════════════════════
+# MTK 无线驱动 & 管理工具 参见 03-mtk.seed
+# ════════════════════════════════════════════════════════════
