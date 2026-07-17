@@ -1416,15 +1416,15 @@ jobs:
             if [ -f "$CONFIG_FILE" ]; then
               # 提取 CONFIG_PACKAGE_*=y 的包名，需处理以下目录名 ≠ 包名的情况：
               # - 多子包目录: shadowsocksr-libev/ssr-*, simple-obfs/simple-obfs-client → 折叠
-              # - i18n 包: luci-i18n-* 无法独立编译(目录属于父 luci app)，直接移除
+              # - i18n 包: luci-i18n-* 无法独立传给 make，但会随父 luci app 自动编译
               SDK_PKGS=$(grep '^CONFIG_PACKAGE_.*=[ym]' "$CONFIG_FILE" | sed 's/CONFIG_PACKAGE_\(.*\)=[ym]/\1/' | tr '\n' ' ')
               # 折叠多子包目录：子包名 → 父目录名
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/shadowsocksr-libev-ssr-[^ ]*/shadowsocksr-libev/g')
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/simple-obfs-client/simple-obfs/g')
-              # 移除 luci-i18n-* (随父 luci app 自动编译)
-              SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/luci-i18n-[^ ]*//g')
-              # 去重 + 清理多余空格
+              # 去重 + 清理空格 (保留完整列表供 collect 使用)
               SDK_PKGS=$(echo "$SDK_PKGS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+              # 传给 make 的列表：移除 luci-i18n-*（随父 luci app 自动编译，不能独立 make）
+              BUILD_PKGS=$(echo "$SDK_PKGS" | sed 's/luci-i18n-[^ ]*//g' | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
             else
               echo "⚠️ sdk.config 不存在，跳过 SDK 构建 (target=${{ matrix.target }})"
               SDK_PKGS=""
@@ -1434,8 +1434,9 @@ jobs:
               echo "⚠️ sdk.config 中无 CONFIG_PACKAGE_ 条目，跳过 SDK 构建"
             fi
           fi
-          echo "packages=$SDK_PKGS" >> $GITHUB_OUTPUT
-          echo "📦 PACKAGES=$SDK_PKGS"
+          echo "packages=$BUILD_PKGS" >> $GITHUB_OUTPUT
+          echo "collect_packages=$SDK_PKGS" >> $GITHUB_OUTPUT
+          echo "📦 PACKAGES=$BUILD_PKGS"
 
       - name: 🔨 Build with OpenWrt SDK
         if: steps.resolve-pkgs.outputs.packages != ''
@@ -1471,8 +1472,8 @@ jobs:
         id: artifacts
         run: |
           mkdir -p upload
-          # 使用 resolve-pkgs 解析后的包列表（而非 matrix.sdk_packages 的原始 * 通配符）
-          SDK_PKGS="${{ steps.resolve-pkgs.outputs.packages }}"
+          # 使用收集专用列表（含 i18n 包），与传给 make 的列表不同（后者不含 i18n）
+          SDK_PKGS="${{ steps.resolve-pkgs.outputs.collect_packages }}"
           if [ -z "$SDK_PKGS" ]; then
             echo "⚠️ 无软件包列表，跳过收集"
           else
