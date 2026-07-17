@@ -1414,7 +1414,16 @@ jobs:
           if [ "$SDK_PKGS" = "*" ]; then
             CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}/sdk.config"
             if [ -f "$CONFIG_FILE" ]; then
+              # 提取 CONFIG_PACKAGE_*=y 的包名，但部分包的目录名 ≠ 包名
+              # (如 shadowsocksr-libev 目录下定义 ssr-local/ssr-redir/ssr-server 子包，
+              #  simple-obfs 目录下定义 simple-obfs-client)，
+              # make package/<name>/download 需要目录名而非子包名，必须折叠后再去重。
               SDK_PKGS=$(grep '^CONFIG_PACKAGE_.*=[ym]' "$CONFIG_FILE" | sed 's/CONFIG_PACKAGE_\(.*\)=[ym]/\1/' | tr '\n' ' ')
+              # 折叠多子包目录：子包名 → 父目录名
+              SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/shadowsocksr-libev-ssr-[^ ]*/shadowsocksr-libev/g')
+              SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/simple-obfs-client/simple-obfs/g')
+              # 去重（多个子包折叠后可能重复）
+              SDK_PKGS=$(echo "$SDK_PKGS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
             else
               echo "⚠️ sdk.config 不存在，跳过 SDK 构建 (target=${{ matrix.target }})"
               SDK_PKGS=""
@@ -1434,6 +1443,11 @@ jobs:
         env:
           ARCH: ${{ matrix.sdk_container }}
           PACKAGES: ${{ steps.resolve-pkgs.outputs.packages }}
+          # FEEDNAME + FEED_DIR 让 SDK 自动将当前 checkout 的仓库作为本地 feed 加入。
+          # 第一步 checkout 已将 solarflows/openwrt-packages 放到 workspace 根目录，
+          # SDK 内部生成: src-link solarflows $GITHUB_WORKSPACE
+          FEEDNAME: solarflows
+          FEED_DIR: ${{ github.workspace }}
           PRIVATE_KEY: ${{ secrets.APK_BUILD_KEY }}
           IGNORE_ERRORS: 1 # 防止单个软件包的错误导致整个工作流的失败
 

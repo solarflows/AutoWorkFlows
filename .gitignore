@@ -10,3 +10,5 @@ build-info.json
 # OS
 .DS_Store
 Thumbs.db
+.codegraph/
+.reasonix/
