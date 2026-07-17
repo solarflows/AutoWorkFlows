@@ -1451,6 +1451,21 @@ jobs:
           PRIVATE_KEY: ${{ secrets.APK_BUILD_KEY }}
           IGNORE_ERRORS: 1 # 防止单个软件包的错误导致整个工作流的失败
 
+      # gh-action-sdk 内部 docker/build-push-action 每次产生数 GB Docker 镜像层缓存。
+      # gh-action-sdk 内部 docker/build-push-action 每次产生数 GB Docker 镜像层缓存。
+      # 缓存 key 模式: buildkit-blob-1-sha256:... (层) + index--aarch64_cortex-a53-* (索引)。
+      # 仅匹配这两种前缀删除，同 repo 其他 workflow 的缓存不受影响。
+      - name: 🧹 Purge SDK Docker cache
+        if: always() && steps.compile.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "🧹 清理 SDK Docker 构建缓存..."
+          gh cache list --repo "${{ github.repository }}" --limit 100 --json key,id \
+            | jq -r '.[] | select(.key | startswith("buildkit-blob") or startswith("index--aarch64_cortex-a53")) | .id' \
+            | xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+          echo "✅ SDK Docker 缓存已清理"
+
       - name: 📦 Collect artifacts
         id: artifacts
         run: |
