@@ -1,0 +1,66 @@
+# ────────────────────────────────────────────────────────────
+# qualcommax — solarflows/openwrt-packages 自定义软件包
+#
+# 此文件包含来自 https://github.com/solarflows/openwrt-packages
+# 的所有包 (passwall/passwall2 及其后端、工具依赖等)。
+#
+# 精简原理: INCLUDE_* 选项内部已 `select PACKAGE_xxx`，
+# make defconfig 时自动展开，无需重复写后端包名。
+# 仅需保留不被 INCLUDE_* select 的 LUCI_DEPENDS 包。
+#
+# 添加/删除包: 注释对应 INCLUDE_* 行即可。
+# ────────────────────────────────────────────────────────────
+
+# ── passwall 核心 ──
+CONFIG_PACKAGE_luci-app-passwall=y
+CONFIG_PACKAGE_luci-app-passwall2=y
+
+# ── passwall 透明代理模式 ──
+CONFIG_PACKAGE_luci-app-passwall_Nftables_Transparent_Proxy=y
+
+# ── passwall 后端 (INCLUDE_* = y → select 对应包, 注释 = 不启用) ──
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Geoview=y              # → geoview
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y              # → haproxy
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Hysteria=y             # → hysteria
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_NaiveProxy=y           # → naiveproxy
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadow_TLS=y           # → shadow-tls
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client=y    # → shadowsocksr-libev-ssr-local, ssr-redir
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Server=y    # → shadowsocksr-libev-ssr-server
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client=y      # → shadowsocks-rust-sslocal
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server=y      # → shadowsocks-rust-ssserver
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs=y          # → simple-obfs-client
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox=y              # → sing-box
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geodata=y        # → v2ray-geoip-full, v2ray-geosite-full
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin=y         # → v2ray-plugin
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y                 # → xray-core, unzip
+CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray_Plugin=y          # → xray-plugin
+
+# ── passwall2 后端 ──
+CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y
+CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_All=y              # → xray-core + sing-box
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Hysteria=y
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_NaiveProxy=y
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_ShadowsocksR_Libev_Client=y
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_ShadowsocksR_Libev_Server=y
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Client=y
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Server=y
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Simple_Obfs=y
+CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_V2ray_Plugin=y
+
+# ── LUCI_DEPENDS 中的独立包 (不被 INCLUDE_* 覆盖, 需显式启用) ──
+CONFIG_PACKAGE_chinadns-ng=y       # LUCI_DEPENDS: +chinadns-ng
+CONFIG_PACKAGE_dns2socks=y         # LUCI_DEPENDS: +dns2socks
+CONFIG_PACKAGE_ipt2socks=y         # Iptables_Transparent_Proxy → select ipt2socks
+CONFIG_PACKAGE_microsocks=y        # LUCI_DEPENDS: +microsocks
+CONFIG_PACKAGE_tcping=y            # LUCI_DEPENDS: +tcping
+CONFIG_PACKAGE_unzip=y             # INCLUDE_Xray select unzip (但 sing-box 也可能需要)
+
+# ── sing-box 子选项 ──
+CONFIG_SING_BOX_BUILD_ACME=y
+CONFIG_SING_BOX_BUILD_CLASH_API=y
+CONFIG_SING_BOX_BUILD_GVISOR=y
+CONFIG_SING_BOX_BUILD_QUIC=y
+CONFIG_SING_BOX_BUILD_TAILSCALE=y
+CONFIG_SING_BOX_BUILD_UTLS=y
+CONFIG_SING_BOX_BUILD_WIREGUARD=y

@@ -1,7 +1,16 @@
+# ────────────────────────────────────────────────────────────
+# qualcommax / ipq60xx — 基础构建配置
+# 此文件包含目标平台、构建选项、签名等全局开关。
+# 软件包选择请编辑同目录 02-pkgs.seed。
+# ────────────────────────────────────────────────────────────
+
+# ═══════ 目标平台 ═══════
 CONFIG_TARGET_qualcommax=y
 CONFIG_TARGET_qualcommax_ipq60xx=y
 CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=y
-CONFIG_DEVEL=y
-CONFIG_CCACHE=y
-CONFIG_BUILD_LOG=y
-CONFIG_SIGNED_PACKAGES=y
+
+# ═══════ 构建选项 ═══════
+CONFIG_DEVEL=y                     # 开发者模式（保留源码树）
+CONFIG_CCACHE=y                    # 编译缓存加速
+CONFIG_BUILD_LOG=y                 # 输出编译日志
+CONFIG_SIGNED_PACKAGES=y           # APK 包签名
