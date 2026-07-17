@@ -1476,10 +1476,20 @@ jobs:
       - name: 📋 Generate build info
         if: steps.artifacts.outputs.file_count > 0
         run: |
+          PKG_COMMIT=$(git rev-parse --short HEAD)
+          PKG_COMMIT_FULL=$(git rev-parse HEAD)
+          if [ "${{ matrix.apk_signing }}" = "true" ]; then
+            PKG_FORMAT="apk"
+          else
+            PKG_FORMAT="ipk"
+          fi
           cat > build-info.json <<JSONEOF
           {
             "target": "${{ matrix.target }}",
             "packages_branch": "${{ matrix.packages_branch }}",
+            "packages_commit": "${PKG_COMMIT}",
+            "packages_commit_full": "${PKG_COMMIT_FULL}",
+            "packages_format": "${PKG_FORMAT}",
             "sdk_container": "${{ matrix.sdk_container }}",
             "sdk_packages": "${{ matrix.sdk_packages }}",
             "release_tag": "${{ needs.plan.outputs.sdk_version }}",
@@ -1721,6 +1731,8 @@ jobs:
           done
 
           # ── 发布 SDK 构建的 passwall ──
+          # 增量上传到与全量构建相同的固定 tag Release（$PW_TAG），
+          # 不删除重建（保留全量构建中的依赖包如 shadowsocks-rust）。
           for sdk_dir in artifacts/*-sdk-build-info; do
             [ -d "$sdk_dir" ] || continue
             TARGET=$(basename "$sdk_dir" | sed 's/-sdk-build-info//')
@@ -1729,31 +1741,44 @@ jobs:
 
             PW_REPO=$(jq -r '.passwall_repo' "$INFO_FILE")
             PW_TAG=$(jq -r '.passwall_tag' "$INFO_FILE")
-            RELEASE_TAG=$(jq -r '.release_tag' "$INFO_FILE")
-            APK_SIGNING=$(jq -r '.apk_signing' "$INFO_FILE")
+            PKG_BRANCH=$(jq -r '.packages_branch' "$INFO_FILE")
+            PKG_COMMIT=$(jq -r '.packages_commit // "unknown"' "$INFO_FILE")
+            PKG_COMMIT_FULL=$(jq -r '.packages_commit_full // ""' "$INFO_FILE")
+            PKG_FORMAT=$(jq -r '.packages_format // "?"' "$INFO_FILE")
             SDK_DIR="artifacts/${TARGET}-passwall-sdk"
             [ -d "$SDK_DIR" ] || { echo "⏭️ [${TARGET}] SDK 产物不存在"; continue; }
 
             SDK_FILES=$(find "$SDK_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) 2>/dev/null || true)
             [ -n "$SDK_FILES" ] || { echo "⏭️ [${TARGET}] 无 SDK 文件"; continue; }
 
-            echo "📤 [${TARGET}] 上传 SDK passwall 到版本 Release ${RELEASE_TAG} ..."
-            if gh release view "$RELEASE_TAG" --repo "$PW_REPO" &>/dev/null; then
-              # 版本 Release 已存在（固件已发布），直接追加 SDK 文件
-              gh release upload "$RELEASE_TAG" --repo "$PW_REPO" \
+            # 构建 Release Note（含分支、commit、包格式）
+            SDK_NOTE_TITLE="### ${TARGET} — SDK 构建 (.${PKG_FORMAT})"
+            SDK_NOTE_DETAIL="| 项目 | 详情 |\n|------|------|\n| **格式** | .${PKG_FORMAT} (opkg install) |\n| **分支** | [${PKG_BRANCH}](https://github.com/solarflows/openwrt-packages/tree/${PKG_BRANCH}) |\n| **Commit** | [${PKG_COMMIT}](https://github.com/solarflows/openwrt-packages/commit/${PKG_COMMIT_FULL}) |\n| **构建时间** | $(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S') |"
+
+            echo "📤 [${TARGET}] SDK 增量发布 → ${PW_REPO}@${PW_TAG} (.${PKG_FORMAT})"
+
+            if gh release view "$PW_TAG" --repo "$PW_REPO" &>/dev/null; then
+              # Release 已存在 → 上传文件（覆盖同名，保留其他）
+              gh release upload "$PW_TAG" --repo "$PW_REPO" \
                 $(echo "$SDK_FILES") --clobber 2>/dev/null || true
-            else
-              # 版本 Release 不存在（纯 SDK 模式），创建新 Release
-              PW_NOTES="SDK 构建，更新于 $(date +'%Y-%m-%d %H:%M')"
-              if [ "$APK_SIGNING" = "true" ]; then
-                PW_NOTES="${PW_NOTES}"$'\n'"🔑 APK 签名公钥: solarflows-apk-public.pem"
+              # 获取旧 notes，追加本次 SDK 构建信息
+              EXISTING=$(gh release view "$PW_TAG" --repo "$PW_REPO" --json body --jq '.body // ""' 2>/dev/null || echo "")
+              if echo "$EXISTING" | grep -q "### ${TARGET}" 2>/dev/null; then
+                # 同一 target 已有记录 → 替换对应段落
+                echo "⚠️ 同一 target 已有构建记录，使用 --clobber 覆盖文件但 notes 需手动清理旧条目"
               fi
-              gh release create "$RELEASE_TAG" --repo "$PW_REPO" \
-                --title "${TARGET} Build ${RELEASE_TAG}" \
-                --notes "$PW_NOTES" --latest=false \
+              printf '%b\n' "${EXISTING}\n\n---\n${SDK_NOTE_TITLE}\n${SDK_NOTE_DETAIL}" > /tmp/release_notes.md
+              gh release edit "$PW_TAG" --repo "$PW_REPO" --notes-file /tmp/release_notes.md 2>/dev/null || true
+            else
+              # Release 不存在（纯 SDK target，无全量构建）→ 创建
+              printf '%b\n' "${SDK_NOTE_TITLE}\n${SDK_NOTE_DETAIL}" > /tmp/release_notes.md
+              gh release create "$PW_TAG" --repo "$PW_REPO" \
+                --title "Passwall Packages (${TARGET})" \
+                --notes-file /tmp/release_notes.md \
+                --latest=false \
                 $(echo "$SDK_FILES")
             fi
-            echo "✅ [${TARGET}] SDK passwall 已发布到 ${RELEASE_TAG}"
+            echo "✅ [${TARGET}] SDK passwall 已发布到 ${PW_TAG}"
           done
 
           echo "🎉 全部发布流程完成！"
