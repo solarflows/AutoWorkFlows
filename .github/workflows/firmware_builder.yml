@@ -907,6 +907,15 @@ jobs:
 
           echo "⚠️ 并行编译有错误 → 更新仓库后重试..."
 
+          # ── 保存初始 build.log ──
+          # 保留初始构建（不含 git pull）的日志，某些工具链/host 编译错误
+          # 可能在重试时因 pull 改变了上下文而无法复现，初始日志仍有参考价值。
+          cp build.log build.1.log 2>/dev/null || true
+
+          # ── 清除旧的 logs/ ──
+          # 避免初始构建的失败包 compile.txt 残留 → 重试后的错误诊断误报。
+          rm -rf logs/
+
           # 重试时拉取最新代码：并行编译失败常见于上游包版本冲突，
           # pull 到最新的 Makefile/patches 后再重试往往能解决。
           echo "📥 更新源码仓库 (${{ matrix.ref }})..."
@@ -917,10 +926,12 @@ jobs:
           ./scripts/feeds update -a && ./scripts/feeds install -a
 
           # 第一轮：并行重试（很多竞争错误二次就能过）
-          echo "🔄 第一轮重试：并行编译 ($(nproc) 线程)..."
+          # ⚠️ 覆盖 build.log 而非追加，确保 artifact 中只保留最新日志
+          # ⚠️ 使用 -k 确保所有包都编译完，logs/ 信息完整，便于查错
+          echo "🔄 第一轮重试：并行编译 ($(nproc) 线程, -k)..."
           RETRY_EXIT=1
           set +o pipefail
-          make -j$(nproc) 2>&1 | tee -a build.log
+          make -j$(nproc) -k 2>&1 | tee build.log
           RETRY_EXIT=${PIPESTATUS[0]}
           set -o pipefail
 
@@ -928,7 +939,7 @@ jobs:
             # 第二轮：单线程重试（最后一搏）
             echo "⚠️ 并行重试仍有错误 → 单线程最后一搏..."
             set +o pipefail
-            make -j1 2>&1 | tee -a build.log
+            make -j1 -k 2>&1 | tee build.log
             RETRY_EXIT=${PIPESTATUS[0]}
             set -o pipefail
           fi
@@ -1068,13 +1079,77 @@ jobs:
             } | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
+      # ───────── 编译错误诊断 ─────────
+      - name: 🔍 Build Error Diagnostics
+        if: failure()
+        run: |
+          cd openwrt
+          FAILED_PKGS=""
+
+          echo "## ❌ 编译错误详情" >> "$GITHUB_STEP_SUMMARY"
+
+          # 扫描 logs/ 中所有未正常完成的编译日志（末行不含 time: 标记的为失败）
+          for logfile in $(find logs -name 'compile.txt' -type f 2>/dev/null | sort); do
+            LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+            if ! echo "$LAST_LINE" | grep -q '^time:'; then
+              PKG=$(echo "$logfile" | sed 's|logs/||; s|/compile.txt||')
+              FAILED_PKGS="$FAILED_PKGS $PKG"
+            fi
+          done
+
+          if [ -n "$FAILED_PKGS" ]; then
+            PKG_COUNT=$(echo "$FAILED_PKGS" | wc -w)
+            echo "共 ${PKG_COUNT} 个软件包编译失败" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+
+            for pkg in $FAILED_PKGS; do
+              LOGFILE="logs/${pkg}/compile.txt"
+              if [ -f "$LOGFILE" ]; then
+                echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                # 过滤 make 目录切换噪音，取最后 60 行有效错误
+                grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$LOGFILE" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
+                echo '```' >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done
+          else
+            echo "未在 logs/ 中找到失败软件包（编译可能在其他阶段出错）" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            # 从 build.log 提取 make 错误摘要
+            grep -E 'make\[[0-9]+\].*(Error [0-9]+|Stop\.?)$' build.log 2>/dev/null | head -40 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # ── 提示初始构建日志（retry 时保存的 build.1.log）──
+          if [ -f build.1.log ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> 📎 初始构建日志（更新仓库前）已保存至 artifact: \`build.1.log\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 📋 logs/ 概览" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          TOTAL_LOGS=$(find logs -name 'compile.txt' -type f 2>/dev/null | wc -l)
+          EMPTY_LOGS=$(find logs -name 'compile.txt' -type f -size 0 2>/dev/null | wc -l)
+          echo "总日志数: ${TOTAL_LOGS}"
+          echo "空日志:   ${EMPTY_LOGS}"
+          echo "失败包:   ${PKG_COUNT:-0}"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       # ───────── 失败处理 ─────────
       - name: 📤 Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-build-log
-          path: openwrt/build.log
+          path: |
+            openwrt/build.log
+            openwrt/build.1.log
+            openwrt/logs/**
+            openwrt/.config
           retention-days: 7
           if-no-files-found: ignore
 
