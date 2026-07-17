@@ -1435,6 +1435,7 @@ jobs:
           ARCH: ${{ matrix.sdk_container }}
           PACKAGES: ${{ steps.resolve-pkgs.outputs.packages }}
           PRIVATE_KEY: ${{ secrets.APK_BUILD_KEY }}
+          IGNORE_ERRORS: 1 # 防止单个软件包的错误导致整个工作流的失败
 
       - name: 📦 Collect artifacts
         id: artifacts
