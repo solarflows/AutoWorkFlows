@@ -1414,15 +1414,16 @@ jobs:
           if [ "$SDK_PKGS" = "*" ]; then
             CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}/sdk.config"
             if [ -f "$CONFIG_FILE" ]; then
-              # 提取 CONFIG_PACKAGE_*=y 的包名，但部分包的目录名 ≠ 包名
-              # (如 shadowsocksr-libev 目录下定义 ssr-local/ssr-redir/ssr-server 子包，
-              #  simple-obfs 目录下定义 simple-obfs-client)，
-              # make package/<name>/download 需要目录名而非子包名，必须折叠后再去重。
+              # 提取 CONFIG_PACKAGE_*=y 的包名，需处理以下目录名 ≠ 包名的情况：
+              # - 多子包目录: shadowsocksr-libev/ssr-*, simple-obfs/simple-obfs-client → 折叠
+              # - i18n 包: luci-i18n-* 无法独立编译(目录属于父 luci app)，直接移除
               SDK_PKGS=$(grep '^CONFIG_PACKAGE_.*=[ym]' "$CONFIG_FILE" | sed 's/CONFIG_PACKAGE_\(.*\)=[ym]/\1/' | tr '\n' ' ')
               # 折叠多子包目录：子包名 → 父目录名
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/shadowsocksr-libev-ssr-[^ ]*/shadowsocksr-libev/g')
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/simple-obfs-client/simple-obfs/g')
-              # 去重（多个子包折叠后可能重复）
+              # 移除 luci-i18n-* (随父 luci app 自动编译)
+              SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/luci-i18n-[^ ]*//g')
+              # 去重 + 清理多余空格
               SDK_PKGS=$(echo "$SDK_PKGS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
             else
               echo "⚠️ sdk.config 不存在，跳过 SDK 构建 (target=${{ matrix.target }})"
