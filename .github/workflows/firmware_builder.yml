@@ -21,7 +21,8 @@ on:
         options:
           - 'smart'      # 智能检测变更（定时任务同款逻辑）
           - 'firmware'   # 强制编译固件
-          - 'packages'   # 强制仅编译软件包 (SDK)
+          - 'packages'   # 强制编译软件包 (SDK / 自控 Docker)
+          - 'passwall'   # 强制仅编译 passwall (gh-action-sdk)
       cache_strategy:
         description: '缓存策略'
         required: false
@@ -73,13 +74,15 @@ jobs:
     timeout-minutes: 30
     outputs:
       full_matrix: ${{ steps.build-matrix.outputs.full_matrix }}
+      passwall_matrix: ${{ steps.build-matrix.outputs.passwall_matrix }}
       pkgs_matrix: ${{ steps.build-matrix.outputs.pkgs_matrix }}
       version: ${{ steps.version.outputs.version }}
       sdk_version: ${{ steps.version.outputs.sdk_version }}
       source_changed: ${{ steps.build-matrix.outputs.source_changed }}
       packages_changed: ${{ steps.build-matrix.outputs.packages_changed }}
       should_build_firmware: ${{ steps.build-matrix.outputs.should_build_firmware }}
-      should_build_sdk: ${{ steps.build-matrix.outputs.should_build_sdk }}
+      should_build_passwall: ${{ steps.build-matrix.outputs.should_build_passwall }}
+      should_build_pkgs: ${{ steps.build-matrix.outputs.should_build_pkgs }}
       should_publish: ${{ steps.build-matrix.outputs.should_publish }}
     steps:
       - name: Checkout AutoWorkflows
@@ -168,7 +171,16 @@ jobs:
           echo "sdk_version=${SDK_VERSION}" >> $GITHUB_OUTPUT
           echo "🏷️ 固件版本: ${VERSION} | SDK 版本: ${SDK_VERSION}"
 
-      # -------- 加载目标 + SHA 状态检查 --------
+      # -------- 恢复缓存中的构建状态 --------
+      - name: 💾 Restore build state
+        id: cache-build-state
+        uses: actions/cache/restore@v5
+        with:
+          key: immwrt-state-${{ github.run_id }}
+          restore-keys: immwrt-state-
+          path: build-state.json
+
+      # -------- 加载目标 + SHA 状态检查（GitHub Actions Cache）-------
       - name: Load targets & check changes
         id: load-targets
         env:
@@ -190,32 +202,30 @@ jobs:
           ' "$JSON_FILE")
           echo "$FILTERED" > /tmp/filtered_targets.json
 
+          # ── 加载缓存状态 ──
+          if [ -f build-state.json ]; then
+            echo "📦 缓存状态已加载 ($(jq 'keys | length' build-state.json) 个 target)"
+          else
+            echo "📦 无缓存状态（首次构建？）"
+            echo '{}' > build-state.json
+          fi
+
           # ── SHA 状态检查（带熔断）──
-          # 源码变更：比较 Release 的 targetCommitish（上次构建时的源码 commit SHA）
-          #   与当前远端 HEAD SHA，无需额外状态文件。
-          # 软件包变更：从 Release 下载 state JSON 比对（仅源码未变更时才下载）。
-          # 熔断：一旦两个标志都为 true，跳过剩余 target 的检查。
           SRC_CHANGED=false
           PKG_CHANGED=false
           for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
-            # 熔断：两个都已变更，无需继续
+            # 熔断：所有标志都已变更，无需继续
             [ "$SRC_CHANGED" = "true" ] && [ "$PKG_CHANGED" = "true" ] && break
 
             CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.release_repo // .repo)')
             CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
             CURR_PKG_BRANCH=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | (.packages_branch // .target)')
 
-            # 获取远端当前源码 SHA（head -1 防止分支名同时匹配 branch + tag 时返回多行）
+            # 获取远端当前源码 SHA
             CURR_SRC=$(git ls-remote "https://github.com/${CURR_REPO}" "${CURR_REF}" 2>/dev/null | cut -f1 | head -1)
 
-            # ── 源码变更检测：比较 Release 的 targetCommitish ──
-            # Release 通过 gh release create --target "$SOURCE_SHA" 创建，
-            # 其 targetCommitish 即上次构建时的源码 commit SHA，无需额外状态文件。
-            LATEST_TAG=$(gh release list --repo "$CURR_REPO" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
-            LAST_SRC=""
-            if [ -n "$LATEST_TAG" ]; then
-              LAST_SRC=$(gh release view "$LATEST_TAG" --repo "$CURR_REPO" --json targetCommitish --jq '.targetCommitish' 2>/dev/null || echo "")
-            fi
+            # ── 源码变更检测：对比缓存中的上次构建 SHA ──
+            LAST_SRC=$(jq -r ".[\"${TARGET}\"].source_sha // empty" build-state.json)
 
             if [ -n "$LAST_SRC" ] && [ "$LAST_SRC" = "$CURR_SRC" ]; then
               echo "  ✅ [${TARGET}] 源码未变更 (${CURR_SRC:0:7})"
@@ -224,26 +234,20 @@ jobs:
               SRC_CHANGED=true
             fi
 
-            # ── 软件包变更检测（仅源码未变更且 PKG 尚未标记变更时下载）──
-            if [ "$PKG_CHANGED" != "true" ]; then
-              CURR_PKG=$(git ls-remote https://github.com/solarflows/openwrt-packages.git "${CURR_PKG_BRANCH}" 2>/dev/null | cut -f1 | head -1)
-              rm -rf /tmp/state 2>/dev/null || true
-              if [ -n "$LATEST_TAG" ]; then
-                gh release download "$LATEST_TAG" --repo "$CURR_REPO" \
-                  --pattern "${TARGET}-state.json" -D /tmp/state 2>/dev/null || true
-              fi
-              if [ -f "/tmp/state/${TARGET}-state.json" ]; then
-                LAST_PKG=$(jq -r '.packages_sha' "/tmp/state/${TARGET}-state.json")
-                if [ "$LAST_PKG" != "$CURR_PKG" ]; then
-                  echo "  🟡 [${TARGET}] 软件包有变更: ${LAST_PKG:0:7} → ${CURR_PKG:0:7}"
-                  PKG_CHANGED=true
-                else
-                  echo "  ✅ [${TARGET}] 软件包未变更 (${CURR_PKG:0:7})"
-                fi
-              else
-                echo "  ⚠️ [${TARGET}] 未找到软件包状态（首次构建？）"
+            # ── 软件包变更检测 ──
+            CURR_PKG=$(git ls-remote https://github.com/solarflows/openwrt-packages.git "${CURR_PKG_BRANCH}" 2>/dev/null | cut -f1 | head -1)
+            LAST_PKG=$(jq -r ".[\"${TARGET}\"].packages_sha // empty" build-state.json)
+
+            if [ -n "$LAST_PKG" ]; then
+              if [ "$LAST_PKG" != "$CURR_PKG" ]; then
+                echo "  🟡 [${TARGET}] 软件包有变更: ${LAST_PKG:0:7} → ${CURR_PKG:0:7}"
                 PKG_CHANGED=true
+              else
+                echo "  ✅ [${TARGET}] 软件包未变更 (${CURR_PKG:0:7})"
               fi
+            else
+              echo "  ⚠️ [${TARGET}] 未找到软件包状态（首次构建？）"
+              PKG_CHANGED=true
             fi
           done
 
@@ -259,26 +263,30 @@ jobs:
           SRC_CHANGED="${{ steps.load-targets.outputs.source_changed }}"
           PKG_CHANGED="${{ steps.load-targets.outputs.packages_changed }}"
 
-          # ── 拆分矩阵 ──
+          # ── 拆分矩阵：全量编译、passwall、其他软件包 ──
           FULL_MATRIX=$(echo "$FILTERED" | jq -c 'map(. + {
             packages_branch:   (.packages_branch   // .target),
             release_repo:     (.release_repo     // .repo),
             passwall_repo:    (.passwall_repo    // "solarflows/openwrt-packages"),
-            passwall_tag:     (.passwall_tag     // .target),
+            passwall_tag:     (.passwall_tag     // "packages"),
             apk_signing:      (.apk_signing      // false),
             sdk_container:    (.sdk_container    // null),
             sdk_packages:     (.sdk_packages     // "*")
           })')
-          PKGS_MATRIX=$(echo "$FILTERED" | jq -c '[.[] | select(.sdk_container != null) | . + {
+          # passwall 矩阵：有 SDK 容器的目标
+          PASSWALL_MATRIX=$(echo "$FILTERED" | jq -c '[.[] | select(.sdk_container != null) | . + {
             packages_branch: (.packages_branch // .target),
             release_repo:    (.release_repo    // .repo),
             passwall_repo:   (.passwall_repo   // "solarflows/openwrt-packages"),
-            passwall_tag:    (.passwall_tag    // .target),
+            passwall_tag:    (.passwall_tag    // "packages"),
             apk_signing:     (.apk_signing     // false),
             sdk_packages:    (.sdk_packages    // "*")
           }]')
+          # 其他 SDK 包矩阵
+          PKGS_MATRIX=$(echo "$PASSWALL_MATRIX" | jq -c '.')
 
           echo "full_matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
+          echo "passwall_matrix=$PASSWALL_MATRIX" >> $GITHUB_OUTPUT
           echo "pkgs_matrix=$PKGS_MATRIX" >> $GITHUB_OUTPUT
           echo "source_changed=${SRC_CHANGED}" >> $GITHUB_OUTPUT
           echo "packages_changed=${PKG_CHANGED}" >> $GITHUB_OUTPUT
@@ -288,24 +296,37 @@ jobs:
           IS_SCHEDULE="${{ github.event_name }}"
 
           if [ "$TRIGGER" = "packages" ]; then
-            # 强制仅编译软件包
+            # 强制编译软件包：compile-packages 统一处理所有包（含 passwall）
             echo "should_build_firmware=false" >> $GITHUB_OUTPUT
+            echo "should_build_passwall=false" >> $GITHUB_OUTPUT
             if [ "$(echo "$PKGS_MATRIX" | jq 'length')" -gt 0 ]; then
-              echo "should_build_sdk=true" >> $GITHUB_OUTPUT
+              echo "should_build_pkgs=true" >> $GITHUB_OUTPUT
             else
-              echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+              echo "should_build_pkgs=false" >> $GITHUB_OUTPUT
             fi
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          elif [ "$TRIGGER" = "passwall" ]; then
+            # 强制仅编译 passwall：用 compile-passwall (gh-action-sdk)，仅 2 个包，最快
+            echo "should_build_firmware=false" >> $GITHUB_OUTPUT
+            if [ "$(echo "$PASSWALL_MATRIX" | jq 'length')" -gt 0 ]; then
+              echo "should_build_passwall=true" >> $GITHUB_OUTPUT
+            else
+              echo "should_build_passwall=false" >> $GITHUB_OUTPUT
+            fi
+            echo "should_build_pkgs=false" >> $GITHUB_OUTPUT
             echo "should_publish=true" >> $GITHUB_OUTPUT
           elif [ "$TRIGGER" = "firmware" ]; then
             # 强制编译固件
             echo "should_build_firmware=true" >> $GITHUB_OUTPUT
-            echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+            echo "should_build_passwall=false" >> $GITHUB_OUTPUT
+            echo "should_build_pkgs=false" >> $GITHUB_OUTPUT
             echo "should_publish=true" >> $GITHUB_OUTPUT
           else
-            # smart：智能检测变更（定时任务和手动触发共用逻辑）
+            # smart：智能检测变更
             if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "false" ]; then
               echo "should_build_firmware=false" >> $GITHUB_OUTPUT
-              echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+              echo "should_build_passwall=false" >> $GITHUB_OUTPUT
+              echo "should_build_pkgs=false" >> $GITHUB_OUTPUT
               if [ "$IS_SCHEDULE" = "schedule" ]; then
                 echo "should_publish=false" >> $GITHUB_OUTPUT
               else
@@ -313,14 +334,18 @@ jobs:
               fi
             elif [ "$SRC_CHANGED" = "true" ]; then
               echo "should_build_firmware=true" >> $GITHUB_OUTPUT
-              echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+              echo "should_build_passwall=false" >> $GITHUB_OUTPUT
+              echo "should_build_pkgs=false" >> $GITHUB_OUTPUT
               echo "should_publish=true" >> $GITHUB_OUTPUT
             else
+              # 仅软件包变更 → 统一用 compile-packages（自控 Docker）编译 sdk.config 所有包。
+              # compile-passwall 仅在 trigger=passwall 手动触发时运行。
               echo "should_build_firmware=false" >> $GITHUB_OUTPUT
+              echo "should_build_passwall=false" >> $GITHUB_OUTPUT
               if [ "$(echo "$PKGS_MATRIX" | jq 'length')" -gt 0 ]; then
-                echo "should_build_sdk=true" >> $GITHUB_OUTPUT
+                echo "should_build_pkgs=true" >> $GITHUB_OUTPUT
               else
-                echo "should_build_sdk=false" >> $GITHUB_OUTPUT
+                echo "should_build_pkgs=false" >> $GITHUB_OUTPUT
               fi
               echo "should_publish=true" >> $GITHUB_OUTPUT
             fi
@@ -363,7 +388,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.should_build_firmware == 'true'
     concurrency:
-      group: build-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      group: build-fw-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 480
@@ -1184,6 +1209,11 @@ jobs:
             echo "ℹ️ ccache exact key 命中 · 缓存不可变，跳过清理"
           fi
 
+          # 构建状态：全量清理旧的状态缓存（精确 key 仅保留本次 run_id）
+          gh cache list --repo "${{ github.repository }}" --key "immwrt-state-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
+            xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+          echo "🧹 旧构建状态缓存已清理"
+
       # ───────── 打包产物 ─────────
       - name: 📦 6. Package Artifacts
         if: success()
@@ -1376,24 +1406,6 @@ jobs:
             release-body.md
           retention-days: 7
 
-      # ───────── 更新构建状态（替代旧的 sha marker）─────────
-      - name: 📤 Upload build state
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          VERSION="${{ needs.plan.outputs.version }}"
-          cat > "${{ matrix.target }}-state.json" <<JSONEOF
-          {
-            "packages_sha": "${{ steps.clone_packages.outputs.packages_sha_full }}",
-            "last_build": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')",
-            "version": "${VERSION}"
-          }
-          JSONEOF
-          gh release upload "${VERSION}" "${{ matrix.target }}-state.json" \
-            --repo ${{ matrix.release_repo }} --clobber 2>/dev/null || true
-          echo "💾 构建状态已上传到 Release ${VERSION}"
-
       # ───────── 失败/取消时清理 Draft Release ─────────
       - name: 🧹 Cleanup draft release on failure
         if: failure() || cancelled()
@@ -1412,16 +1424,148 @@ jobs:
             echo "ℹ️ Release ${VERSION} 非 draft 或已不存在，跳过清理"
           fi
 
-  # ========== SDK 软件包构建（仅软件包变更时） ==========
-  # 使用 OpenWrt 官方 SDK action 交叉编译单个软件包，
-  # 速度快于全量固件编译（约 15-30 分钟 vs 2-6 小时）。
-  # 仅当智能检测到源码未变更、仅 packages 分支有更新时触发。
+  # ========== Passwall 软件包构建（仅 passwall 包变更时） ==========
+  # 使用 gh-action-sdk 原生流程（含 check/refresh 校验），
+  # 仅编译 luci-app-passwall 和 luci-app-passwall2。
+  # 跳过了 hash 严格检测不需要的部分。
+  compile-passwall:
+    name: Compile passwall ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.should_build_passwall == 'true'
+    concurrency:
+      group: build-pw-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.passwall_matrix) }}
+    steps:
+      - name: Checkout packages repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.passwall_repo }}
+          ref: ${{ matrix.packages_branch }}
+
+      - name: Checkout AutoWorkflows
+        uses: actions/checkout@v6
+        with:
+          repository: solarflows/AutoWorkFlows
+          path: AutoWorkFlows
+
+      - name: ⚙️ Generate .config
+        run: |
+          CONFIG_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ matrix.config }}"
+          cat > .config <<EOF
+          CONFIG_ALL_NONSHARED=n
+          CONFIG_ALL_KMODS=n
+          CONFIG_ALL=n
+          CONFIG_AUTOREMOVE=n
+          CONFIG_LUCI_LANG_zh_Hans=y
+          EOF
+          if [ -f "$CONFIG_DIR/sdk.config" ] && [ -s "$CONFIG_DIR/sdk.config" ]; then
+            grep -v '^#' "$CONFIG_DIR/sdk.config" | grep -v '^$' \
+              | grep -E '(CONFIG_PACKAGE_luci-app-passwall|CONFIG_PACKAGE_luci-app-passwall2)' >> .config || true
+            sed -i '/^CONFIG_PACKAGE_/s/=y$/=m/' .config
+            echo "📋 已注入 passwall 配置"
+          fi
+
+      - name: 🔑 Derive APK public key
+        if: ${{ matrix.apk_signing }}
+        env:
+          APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
+        run: |
+          if [ -z "$APK_BUILD_KEY" ]; then
+            echo "⚠️ APK_BUILD_KEY 未设置，跳过公钥派生"
+            exit 0
+          fi
+          printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > private-key.pem
+          chmod 600 private-key.pem
+          sed -i 's/\r$//' private-key.pem
+          openssl ec -in private-key.pem -pubout -out public-key.pem 2>/dev/null || \
+            openssl rsa -in private-key.pem -pubout -out public-key.pem
+          chmod 644 public-key.pem
+          FP=$(openssl sha256 < public-key.pem | awk '{print $NF}')
+          echo "🔑 APK 公钥已派生 (SHA256: ${FP:0:16}...)"
+
+      - name: 🔨 Build passwall with gh-action-sdk
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.sdk_container }}
+          PACKAGES: "luci-app-passwall luci-app-passwall2"
+          FEEDNAME: solarflows
+          FEED_DIR: ${{ github.workspace }}
+          PRIVATE_KEY: ${{ secrets.APK_BUILD_KEY }}
+          NO_REFRESH_CHECK: 1
+
+      - name: 📦 Collect artifacts
+        id: artifacts
+        run: |
+          mkdir -p upload
+          for pkg in luci-app-passwall luci-app-passwall2; do
+            find bin/packages/ -type f \( \
+              -name "${pkg}_*.ipk" -o \
+              -name "${pkg}_*.apk" -o \
+              -name "${pkg}*.ipk" -o \
+              -name "${pkg}*.apk" \
+            \) -exec cp {} upload/ \; 2>/dev/null || true
+          done
+          if [ -f public-key.pem ]; then
+            cp public-key.pem upload/solarflows-apk-public.pem
+          fi
+          FILE_COUNT=$(find upload/ -type f 2>/dev/null | wc -l)
+          echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
+          echo "📦 收集到 ${FILE_COUNT} 个文件"
+
+      - name: 📤 Upload passwall artifact (compile-passwall)
+        if: steps.artifacts.outputs.file_count > 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-passwall-sdk-pw
+          path: upload/
+          retention-days: 7
+
+      - name: 📋 Generate build info (compile-passwall)
+        if: steps.artifacts.outputs.file_count > 0
+        run: |
+          PKG_COMMIT=$(git rev-parse --short HEAD)
+          PKG_COMMIT_FULL=$(git rev-parse HEAD)
+          PKG_FORMAT="${{ matrix.apk_signing && 'apk' || 'ipk' }}"
+          cat > build-info.json <<JSONEOF
+          {
+            "target": "${{ matrix.target }}",
+            "packages_branch": "${{ matrix.packages_branch }}",
+            "packages_sha": "${PKG_COMMIT_FULL}",
+            "packages_commit": "${PKG_COMMIT}",
+            "source_sha": "",
+            "release_repo": "${{ matrix.release_repo }}",
+            "passwall_repo": "${{ matrix.passwall_repo }}",
+            "passwall_tag": "${{ matrix.passwall_tag }}",
+            "packages_format": "${PKG_FORMAT}",
+            "apk_signing": ${{ matrix.apk_signing }},
+            "file_count": "${{ steps.artifacts.outputs.file_count }}",
+            "timestamp": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')"
+          }
+          JSONEOF
+
+      - name: 📤 Upload build info
+        if: steps.artifacts.outputs.file_count > 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-passwall-build-info
+          path: build-info.json
+          retention-days: 7
+
+  # ========== 其他 SDK 软件包构建（仅非 passwall 包变更时） ==========
+  # 使用自控 Docker 容器，跳过 gh-action-sdk 的严格 hash 检查，
+  # 让 make download 的 git 回退机制能正常跑完。
   compile-packages:
     name: Compile packages ${{ matrix.target }}
     needs: plan
-    if: needs.plan.outputs.should_build_sdk == 'true'
+    if: needs.plan.outputs.should_build_pkgs == 'true'
     concurrency:
-      group: build-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      group: build-pkg-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1513,36 +1657,50 @@ jobs:
           echo "collect_packages=$SDK_PKGS" >> $GITHUB_OUTPUT
           echo "📦 PACKAGES=$BUILD_PKGS"
 
-      - name: 🔨 Build with OpenWrt SDK
+      - name: 🔨 Build with OpenWrt SDK (direct)
         if: steps.resolve-pkgs.outputs.packages != ''
         id: compile
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.sdk_container }}
-          PACKAGES: ${{ steps.resolve-pkgs.outputs.packages }}
-          # FEEDNAME + FEED_DIR 让 SDK 自动将当前 checkout 的仓库作为本地 feed 加入。
-          # 第一步 checkout 已将 solarflows/openwrt-packages 放到 workspace 根目录，
-          # SDK 内部生成: src-link solarflows $GITHUB_WORKSPACE
-          FEEDNAME: solarflows
-          FEED_DIR: ${{ github.workspace }}
-          PRIVATE_KEY: ${{ secrets.APK_BUILD_KEY }}
-          IGNORE_ERRORS: 1 # 防止单个软件包的错误导致整个工作流的失败
-          NO_REFRESH_CHECK: 1 # 跳过 patch 变脏检测（SDK 基线偏移 → quilt 刷新后 diff 非空）
-
-      # gh-action-sdk 内部 docker/build-push-action 每次产生数 GB Docker 镜像层缓存。
-      # gh-action-sdk 内部 docker/build-push-action 每次产生数 GB Docker 镜像层缓存。
-      # 缓存 key 模式: buildkit-blob-1-sha256:... (层) + index--aarch64_cortex-a53-* (索引)。
-      # 仅匹配这两种前缀删除，同 repo 其他 workflow 的缓存不受影响。
-      - name: 🧹 Purge SDK Docker cache
-        if: always() && steps.compile.outcome != 'skipped'
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          echo "🧹 清理 SDK Docker 构建缓存..."
-          gh cache list --repo "${{ github.repository }}" --limit 100 --json key,id \
-            | jq -r '.[] | select(.key | startswith("buildkit-blob") or startswith("index--aarch64_cortex-a53")) | .id' \
-            | xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
-          echo "✅ SDK Docker 缓存已清理"
+          # 直接使用 SDK Docker 容器，跳过 gh-action-sdk entrypoint 的严格 hash 检查。
+          # gh-action-sdk 在 make package/$PKG/check 后 grep 日志中的 hash WARNING → exit 1，
+          # 不给 make download 的 git 回退机制（PKG_SOURCE_PROTO:=git 时 tarball 哈希不匹配 →
+          # 回退到 git clone）跑完的机会。这里直接用 Docker 控制流程，跳过 check 步骤。
+          DOCKER_OPTS="-v ${{ github.workspace }}:/feed --workdir /builder"
+          if [ "${{ matrix.apk_signing }}" = "true" ] && [ -f private-key.pem ]; then
+            DOCKER_OPTS="$DOCKER_OPTS -v $(pwd)/private-key.pem:/builder/private-key.pem:ro"
+            echo "🔑 APK 私钥通过只读挂载注入容器"
+          fi
+          docker run --rm $DOCKER_OPTS \
+            -e PACKAGES="${{ steps.resolve-pkgs.outputs.packages }}" \
+            ghcr.io/openwrt/sdk:${{ matrix.sdk_container }} \
+            /bin/bash -c '
+              set -e
+
+              echo "::group::📋 Configure feeds"
+              echo "src-link solarflows /feed/" >> feeds.conf
+              ./scripts/feeds update -a 2>&1
+              make defconfig 2>&1
+              echo "::endgroup::"
+
+              # ── Rust 包说明 ──
+              # OpenWrt 21.02 SDK (mt798x) 不含 Rust 主机工具链，sing-box/hysteria 等
+              # Rust 包无法通过 SDK 交叉编译。这些包仅在固件全量构建 (compile-firmware)
+              # 中编译。SDK 编译时 Rust 包会自然失败，由 make 的 || warning 兜底。
+
+              for pkg in $PACKAGES; do
+                echo "::group::📦 Compile $pkg"
+                ./scripts/feeds install -p solarflows -f "$pkg" 2>&1
+                make package/"$pkg"/download V=s 2>&1
+                make package/"$pkg"/compile \
+                  BUILD_LOG=1 V=s -j$(nproc 2>/dev/null || echo 4) 2>&1 || \
+                  echo "::warning::⚠️ $pkg build failed, continuing"
+                echo "::endgroup::"
+              done
+
+              # 产物复制到宿主可见路径（/feed = ${{ github.workspace }}）
+              [ -d bin/ ] && cp -r bin/ /feed/
+              [ -d logs/ ] && cp -r logs/ /feed/
+            '
 
       - name: 📦 Collect artifacts
         id: artifacts
@@ -1594,8 +1752,10 @@ jobs:
           {
             "target": "${{ matrix.target }}",
             "packages_branch": "${{ matrix.packages_branch }}",
+            "packages_sha": "${PKG_COMMIT_FULL}",
             "packages_commit": "${PKG_COMMIT}",
             "packages_commit_full": "${PKG_COMMIT_FULL}",
+            "source_sha": "",
             "packages_format": "${PKG_FORMAT}",
             "sdk_container": "${{ matrix.sdk_container }}",
             "sdk_packages": "${{ matrix.sdk_packages }}",
@@ -1617,54 +1777,20 @@ jobs:
           path: build-info.json
           retention-days: 7
 
-      # SDK 编译也需上传 state，防止下次 plan 检测时因 packages_sha 未更新导致无限重建循环
-      - name: 📤 Upload build state
-        if: steps.artifacts.outputs.file_count > 0
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          TAG="${{ needs.plan.outputs.sdk_version }}"
-          PKG_SHA=$(git rev-parse HEAD)
-          cat > "${{ matrix.target }}-state.json" <<JSONEOF
-          {
-            "packages_sha": "${PKG_SHA}",
-            "last_build": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')",
-            "version": "${TAG}"
-          }
-          JSONEOF
-          # 上传到 release_repo 的最新 Release（与 plan 检测时下载位置一致）
-          LATEST_TAG=$(gh release list --repo "${{ matrix.release_repo }}" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
-          if [ -n "$LATEST_TAG" ]; then
-            gh release upload "$LATEST_TAG" "${{ matrix.target }}-state.json" \
-              --repo "${{ matrix.release_repo }}" --clobber 2>/dev/null || true
-            echo "💾 SDK 构建状态已上传到 ${{ matrix.release_repo }}@${LATEST_TAG}"
-          else
-            # release_repo 没有任何 Release（纯 SDK target，从未跑过固件构建），
-            # 创建一个最小 Release 用于挂载 state.json，避免下一轮无限重建循环。
-            echo "📝 release_repo 无已存在 Release，创建最小 Release 用于状态持久化..."
-            if gh release create "${TAG}" --repo "${{ matrix.release_repo }}" \
-              --title "SDK Build State (${TARGET})" \
-              --notes "此 Release 仅用于持久化 SDK 构建状态，不包含固件。\n更新于 $(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')" \
-              --latest=false \
-              "${{ matrix.target }}-state.json" 2>/dev/null; then
-              echo "💾 SDK 构建状态已创建: ${{ matrix.release_repo }}@${TAG}"
-            else
-              echo "⚠️ 创建 Release 失败，下次仍会触发 SDK 构建"
-            fi
-          fi
-
   # ========== 发布任务 ==========
   # 使用 always() 而非 success()：矩阵构建中某个分片失败不应阻止其他成功分片的发布。
   # 内部 publish_target() 会检查产物是否存在，缺失则跳过。
   # Release 的创建由 plan 负责（draft），compile 上传产物，此 job 负责 draft→published。
   release:
     name: Release
-    needs: [plan, compile-firmware, compile-packages]
+    needs: [plan, compile-firmware, compile-passwall, compile-packages]
     if: |
       always() &&
       !cancelled() &&
       needs.plan.outputs.should_publish == 'true' &&
-      (needs.plan.outputs.should_build_firmware == 'true' || needs.plan.outputs.should_build_sdk == 'true')
+      (needs.plan.outputs.should_build_firmware == 'true' ||
+       needs.plan.outputs.should_build_passwall == 'true' ||
+       needs.plan.outputs.should_build_pkgs == 'true')
     runs-on: ubuntu-24.04
     steps:
       - name: Download all artifacts
@@ -1726,13 +1852,12 @@ jobs:
 
             # -------- 从 build-info.json 读取参数 --------
             local TARGET_NAME SOURCE_SHA PKG_SHA
-            local FEEDS_MD DURATION_FMT
+            local DURATION_FMT
             local TOOLCHAIN_HIT TOOLCHAIN_EXACT CCACHE_HIT
             local RELEASE_REPO PASSWALL_TAG PASSWALL_REPO
             TARGET_NAME=$(jq -r '.target'              "$INFO_FILE")
             SOURCE_SHA=$(jq -r '.source_sha'            "$INFO_FILE")
             PKG_SHA=$(jq -r '.packages_sha'            "$INFO_FILE")
-            FEEDS_MD=$(jq -r '.feeds_md'               "$INFO_FILE")
             DURATION_FMT=$(jq -r '.duration_fmt'        "$INFO_FILE")
             TOOLCHAIN_HIT=$(jq -r '.toolchain_hit'      "$INFO_FILE")
             TOOLCHAIN_EXACT=$(jq -r '.toolchain_exact'   "$INFO_FILE")
@@ -1784,7 +1909,7 @@ jobs:
                 # Draft release 已由 plan 创建，上传固件
                 echo "📤 [${TARGET}] 上传固件到 Release $TAG ..."
                 gh release upload "$TAG" --repo "$RELEASE_REPO" \
-                  "$FW_DIR"/* --clobber 2>/dev/null || true
+                  "$FW_DIR"/* --clobber || echo "::warning::⚠️ [${TARGET}] 固件上传失败"
               else
                 # 降级：Release 不存在时直接创建
                 echo "🚀 [${TARGET}] 创建 Release $TAG ..."
@@ -1792,36 +1917,48 @@ jobs:
                   --title "${TARGET_NAME} ${TITLE}" \
                   --target "$SOURCE_SHA" \
                   --notes-file /tmp/release_body.md \
-                  "$FW_DIR"/*
+                  "$FW_DIR"/* || echo "::error::❌ [${TARGET}] Release 创建失败"
               fi
               # 更新 notes 并发布（draft → published）
               gh release edit "$TAG" --repo "$RELEASE_REPO" \
                 --title "${TARGET_NAME} ${TITLE}" \
                 --notes-file /tmp/release_body.md \
-                --draft=false 2>/dev/null || true
+                --draft=false || echo "::warning::⚠️ [${TARGET}] Release notes 更新失败"
               echo "✅ [${TARGET}] Release $TAG 已发布"
             else
               echo "⚠️  [${TARGET}] 没有找到固件文件，跳过固件发布。"
             fi
 
-            # -------- 发布 Passwall（固定 Release，solarflows/openwrt-packages） --------
+            # -------- 发布 Passwall（合并 Release，solarflows/openwrt-packages） --------
+            # mt798x(ipk) + qualcommax(apk) 格式不同，合并到同一个 tag 不冲突。
+            # 增量上传: 先上传文件的 target 创建 Release，后续 target 追加文件。
             local PW_DIR="artifacts/${TARGET}-passwall"
             if [ -d "$PW_DIR" ]; then
               local PW_FILES
               PW_FILES=$(find "$PW_DIR" -maxdepth 1 \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) -type f 2>/dev/null || true)
               if [ -n "$PW_FILES" ]; then
                 local PW_NOTES
-                PW_NOTES="最新 passwall 及依赖，更新于 $(date +'%Y-%m-%d %H:%M')"$'\n'"🔑 APK 签名公钥: solarflows-apk-public.pem（下载后放入 /etc/apk/keys/ 即可信任这些包）"
+                PW_NOTES="${TARGET} 全量构建 · $(date +'%Y-%m-%d %H:%M')"
                 if gh release view "$PASSWALL_TAG" --repo "$PASSWALL_REPO" &>/dev/null; then
-                  echo "📤 [${TARGET}] Passwall Release ${PASSWALL_TAG} 已存在，删除旧 Release 并重建..."
-                  gh release delete "$PASSWALL_TAG" --repo "$PASSWALL_REPO" --yes 2>/dev/null || true
+                  echo "📤 [${TARGET}] 上传到 Passwall Release ${PASSWALL_TAG} ..."
+                  gh release upload "$PASSWALL_TAG" --repo "$PASSWALL_REPO" \
+                    $(echo "$PW_FILES") --clobber || echo "::warning::⚠️ [${TARGET}] Passwall 上传失败"
+                  # 追加 notes
+                  EXISTING=$(gh release view "$PASSWALL_TAG" --repo "$PASSWALL_REPO" --json body --jq '.body // ""' 2>/dev/null || echo "")
+                  printf '%b\n' "${EXISTING}\n- **${TARGET}**: ${PW_NOTES}" > /tmp/release_notes.md
+                  gh release edit "$PASSWALL_TAG" --repo "$PASSWALL_REPO" --notes-file /tmp/release_notes.md || echo "::warning::⚠️ [${TARGET}] Passwall notes 更新失败"
+                else
+                  echo "🚀 [${TARGET}] 创建 Passwall Release ${PASSWALL_REPO}@${PASSWALL_TAG} ..."
+                  note_body="## Passwall Packages\n\n"
+                  note_body="${note_body}全量构建 + SDK 增量构建，合并两个目标平台的软件包。\n\n"
+                  note_body="${note_body}---\n- **${TARGET}**: ${PW_NOTES}"
+                  printf '%b\n' "$note_body" > /tmp/release_notes.md
+                  gh release create "$PASSWALL_TAG" --repo "$PASSWALL_REPO" \
+                    --title "Passwall Packages" \
+                    --notes-file /tmp/release_notes.md \
+                    --latest=false \
+                    $(echo "$PW_FILES")
                 fi
-                echo "🚀 [${TARGET}] 创建 Passwall Release ${PASSWALL_REPO}@${PASSWALL_TAG} ..."
-                gh release create "$PASSWALL_TAG" --repo "$PASSWALL_REPO" \
-                  --title "Passwall Packages (${TARGET})" \
-                  --notes "$PW_NOTES" \
-                  --latest=false \
-                  $(echo "$PW_FILES")
               else
                 echo "⚠️  [${TARGET}] 没有找到 passwall 文件，跳过。"
               fi
@@ -1830,16 +1967,16 @@ jobs:
             echo "✅ [${TARGET}] 发布流程完成。"
           }
 
-          # 按目标依次发布固件（排除 SDK 构建产物）
+          # 按目标依次发布固件（排除 SDK / passwall 构建产物）
           for target_dir in artifacts/*-build-info; do
-            case "$(basename "$target_dir")" in *-sdk-*) continue ;; esac
+            case "$(basename "$target_dir")" in *-sdk-*|*-passwall-*) continue ;; esac
             TARGET_NAME=$(basename "$target_dir" | sed 's/-build-info//')
             publish_target "$TARGET_NAME"
           done
 
-          # ── 发布 SDK 构建的 passwall ──
-          # 增量上传到与全量构建相同的固定 tag Release（$PW_TAG），
-          # 不删除重建（保留全量构建中的依赖包如 shadowsocks-rust）。
+          # ── 发布 SDK 构建的 passwall（合并到同一 Release）──
+          # 增量上传到与全量构建相同的固定 tag Release，不删除重建。
+          # 两个目标 (mt798x ipk + qualcommax apk) 合并到同一个 Release。
           for sdk_dir in artifacts/*-sdk-build-info; do
             [ -d "$sdk_dir" ] || continue
             TARGET=$(basename "$sdk_dir" | sed 's/-sdk-build-info//')
@@ -1867,7 +2004,7 @@ jobs:
             if gh release view "$PW_TAG" --repo "$PW_REPO" &>/dev/null; then
               # Release 已存在 → 上传文件（覆盖同名，保留其他）
               gh release upload "$PW_TAG" --repo "$PW_REPO" \
-                $(echo "$SDK_FILES") --clobber 2>/dev/null || true
+                $(echo "$SDK_FILES") --clobber || echo "::warning::⚠️ [${TARGET}] SDK 上传失败"
               # 获取旧 notes，追加本次 SDK 构建信息
               EXISTING=$(gh release view "$PW_TAG" --repo "$PW_REPO" --json body --jq '.body // ""' 2>/dev/null || echo "")
               if echo "$EXISTING" | grep -q "### ${TARGET}" 2>/dev/null; then
@@ -1875,12 +2012,12 @@ jobs:
                 echo "⚠️ 同一 target 已有构建记录，使用 --clobber 覆盖文件但 notes 需手动清理旧条目"
               fi
               printf '%b\n' "${EXISTING}\n\n---\n${SDK_NOTE_TITLE}\n${SDK_NOTE_DETAIL}" > /tmp/release_notes.md
-              gh release edit "$PW_TAG" --repo "$PW_REPO" --notes-file /tmp/release_notes.md 2>/dev/null || true
+              gh release edit "$PW_TAG" --repo "$PW_REPO" --notes-file /tmp/release_notes.md || echo "::warning::⚠️ [${TARGET}] SDK notes 更新失败"
             else
               # Release 不存在（纯 SDK target，无全量构建）→ 创建
               printf '%b\n' "${SDK_NOTE_TITLE}\n${SDK_NOTE_DETAIL}" > /tmp/release_notes.md
               gh release create "$PW_TAG" --repo "$PW_REPO" \
-                --title "Passwall Packages (${TARGET})" \
+                --title "Passwall Packages" \
                 --notes-file /tmp/release_notes.md \
                 --latest=false \
                 $(echo "$SDK_FILES")
@@ -1888,4 +2025,61 @@ jobs:
             echo "✅ [${TARGET}] SDK passwall 已发布到 ${PW_TAG}"
           done
 
+          # ── 发布 compile-passwall 构建的 passwall ──
+          for pw_dir in artifacts/*-passwall-build-info; do
+            [ -d "$pw_dir" ] || continue
+            INFO_FILE="$pw_dir/build-info.json"
+            [ -f "$INFO_FILE" ] || continue
+            TARGET=$(jq -r '.target' "$INFO_FILE")
+            PW_TAG=$(jq -r '.passwall_tag // "packages"' "$INFO_FILE")
+            PW_REPO="solarflows/openwrt-packages"
+
+            SDK_DIR="artifacts/${TARGET}-passwall-sdk-pw"
+
+            SDK_FILES=$(find "$SDK_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) 2>/dev/null || true)
+            [ -n "$SDK_FILES" ] || { echo "⏭️ [${TARGET}] 无 passwall 文件"; continue; }
+
+            echo "📤 [${TARGET}] compile-passwall 增量发布 → ${PW_REPO}@${PW_TAG}"
+            if gh release view "$PW_TAG" --repo "$PW_REPO" &>/dev/null; then
+              gh release upload "$PW_TAG" --repo "$PW_REPO" \
+                $(echo "$SDK_FILES") --clobber || echo "::warning::⚠️ [${TARGET}] compile-passwall 上传失败"
+            else
+              note_body="## Passwall Packages\n\ncompile-passwall 构建。\n\n- **${TARGET}**: $(date +'%Y-%m-%d %H:%M')"
+              printf '%b\n' "$note_body" > /tmp/release_notes.md
+              gh release create "$PW_TAG" --repo "$PW_REPO" \
+                --title "Passwall Packages" \
+                --notes-file /tmp/release_notes.md \
+                --latest=false \
+                $(echo "$SDK_FILES")
+            fi
+            echo "✅ [${TARGET}] compile-passwall passwall 已发布到 ${PW_TAG}"
+          done
+
           echo "🎉 全部发布流程完成！"
+
+          # ── 生成组合状态文件并保存到 Cache ──
+          # 仅从固件构建产物（*-build-info，排除 *-passwall-build-info 和 *-sdk-build-info）
+          # 收集 source_sha 和 packages_sha，避免 SDK/Passwall 的空值覆盖固件状态。
+          cat > /tmp/build-state.json <<JSONEOF
+          {
+          $(comma=""; for info in artifacts/*-build-info/build-info.json; do
+            [ -f "$info" ] || continue
+            case "$(basename "$(dirname "$info")")" in
+              *-passwall-*|*-sdk-*) continue ;;
+            esac
+            TARGET=$(jq -r '.target // empty' "$info" 2>/dev/null)
+            SRC_SHA=$(jq -r '.source_sha // empty' "$info" 2>/dev/null)
+            PKG_SHA=$(jq -r '.packages_sha // empty' "$info" 2>/dev/null)
+            [ -z "$TARGET" ] && continue
+            echo "${comma}\"${TARGET}\": {\"source_sha\": \"${SRC_SHA}\", \"packages_sha\": \"${PKG_SHA}\", \"last_build\": \"$(date +'%Y-%m-%d %H:%M:%S')\"}"
+            comma=","
+          done)
+          }
+JSONEOF
+        cp /tmp/build-state.json build-state.json
+
+      - name: 💾 Save build state to cache
+        uses: actions/cache/save@v5
+        with:
+          key: immwrt-state-${{ github.run_id }}
+          path: build-state.json
