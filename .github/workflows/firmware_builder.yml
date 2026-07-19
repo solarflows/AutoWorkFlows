@@ -24,7 +24,7 @@ on:
           - 'packages'   # 强制编译软件包 (SDK / 自控 Docker)
           - 'passwall'   # 强制仅编译 passwall (gh-action-sdk)
       cache_strategy:
-        description: '缓存策略'
+        description: '缓存策略 (仅 firmware 模式生效)'
         required: false
         default: 'smart'
         type: choice
@@ -35,17 +35,17 @@ on:
           - 'clean-all'        # 清除所有缓存
       # ── 开关类 ──
       skip_upstream:
-        description: '跳过上游同步（节省时间）'
+        description: '跳过上游同步 (节省时间)'
         required: false
         default: false
         type: boolean
       use_ccache:
-        description: '启用 ccache 编译缓存'
+        description: '启用 ccache (仅 firmware 模式生效)'
         required: false
         default: true
         type: boolean
       free_disk_space:
-        description: '清理磁盘空间（编译仅需约30G，Runner默认约89G可用，通常无需开启）'
+        description: '清理磁盘空间 (仅 firmware/packages 模式生效，Runner 默认约89G可用，通常无需开启)'
         required: false
         default: false
         type: boolean
