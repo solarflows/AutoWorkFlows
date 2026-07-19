@@ -2075,8 +2075,8 @@ jobs:
             comma=","
           done)
           }
-JSONEOF
-        cp /tmp/build-state.json build-state.json
+          JSONEOF
+          cp /tmp/build-state.json build-state.json
 
       - name: 💾 Save build state to cache
         uses: actions/cache/save@v5
