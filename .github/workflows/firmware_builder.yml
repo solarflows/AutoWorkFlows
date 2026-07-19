@@ -1527,6 +1527,7 @@ jobs:
           FEED_DIR: ${{ github.workspace }}
           PRIVATE_KEY: ${{ secrets.APK_BUILD_KEY }}
           IGNORE_ERRORS: 1 # 防止单个软件包的错误导致整个工作流的失败
+          NO_REFRESH_CHECK: 1 # 跳过 patch 变脏检测（SDK 基线偏移 → quilt 刷新后 diff 非空）
 
       # gh-action-sdk 内部 docker/build-push-action 每次产生数 GB Docker 镜像层缓存。
       # gh-action-sdk 内部 docker/build-push-action 每次产生数 GB Docker 镜像层缓存。
