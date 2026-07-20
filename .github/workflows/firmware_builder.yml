@@ -136,6 +136,30 @@ jobs:
           echo "sync_id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "📋 Run ID: $RUN_ID"
 
+      # -------- 清理前次运行遗留的 stale draft releases --------
+      # 防止构建失败/取消后 draft release 残留在 Releases 列表中。
+      # 匹配本工作流创建的 draft 格式: "<target> Build V*"
+      - name: 🧹 Purge stale draft releases
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          echo "🧹 扫描 stale draft releases..."
+          STALE_IDS=$(gh api \
+            "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '[.[] | select(.draft and (.name | test("Build V")))] | .[].id' 2>/dev/null || true)
+          if [ -n "$STALE_IDS" ]; then
+            COUNT=$(echo "$STALE_IDS" | wc -w)
+            echo "🗑️ 发现 ${COUNT} 个 stale draft release，清理中..."
+            for ID in $STALE_IDS; do
+              gh api -X DELETE "repos/${{ github.repository }}/releases/$ID" 2>/dev/null && \
+                echo "  🗑️ 已删除 release ID: $ID" || \
+                echo "  ⚠️ 删除失败 (ID: $ID)，可能已被其他进程清理"
+            done
+            echo "✅ stale draft 清理完成"
+          else
+            echo "✅ 无 stale draft release"
+          fi
+
       # -------- 等待上游同步（串行，可跳过） --------
       - name: ⏳ Wait for upstream workflows
         if: github.event.inputs.skip_upstream != 'true'
@@ -351,7 +375,8 @@ jobs:
             fi
           fi
 
-      # -------- 创建 Draft Release --------
+      # -------- 创建 Draft Release（按 commit SHA 复用） --------
+      # 如果已有相同 commit SHA 的 release（上次运行构建失败遗留），则复用而非新建。
       - name: Create draft release
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -369,7 +394,25 @@ jobs:
               # 将分支名/ref 解析为 commit SHA，确保 targetCommitish 是 SHA 而非分支名
               RESOLVED_SHA=$(git ls-remote "https://github.com/${REPO}" "${REF}" 2>/dev/null | cut -f1 | head -1)
               [ -z "$RESOLVED_SHA" ] && RESOLVED_SHA="$REF"  # 降级：ls-remote 失败时用原始 ref
-              if ! gh release view "${VERSION}" --repo "$REPO" &>/dev/null; then
+
+              # ── 按 commit SHA 查找已有 release ──
+              EXISTING_TAG=$(gh api \
+                "repos/${REPO}/releases?per_page=100" \
+                --jq --arg sha "$RESOLVED_SHA" --arg target "$TARGET" \
+                '[.[] | select(.target_commitish == $sha and (.name | contains($target)))] | first | .tag_name // empty' \
+                2>/dev/null || true)
+
+              if [ -n "$EXISTING_TAG" ]; then
+                echo "♻️ 发现同 commit 的已有 release: ${REPO}@${EXISTING_TAG} → 复用"
+                # 更新 title 和 notes，强制设为 draft（编译完成后 publish_target 会设 --draft=false）。
+                # 若复用的是已发布 release，必须转回 draft，否则 compile-firmware 失败时
+                # Cleanup 步骤按版本 tag 找不到它（tag 是旧版本），release 会残留为 published。
+                gh release edit "${EXISTING_TAG}" --repo "$REPO" \
+                  --title "${TARGET} Build ${VERSION}" \
+                  --draft \
+                  --notes "🔨 构建中..." 2>/dev/null || true
+                echo "📝 已复用 Release: ${REPO}@${EXISTING_TAG} → draft (commit: ${RESOLVED_SHA:0:7})"
+              elif ! gh release view "${VERSION}" --repo "$REPO" &>/dev/null; then
                 if gh release create "${VERSION}" --repo "$REPO" \
                   --target "${RESOLVED_SHA}" \
                   --title "${TARGET} Build ${VERSION}" --draft \
@@ -378,6 +421,8 @@ jobs:
                 else
                   echo "⚠️ Release ${VERSION} 已存在（并发创建），跳过"
                 fi
+              else
+                echo "ℹ️ Release ${VERSION} 已存在，跳过创建"
               fi
             done
           fi
@@ -1407,21 +1452,19 @@ jobs:
           retention-days: 7
 
       # ───────── 失败/取消时清理 Draft Release ─────────
+      # 无条件删除：构建失败时 release 一定是无用的 draft，不需要先检查状态。
       - name: 🧹 Cleanup draft release on failure
         if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           VERSION="${{ needs.plan.outputs.version }}"
-          echo "🧹 构建失败或取消，清理 draft release ${VERSION} ..."
-          # 仅删除仍为 draft 状态的 release（已被其他 job 发布的则跳过）
-          IS_DRAFT=$(gh release view "${VERSION}" --repo ${{ matrix.release_repo }} \
-            --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
-          if [ "$IS_DRAFT" = "true" ]; then
+          echo "🧹 构建失败或取消，清理 release ${VERSION} ..."
+          if gh release view "${VERSION}" --repo ${{ matrix.release_repo }} &>/dev/null; then
             gh release delete "${VERSION}" --repo ${{ matrix.release_repo }} --yes 2>/dev/null || true
-            echo "🗑️ Draft release ${VERSION} 已删除"
+            echo "🗑️ Release ${VERSION} 已删除"
           else
-            echo "ℹ️ Release ${VERSION} 非 draft 或已不存在，跳过清理"
+            echo "ℹ️ Release ${VERSION} 不存在，跳过清理"
           fi
 
   # ========== Passwall 软件包构建（仅 passwall 包变更时） ==========
@@ -1831,6 +1874,32 @@ jobs:
 
       - name: Remove failed build logs
         run: rm -rf artifacts/*-build-log 2>/dev/null || true
+
+      # ── 清理 stale draft releases（发布前最终兜底）──
+      # 确保 release 列表中不会残留前次失败运行的 draft。
+      # 同时清理本次运行中 compile-firmware 未能清理的 draft（如 plan 创建了 draft
+      # 但编译 job 未执行 —— should_build_firmware 从 true 变为 false 的边界情况）。
+      # ⚠️ 排除当前版本（needs.plan.outputs.version），避免删除刚创建待发布的 draft。
+      - name: 🧹 Purge stale drafts before publish
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          CURRENT_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          echo "🧹 发布前清理 stale drafts（排除当前版本: ${CURRENT_VERSION}）..."
+          STALE_IDS=$(gh api \
+            "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq --arg ver "$CURRENT_VERSION" \
+            '[.[] | select(.draft and (.name | test("Build V")) and (.tag_name != $ver))] | .[].id' 2>/dev/null || true)
+          if [ -n "$STALE_IDS" ]; then
+            COUNT=$(echo "$STALE_IDS" | wc -w)
+            echo "🗑️ 发现 ${COUNT} 个 stale draft，清理中..."
+            for ID in $STALE_IDS; do
+              gh api -X DELETE "repos/${{ github.repository }}/releases/$ID" 2>/dev/null || true
+            done
+            echo "✅ stale drafts 已清理"
+          else
+            echo "✅ 无 stale draft"
+          fi
 
       - name: Publish all targets
         env:
