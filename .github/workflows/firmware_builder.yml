@@ -1157,9 +1157,21 @@ jobs:
           cd openwrt
           FAILED_PKGS=""
 
-          # ── 判断失败阶段：检查 logs/ 目录是否存在且有内容 ──
-          if [ -d logs ] && [ -n "$(find logs -name 'compile.txt' -type f 2>/dev/null | head -1)" ]; then
-            # 有 logs/ 目录 → 编译阶段失败
+          # ── 判断失败阶段：优先检查 download.txt（下载阶段），再检查 compile.txt（编译阶段）──
+          HAS_DOWNLOAD_LOGS=false
+          HAS_COMPILE_LOGS=false
+
+          if [ -d logs ]; then
+            if [ -n "$(find logs -name 'download.txt' -type f 2>/dev/null | head -1)" ]; then
+              HAS_DOWNLOAD_LOGS=true
+            fi
+            if [ -n "$(find logs -name 'compile.txt' -type f 2>/dev/null | head -1)" ]; then
+              HAS_COMPILE_LOGS=true
+            fi
+          fi
+
+          if [ "$HAS_COMPILE_LOGS" = "true" ]; then
+            # 有 compile.txt → 编译阶段失败
             echo "## ❌ 编译错误详情" >> "$GITHUB_STEP_SUMMARY"
 
             # 扫描 logs/ 中所有未正常完成的编译日志（末行不含 time: 标记的为失败）
@@ -1196,39 +1208,75 @@ jobs:
               grep -E 'make\[[0-9]+\].*(Error [0-9]+|Stop\.?)$' build.log 2>/dev/null | head -40 >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
             fi
-          else
-            # 无 logs/ 目录 → 下载阶段失败（make download 还未生成 logs/）
+          elif [ "$HAS_DOWNLOAD_LOGS" = "true" ]; then
+            # 有 download.txt 但无 compile.txt → 下载阶段失败
             echo "## ❌ 下载失败详情" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
 
-            # 从 build.log 提取下载失败的包
-            # make download 失败时通常会显示 "make[3]: *** [package/xxx/download] Error 1" 或类似信息
-            FAILED_DOWNLOADS=$(grep -E '(Download failed|make\[[0-9]+\].*\[.*download\].*Error|No rule to make target.*download)' build.log 2>/dev/null | head -30 || true)
+            # 扫描 download.txt 找出失败的包（末行不含 time: 或包含错误信息）
+            FAILED_DOWNLOAD_PKGS=""
+            for logfile in $(find logs -name 'download.txt' -type f 2>/dev/null | sort); do
+              LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+              # 下载成功通常以 time: 结尾，失败则包含错误信息
+              if ! echo "$LAST_LINE" | grep -q '^time:'; then
+                PKG=$(echo "$logfile" | sed 's|logs/||; s|/download.txt||')
+                FAILED_DOWNLOAD_PKGS="$FAILED_DOWNLOAD_PKGS $PKG"
+              fi
+            done
 
-            if [ -n "$FAILED_DOWNLOADS" ]; then
-              echo "以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
+            if [ -n "$FAILED_DOWNLOAD_PKGS" ]; then
+              PKG_COUNT=$(echo "$FAILED_DOWNLOAD_PKGS" | wc -w)
+              echo "共 ${PKG_COUNT} 个软件包下载失败" >> "$GITHUB_STEP_SUMMARY"
               echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo '```text' >> "$GITHUB_STEP_SUMMARY"
-              echo "$FAILED_DOWNLOADS" >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+              for pkg in $FAILED_DOWNLOAD_PKGS; do
+                LOGFILE="logs/${pkg}/download.txt"
+                if [ -f "$LOGFILE" ]; then
+                  echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                  # 过滤 make 目录切换噪音，取最后 60 行有效错误
+                  grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$LOGFILE" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                fi
+              done
             else
-              # 尝试从 make 输出中提取失败的包目录
-              FAILED_PKGS=$(grep -E 'make\[[0-9]+\].*Error [0-9]+' build.log 2>/dev/null | \
-                sed -n 's/.*\[\(.*\)\].*/\1/p' | sort -u | head -20 || true)
-              if [ -n "$FAILED_PKGS" ]; then
-                echo "推测以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
+              # 兜底：从 build.log 提取下载失败信息
+              FAILED_DOWNLOADS=$(grep -E '(Download failed|make\[[0-9]+\].*\[.*download\].*Error|No rule to make target.*download)' build.log 2>/dev/null | head -30 || true)
+
+              if [ -n "$FAILED_DOWNLOADS" ]; then
+                echo "以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
                 echo "" >> "$GITHUB_STEP_SUMMARY"
                 echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                echo "$FAILED_PKGS" >> "$GITHUB_STEP_SUMMARY"
+                echo "$FAILED_DOWNLOADS" >> "$GITHUB_STEP_SUMMARY"
                 echo '```' >> "$GITHUB_STEP_SUMMARY"
               else
-                echo "无法从日志自动提取失败包名，请查看完整 build.log" >> "$GITHUB_STEP_SUMMARY"
-                echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
-                echo '```' >> "$GITHUB_STEP_SUMMARY"
+                # 尝试从 make 输出中提取失败的包目录
+                FAILED_PKGS=$(grep -E 'make\[[0-9]+\].*Error [0-9]+' build.log 2>/dev/null | \
+                  sed -n 's/.*\[\(.*\)\].*/\1/p' | sort -u | head -20 || true)
+                if [ -n "$FAILED_PKGS" ]; then
+                  echo "推测以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                  echo "$FAILED_PKGS" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                else
+                  echo "无法从日志自动提取失败包名，请查看完整 build.log" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                  tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                fi
               fi
             fi
+          else
+            # 无 logs/ 目录或无 download.txt/compile.txt → 极早期失败或配置错误
+            echo "## ❌ 构建失败详情" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
           # ── 提示初始构建日志（retry 时保存的 build.1.log）──
@@ -1240,10 +1288,12 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### 📋 logs/ 概览" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          TOTAL_LOGS=$(find logs -name 'compile.txt' -type f 2>/dev/null | wc -l)
-          EMPTY_LOGS=$(find logs -name 'compile.txt' -type f -size 0 2>/dev/null | wc -l)
-          echo "总日志数: ${TOTAL_LOGS}"
-          echo "空日志:   ${EMPTY_LOGS}"
+          TOTAL_COMPILE=$(find logs -name 'compile.txt' -type f 2>/dev/null | wc -l)
+          TOTAL_DOWNLOAD=$(find logs -name 'download.txt' -type f 2>/dev/null | wc -l)
+          EMPTY_COMPILE=$(find logs -name 'compile.txt' -type f -size 0 2>/dev/null | wc -l)
+          EMPTY_DOWNLOAD=$(find logs -name 'download.txt' -type f -size 0 2>/dev/null | wc -l)
+          echo "编译日志: ${TOTAL_COMPILE} (空: ${EMPTY_COMPILE})"
+          echo "下载日志: ${TOTAL_DOWNLOAD} (空: ${EMPTY_DOWNLOAD})"
           echo "失败包:   ${PKG_COUNT:-0}"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
