@@ -838,6 +838,18 @@ jobs:
           echo "║  📥 4. Download Source Packages      ║"
           echo "╚══════════════════════════════════════╝"
           cd openwrt
+
+          # ── 加速下载：跳过慢镜像 ──
+          # GHA Runner 网络直连 upstream 源通常最快，而 projectmirrors 里的
+          # 国内镜像（iscas/ustc等）对 GHA 海外 IP 可能反而慢且有断流风险。
+          # CURL_OPTIONS 在每个镜像下载时生效：
+          #   --connect-timeout 10  连接超时 10 秒
+          #   --max-time 180        单次下载最长 3 分钟（含重定向）
+          #   --retry 1             失败后重试 1 次
+          # download.pl 本身也会遍历所有镜像回退，所以单个镜像快速失败后
+          # 会立即尝试下一个，不会浪费时间等待慢镜像。
+          export CURL_OPTIONS="--connect-timeout 10 --retry 1 --max-time 180"
+
           echo "📥 下载源码包 (并行 $(nproc) 线程, 超时 30 分钟)..."
           timeout 1800 make download -j$(nproc) || {
             echo "⚠️ make download 超时或失败，重试单线程..."
