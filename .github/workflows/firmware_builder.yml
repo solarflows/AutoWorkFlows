@@ -831,6 +831,7 @@ jobs:
           grep 'IMG_PREFIX_VERNUM' include/image.mk || true
 
       - name: 📥 4. Download Source Packages
+        id: download
         run: |
           set -euo pipefail
           echo "╔══════════════════════════════════════╗"
@@ -1037,9 +1038,9 @@ jobs:
           echo "duration_fmt=${TOTAL_FMT}" >> $GITHUB_OUTPUT
           echo "⏱️ 总编译耗时: ${TOTAL_FMT} (并行 ${BUILD_DUR}s + 重试 ${RETRY_DUR}s)"
 
-      # ───────── 编译日志统计 ─────────
+      # ───────── 编译日志统计（仅成功时运行，避免污染失败 Summary）─────────
       - name: 📊 Build Log Analysis
-        if: always()
+        if: success()
         run: |
           cd openwrt
 
@@ -1149,48 +1150,85 @@ jobs:
             } | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
-      # ───────── 编译错误诊断 ─────────
+      # ───────── 编译/下载错误诊断（统一处理）─────────
       - name: 🔍 Build Error Diagnostics
         if: failure()
         run: |
           cd openwrt
           FAILED_PKGS=""
 
-          echo "## ❌ 编译错误详情" >> "$GITHUB_STEP_SUMMARY"
+          # ── 判断失败阶段：检查 logs/ 目录是否存在且有内容 ──
+          if [ -d logs ] && [ -n "$(find logs -name 'compile.txt' -type f 2>/dev/null | head -1)" ]; then
+            # 有 logs/ 目录 → 编译阶段失败
+            echo "## ❌ 编译错误详情" >> "$GITHUB_STEP_SUMMARY"
 
-          # 扫描 logs/ 中所有未正常完成的编译日志（末行不含 time: 标记的为失败）
-          for logfile in $(find logs -name 'compile.txt' -type f 2>/dev/null | sort); do
-            LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
-            if ! echo "$LAST_LINE" | grep -q '^time:'; then
-              PKG=$(echo "$logfile" | sed 's|logs/||; s|/compile.txt||')
-              FAILED_PKGS="$FAILED_PKGS $PKG"
-            fi
-          done
-
-          if [ -n "$FAILED_PKGS" ]; then
-            PKG_COUNT=$(echo "$FAILED_PKGS" | wc -w)
-            echo "共 ${PKG_COUNT} 个软件包编译失败" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-
-            for pkg in $FAILED_PKGS; do
-              LOGFILE="logs/${pkg}/compile.txt"
-              if [ -f "$LOGFILE" ]; then
-                echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
-                echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                # 过滤 make 目录切换噪音，取最后 60 行有效错误
-                grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$LOGFILE" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
-                echo '```' >> "$GITHUB_STEP_SUMMARY"
-                echo "" >> "$GITHUB_STEP_SUMMARY"
+            # 扫描 logs/ 中所有未正常完成的编译日志（末行不含 time: 标记的为失败）
+            for logfile in $(find logs -name 'compile.txt' -type f 2>/dev/null | sort); do
+              LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+              if ! echo "$LAST_LINE" | grep -q '^time:'; then
+                PKG=$(echo "$logfile" | sed 's|logs/||; s|/compile.txt||')
+                FAILED_PKGS="$FAILED_PKGS $PKG"
               fi
             done
+
+            if [ -n "$FAILED_PKGS" ]; then
+              PKG_COUNT=$(echo "$FAILED_PKGS" | wc -w)
+              echo "共 ${PKG_COUNT} 个软件包编译失败" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+
+              for pkg in $FAILED_PKGS; do
+                LOGFILE="logs/${pkg}/compile.txt"
+                if [ -f "$LOGFILE" ]; then
+                  echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                  # 过滤 make 目录切换噪音，取最后 60 行有效错误
+                  grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$LOGFILE" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                fi
+              done
+            else
+              echo "未在 logs/ 中找到失败软件包（编译可能在其他阶段出错）" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo '```text' >> "$GITHUB_STEP_SUMMARY"
+              # 从 build.log 提取 make 错误摘要
+              grep -E 'make\[[0-9]+\].*(Error [0-9]+|Stop\.?)$' build.log 2>/dev/null | head -40 >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
-            echo "未在 logs/ 中找到失败软件包（编译可能在其他阶段出错）" >> "$GITHUB_STEP_SUMMARY"
+            # 无 logs/ 目录 → 下载阶段失败（make download 还未生成 logs/）
+            echo "## ❌ 下载失败详情" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo '```text' >> "$GITHUB_STEP_SUMMARY"
-            # 从 build.log 提取 make 错误摘要
-            grep -E 'make\[[0-9]+\].*(Error [0-9]+|Stop\.?)$' build.log 2>/dev/null | head -40 >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+            # 从 build.log 提取下载失败的包
+            # make download 失败时通常会显示 "make[3]: *** [package/xxx/download] Error 1" 或类似信息
+            FAILED_DOWNLOADS=$(grep -E '(Download failed|make\[[0-9]+\].*\[.*download\].*Error|No rule to make target.*download)' build.log 2>/dev/null | head -30 || true)
+
+            if [ -n "$FAILED_DOWNLOADS" ]; then
+              echo "以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo '```text' >> "$GITHUB_STEP_SUMMARY"
+              echo "$FAILED_DOWNLOADS" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            else
+              # 尝试从 make 输出中提取失败的包目录
+              FAILED_PKGS=$(grep -E 'make\[[0-9]+\].*Error [0-9]+' build.log 2>/dev/null | \
+                sed -n 's/.*\[\(.*\)\].*/\1/p' | sort -u | head -20 || true)
+              if [ -n "$FAILED_PKGS" ]; then
+                echo "推测以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                echo "$FAILED_PKGS" >> "$GITHUB_STEP_SUMMARY"
+                echo '```' >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "无法从日志自动提取失败包名，请查看完整 build.log" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+                echo '```' >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
           fi
 
           # ── 提示初始构建日志（retry 时保存的 build.1.log）──
@@ -1581,11 +1619,15 @@ jobs:
             "packages_branch": "${{ matrix.packages_branch }}",
             "packages_sha": "${PKG_COMMIT_FULL}",
             "packages_commit": "${PKG_COMMIT}",
+            "packages_commit_full": "${PKG_COMMIT_FULL}",
             "source_sha": "",
-            "release_repo": "${{ matrix.release_repo }}",
+            "packages_format": "${PKG_FORMAT}",
+            "sdk_container": "${{ matrix.sdk_container }}",
+            "sdk_packages": "${{ matrix.sdk_packages }}",
+            "release_tag": "${{ needs.plan.outputs.sdk_version }}",
             "passwall_repo": "${{ matrix.passwall_repo }}",
             "passwall_tag": "${{ matrix.passwall_tag }}",
-            "packages_format": "${PKG_FORMAT}",
+            "release_repo": "${{ matrix.passwall_repo }}",
             "apk_signing": ${{ matrix.apk_signing }},
             "file_count": "${{ steps.artifacts.outputs.file_count }}",
             "timestamp": "$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')"
