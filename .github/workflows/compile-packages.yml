@@ -1,7 +1,7 @@
-# Reusable workflow: build-via-sdk
+# Reusable workflow: compile-packages
 # 使用自建 SDK 编译指定的软件包列表 (替代 v1 的 compile-passwall + compile-packages)
-# 由 firmware_builder_v2.yml 调用
-name: build-via-sdk
+# 由 firmware-build.yml 调用
+name: Compile Packages
 
 on:
   workflow_call:
@@ -31,8 +31,8 @@ env:
   TZ: Asia/Shanghai
 
 jobs:
-  build-via-sdk:
-    name: Build via SDK ${{ inputs.matrix_target }}
+  compile-packages:
+    name: Compile ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:

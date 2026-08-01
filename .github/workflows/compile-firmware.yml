@@ -1,7 +1,7 @@
-# Reusable workflow: build-firmware
+# Reusable workflow: compile-firmware
 # 全量编译 ImmortalWrt 固件 + 产出 SDK / ImageBuilder tarball 上传到 Release
-# 由 firmware_builder_v2.yml (plan job) 调用，workflow_call 触发
-name: build-firmware
+# 由 firmware-build.yml (plan job) 调用，workflow_call 触发
+name: Compile Firmware
 
 on:
   workflow_call:
@@ -43,8 +43,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-firmware:
-    name: Build firmware ${{ inputs.matrix_target }}
+  compile-firmware:
+    name: Compile ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
     timeout-minutes: 480
     env:

@@ -349,23 +349,57 @@ jobs:
           SHOULD_PUB_FW=false
           SHOULD_PUB_PKGS=false
 
+          # 探测自建 SDK/IB 是否已有发布 (首次运行时强制全量编译)
+          FILTERED=$(cat /tmp/filtered_targets.json)
+          SDK_READY=true
+          IB_READY=true
+          for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
+            SDK_TAG=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target==$t) | .sdk_release_tag')
+            SDK_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target==$t) | .sdk_release_repo')
+            IB_TAG=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target==$t) | .ib_release_tag')
+            IB_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target==$t) | .ib_release_repo')
+            gh release download "$SDK_TAG" --repo "$SDK_REPO" --pattern 'index.json' -D /tmp/sdk-probe-"$TARGET" 2>/dev/null || SDK_READY=false
+            gh release download "$IB_TAG" --repo "$IB_REPO" --pattern 'index.json' -D /tmp/ib-probe-"$TARGET" 2>/dev/null || IB_READY=false
+          done
+          echo "SDK_READY=$SDK_READY  IB_READY=$IB_READY"
+
           if [ "$TRIGGER" = "firmware" ]; then
             SHOULD_FW=true; SHOULD_PUB_FW=true
           elif [ "$TRIGGER" = "packages" ]; then
-            SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
+            if [ "$SDK_READY" = "false" ]; then
+              echo "⚠️ SDK 不存在,packages 模式升级为全量编译"
+              SHOULD_FW=true; SHOULD_PUB_FW=true
+            else
+              SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
+            fi
           elif [ "$TRIGGER" = "ib" ]; then
-            SHOULD_IB=true; SHOULD_PUB_FW=true
+            if [ "$IB_READY" = "false" ]; then
+              echo "⚠️ IB 不存在,ib 模式升级为全量编译"
+              SHOULD_FW=true; SHOULD_PUB_FW=true
+            else
+              SHOULD_IB=true; SHOULD_PUB_FW=true
+            fi
           else  # smart
             if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "false" ]; then
               echo "🌀 无变更,跳过所有构建"
             elif [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ]; then
-              SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
+              if [ "$SDK_READY" = "false" ]; then
+                echo "⚠️ SDK 不存在,升级为全量编译"
+                SHOULD_FW=true; SHOULD_PUB_FW=true
+              else
+                SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
+              fi
             elif [ "$SRC_CHANGED" = "true" ] && [ "$HAS_KERNEL" = "true" ]; then
               SHOULD_FW=true; SHOULD_PUB_FW=true
               [ "$PKG_CHANGED" = "true" ] && SHOULD_SDK_PKGS=true && SHOULD_PUB_PKGS=true
             elif [ "$SRC_CHANGED" = "true" ] && [ "$HAS_KERNEL" = "false" ]; then
-              SHOULD_IB=true; SHOULD_PUB_FW=true
-              [ "$PKG_CHANGED" = "true" ] && SHOULD_SDK_PKGS=true && SHOULD_PUB_PKGS=true
+              if [ "$IB_READY" = "false" ]; then
+                echo "⚠️ IB 不存在,升级为全量编译"
+                SHOULD_FW=true; SHOULD_PUB_FW=true
+              else
+                SHOULD_IB=true; SHOULD_PUB_FW=true
+              fi
+              [ "$PKG_CHANGED" = "true" ] && { [ "$SDK_READY" = "false" ] || SHOULD_SDK_PKGS=true; } && SHOULD_PUB_PKGS=true
             fi
           fi
 
@@ -426,18 +460,18 @@ jobs:
             fi
           done
 
-  # ════════════════════ build-firmware (全量编译) ════════════════════
-  build-firmware:
-    name: Firmware ${{ matrix.target }}
+  # ════════════════════ compile-firmware (全量编译) ════════════════════
+  compile-firmware:
+    name: Compile Firmware / ${{ matrix.target }}
     needs: plan
     if: |
       needs.plan.outputs.should_build_firmware == 'true' ||
-      (needs.plan.outputs.should_build_ib == 'true' && needs.build-via-ib.result == 'failure')
+      (needs.plan.outputs.should_build_ib == 'true' && needs.repack-imagebuilder.result == 'failure')
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
-    uses: ./.github/workflows/build-firmware.yml
+    uses: ./.github/workflows/compile-firmware.yml
     with:
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
@@ -467,19 +501,19 @@ jobs:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
     concurrency:
-      group: build-fw-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      group: compile-fw-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
 
-  # ════════════════════ build-via-ib (用 IB 重新打包) ════════════════════
-  build-via-ib:
-    name: Via ImageBuilder ${{ matrix.target }}
+  # ════════════════════ repack-imagebuilder (IB 重新打包) ════════════════════
+  repack-imagebuilder:
+    name: Repack ImageBuilder / ${{ matrix.target }}
     needs: plan
     if: needs.plan.outputs.should_build_ib == 'true'
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
-    uses: ./.github/workflows/build-via-ib.yml
+    uses: ./.github/workflows/repack-imagebuilder.yml
     with:
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
@@ -501,19 +535,19 @@ jobs:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
     concurrency:
-      group: build-ib-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      group: repack-ib-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
 
-  # ════════════════════ build-via-sdk (用 SDK 编译软件包) ════════════════════
-  build-via-sdk:
-    name: Via SDK ${{ matrix.target }}
+  # ════════════════════ compile-packages (SDK 编译软件包) ════════════════════
+  compile-packages:
+    name: Compile Packages / ${{ matrix.target }}
     needs: plan
     if: needs.plan.outputs.should_build_sdk_pkgs == 'true'
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
-    uses: ./.github/workflows/build-via-sdk.yml
+    uses: ./.github/workflows/compile-packages.yml
     with:
       matrix_target:             ${{ matrix.target }}
       matrix_config:             ${{ matrix.config }}
@@ -532,13 +566,13 @@ jobs:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
     concurrency:
-      group: build-sdk-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      group: compile-pkgs-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
 
   # ════════════════════ release: 固件 + 软件包发布 ════════════════════
   release:
     name: Release
-    needs: [plan, build-firmware, build-via-ib, build-via-sdk]
+    needs: [plan, compile-firmware, repack-imagebuilder, compile-packages]
     if: |
       always() &&
       !cancelled() &&
