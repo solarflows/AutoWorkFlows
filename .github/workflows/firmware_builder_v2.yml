@@ -437,7 +437,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
-    uses: ./.github/workflows/build/build-firmware.yml
+    uses: ./.github/workflows/build-firmware.yml
     with:
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
@@ -479,7 +479,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
-    uses: ./.github/workflows/build/build-via-ib.yml
+    uses: ./.github/workflows/build-via-ib.yml
     with:
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
@@ -513,7 +513,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
-    uses: ./.github/workflows/build/build-via-sdk.yml
+    uses: ./.github/workflows/build-via-sdk.yml
     with:
       matrix_target:             ${{ matrix.target }}
       matrix_config:             ${{ matrix.config }}
