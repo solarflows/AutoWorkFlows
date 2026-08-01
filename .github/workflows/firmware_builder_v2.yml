@@ -454,9 +454,8 @@ jobs:
       matrix_ib_release_tag:     ${{ matrix.ib_release_tag }}
       matrix_ib_profile:         ${{ matrix.ib_profile }}
       matrix_ib_keep_versions:    ${{ matrix.ib_keep_versions }}
-      defaults_repo:             ${{ env.DEFAULTS_REPO }}
-      packages_feed_repo:        ${{ matrix.packages_feed_repo || env.PACKAGES_FEED_REPO }}
-      packages_feed_name:        ${{ matrix.packages_feed_name || env.PACKAGES_FEED_NAME }}
+      packages_feed_repo:        ${{ matrix.packages_feed_repo }}
+      packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
       sdk_version:               ${{ needs.plan.outputs.sdk_version }}
       ib_version:                ${{ needs.plan.outputs.ib_version }}
@@ -494,9 +493,8 @@ jobs:
       matrix_ib_release_tag:     ${{ matrix.ib_release_tag }}
       matrix_ib_profile:         ${{ matrix.ib_profile }}
       matrix_apk_signing:        ${{ matrix.apk_signing }}
-      defaults_repo:             ${{ env.DEFAULTS_REPO }}
-      packages_feed_repo:        ${{ matrix.packages_feed_repo || env.PACKAGES_FEED_REPO }}
-      packages_feed_name:        ${{ matrix.packages_feed_name || env.PACKAGES_FEED_NAME }}
+      packages_feed_repo:        ${{ matrix.packages_feed_repo }}
+      packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
       ib_version:                ${{ needs.plan.outputs.ib_version }}
     secrets:
@@ -526,9 +524,8 @@ jobs:
       matrix_sdk_release_repo:   ${{ matrix.sdk_release_repo }}
       matrix_sdk_release_tag:    ${{ matrix.sdk_release_tag }}
       matrix_sdk_packages:       ${{ matrix.sdk_packages }}
-      defaults_repo:             ${{ env.DEFAULTS_REPO }}
-      packages_feed_repo:        ${{ matrix.packages_feed_repo || env.PACKAGES_FEED_REPO }}
-      packages_feed_name:        ${{ matrix.packages_feed_name || env.PACKAGES_FEED_NAME }}
+      packages_feed_repo:        ${{ matrix.packages_feed_repo }}
+      packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
       sdk_version:               ${{ needs.plan.outputs.sdk_version }}
     secrets:
