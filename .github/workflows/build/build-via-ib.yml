@@ -1,0 +1,293 @@
+# Reusable workflow: build-via-ib
+# 使用自建 ImageBuilder 重新打包固件 (远快于全量编译)
+# 由 firmware_builder_v2.yml 调用,失败时由主工作流自动回退到 build-firmware
+name: build-via-ib
+
+on:
+  workflow_call:
+    inputs:
+      # ── 矩阵 target 完整描述 ──
+      matrix_target:             { required: true, type: string }
+      matrix_repo:               { required: true, type: string }
+      matrix_ref:                { required: true, type: string }
+      matrix_config:             { required: true, type: string }
+      matrix_packages_branch:    { required: true, type: string }
+      matrix_release_repo:       { required: true, type: string }
+      matrix_sdk_release_repo:   { required: true, type: string }
+      matrix_sdk_release_tag:    { required: true, type: string }
+      matrix_ib_release_repo:    { required: true, type: string }
+      matrix_ib_release_tag:     { required: true, type: string }
+      matrix_ib_profile:         { required: false, type: string, default: '' }
+      matrix_apk_signing:        { required: true, type: boolean }
+      # ── 默认值（workflow 内置）──
+      defaults_repo:             { required: false, type: string, default: 'solarflows/AutoWorkflows' }
+      packages_feed_repo:        { required: false, type: string, default: 'solarflows/openwrt-packages' }
+      packages_feed_name:        { required: false, type: string, default: 'solarflows' }
+      # ── 全局上下文 ──
+      version:                   { required: true, type: string }
+      ib_version:                { required: true, type: string }
+    secrets:
+      ACCESS_TOKEN:              { required: true }
+      APK_BUILD_KEY:             { required: false }
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build-via-ib:
+    name: Build via ImageBuilder ${{ inputs.matrix_target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARGET: ${{ inputs.matrix_target }}
+    steps:
+      - name: Checkout defaults repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.defaults_repo }}
+          path: AutoWorkFlows
+
+      - name: Resolve IB arch & file name
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          TAG="${{ inputs.matrix_ib_release_tag }}"
+          REPO="${{ inputs.matrix_ib_release_repo }}"
+
+          # 下载 index.json 选择最新版本的文件
+          mkdir -p /tmp/ib_index
+          (cd /tmp/ib_index && gh release download "$TAG" --repo "$REPO" --pattern "index.json" 2>/dev/null) || {
+            echo "::error::IB index.json 不存在,build-via-ib 不可用 (需先跑 build-firmware 生成)"
+            exit 1
+          }
+
+          # index.json 的 key 是源码 VERSION_NUMBER,与本次 run 的 inputs.ib_version
+          # (构建时间戳) 无关,故取 built_at 最新的一条.
+          VERSION=$(jq -r 'to_entries | sort_by(.value.built_at) | last | .key // empty' /tmp/ib_index/index.json)
+          IB_FILE=$(jq -r --arg v "$VERSION" '.[$v].file // empty' /tmp/ib_index/index.json)
+          if [ -z "$IB_FILE" ]; then
+            echo "::error::IB index.json 中无可用版本"
+            jq . /tmp/ib_index/index.json
+            exit 1
+          fi
+          echo "📌 选用最新 IB 版本: ${VERSION}"
+          IB_SHA256=$(jq -r --arg v "$VERSION" '.[$v].sha256 // empty' /tmp/ib_index/index.json)
+          IB_ARCH=$(jq -r --arg v "$VERSION" '.[$v].arch // empty' /tmp/ib_index/index.json)
+          IB_SOURCE_SHA=$(jq -r --arg v "$VERSION" '.[$v].source_sha // empty' /tmp/ib_index/index.json)
+
+          echo "ib_file=${IB_FILE}" >> $GITHUB_OUTPUT
+          echo "ib_sha256=${IB_SHA256}" >> $GITHUB_OUTPUT
+          echo "ib_arch=${IB_ARCH}" >> $GITHUB_OUTPUT
+          echo "ib_source_sha=${IB_SOURCE_SHA}" >> $GITHUB_OUTPUT
+          echo "📋 IB: ${IB_FILE} (sha256: ${IB_SHA256:0:16}...)"
+
+      - name: Download IB tarball
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          mkdir -p ib-dl
+          gh release download "${{ inputs.matrix_ib_release_tag }}" \
+            --repo "${{ inputs.matrix_ib_release_repo }}" \
+            --pattern "${{ steps.resolve.outputs.ib_file }}" \
+            --pattern "${{ steps.resolve.outputs.ib_file }}.sha256" \
+            --dir ib-dl/ 2>/dev/null || {
+              # 旧 sha256 文件名可能不同,fallback
+              gh release download "${{ inputs.matrix_ib_release_tag }}" \
+                --repo "${{ inputs.matrix_ib_release_repo }}" \
+                --pattern "${{ steps.resolve.outputs.ib_file }}" \
+                --dir ib-dl/
+              (cd ib-dl && sha256sum "${{ steps.resolve.outputs.ib_file }}" | awk '{print $1}' > "${{ steps.resolve.outputs.ib_file }}.sha256")
+            }
+          cd ib-dl
+          EXPECTED="${{ steps.resolve.outputs.ib_sha256 }}"
+          ACTUAL=$(awk '{print $1}' "${{ steps.resolve.outputs.ib_file }}.sha256")
+          if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::warning::sha256 与 index.json 记录不符 ($EXPECTED vs $ACTUAL),继续但建议关注"
+          fi
+          sha256sum -c "${{ steps.resolve.outputs.ib_file }}.sha256" || {
+            echo "::error::IB tarball 损坏"
+            exit 1
+          }
+
+      - name: Extract IB
+        run: |
+          mkdir -p ib
+          tar xf ib-dl/${{ steps.resolve.outputs.ib_file }} -C ib/ --strip-components=1
+          echo "IB 解包完成:"
+          ls ib/
+
+      - name: Prepare custom packages
+        id: pkgs_sha
+        run: |
+          # 直接 clone openwrt-packages (IB 路线下,只取源码用于 feeds install;实际编译由 build-via-sdk 完成)
+          # 此处仅 clone 用于记录 packages_sha,不入 IB
+          git clone --depth 1 https://github.com/${{ inputs.packages_feed_repo }}.git pkgs_src -b ${{ inputs.matrix_packages_branch }} 2>/dev/null
+          PKG_SHA=$(git -C pkgs_src rev-parse --short HEAD 2>/dev/null || echo "unknown")
+          PKG_SHA_FULL=$(git -C pkgs_src rev-parse HEAD 2>/dev/null || echo "")
+          echo "packages_sha=${PKG_SHA}" >> $GITHUB_OUTPUT
+          echo "packages_sha_full=${PKG_SHA_FULL}" >> $GITHUB_OUTPUT
+
+      - name: Download pre-built ipks/apks (from build-via-sdk artifact)
+        id: dl_pkgs
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.TARGET }}-sdk-packages
+          path: custom-packages/
+        continue-on-error: true
+
+      - name: Inject custom packages into IB
+        run: |
+          if [ -d custom-packages ] && [ "$(find custom-packages -name '*.ipk' -o -name '*.apk' | head -1)" ]; then
+            echo "📦 注入自编 ipk/apk 到 IB packages/"
+            cp custom-packages/*.ipk custom-packages/*.apk ib/packages/ 2>/dev/null || true
+            echo "  共 $(find custom-packages -name '*.ipk' -o -name '*.apk' | wc -l) 个自编包"
+          else
+            echo "ℹ️ 无预编译包可注入 (build-via-sdk 可能未运行或无产物)"
+          fi
+
+      - name: Assemble PACKAGES list from seed
+        id: pkg_list
+        run: |
+          SEED_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}"
+          # 提取所有 CONFIG_PACKAGE_*=y 的包名,转空格分隔
+          PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' | sort | xargs cat 2>/dev/null | \
+            grep -E '^CONFIG_PACKAGE_[a-zA-Z0-9_-]+=y$' | \
+            sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | \
+            sort -u | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ //;s/ $//')
+          echo "packages=${PACKAGES}" >> $GITHUB_OUTPUT
+          echo "📋 PACKAGES (${#PACKAGES[@]} 个): ${PACKAGES:0:200}..."
+
+      - name: Setup APK Signing Key (for IB apk Signing)
+        if: inputs.matrix_apk_signing == true
+        env:
+          APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APK_BUILD_KEY" ]; then
+            echo "ℹ️ APK_BUILD_KEY 未设置,跳过签名注入"
+            exit 0
+          fi
+          printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > private-key.pem
+          chmod 600 private-key.pem
+          sed -i 's/\r$//' private-key.pem
+          openssl ec -in private-key.pem -pubout -out public-key.pem 2>/dev/null || \
+            openssl rsa -in private-key.pem -pubout -out public-key.pem
+          chmod 644 public-key.pem
+          # IB 读取 BUILD_KEY_APK_SEC / BUILD_KEY_APK_PUB 环境变量
+          echo "BUILD_KEY_APK_SEC=$(pwd)/private-key.pem" >> $GITHUB_ENV
+          echo "BUILD_KEY_APK_PUB=$(pwd)/public-key.pem" >> $GITHUB_ENV
+
+      - name: Build firmware via ImageBuilder
+        id: build
+        run: |
+          cd ib
+          START_TIME=$(date +%s)
+          PROFILE_ARG=""
+          if [ -n "${{ inputs.matrix_ib_profile }}" ]; then
+            PROFILE_ARG="PROFILE=${{ inputs.matrix_ib_profile }}"
+          fi
+
+          # FILES 目录(可选,种子目录下 files/ 子目录)
+          FILES_DIR="../AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}/files"
+          FILES_ARG=""
+          if [ -d "$FILES_DIR" ]; then
+            FILES_ARG="FILES=$FILES_DIR"
+          fi
+
+          # IB make image
+          echo "🔨 make image ${PROFILE_ARG} PACKAGES=\"...\" ${FILES_ARG}"
+          set +e
+          make image $PROFILE_ARG PACKAGES="${{ steps.pkg_list.outputs.packages }}" $FILES_ARG 2>&1 | tee ib-build.log
+          IB_EXIT=${PIPESTATUS[0]}
+          set -e
+
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "ib_exit=${IB_EXIT}" >> $GITHUB_OUTPUT
+          echo "duration=${DURATION}" >> $GITHUB_OUTPUT
+          echo "duration_fmt=$(printf '%dh %dm %ds' $((DURATION/3600)) $(((DURATION%3600)/60)) $((DURATION%60)))" >> $GITHUB_OUTPUT
+
+          if [ "$IB_EXIT" -ne 0 ]; then
+            echo "::error::IB make image 失败 (退出码 $IB_EXIT)"
+            cat ib-build.log | tail -80
+            exit 1
+          fi
+
+          echo "✅ IB 构建完成"
+          ls -la bin/targets/ 2>/dev/null || true
+
+      - name: IB Build Diagnostics
+        if: failure()
+        run: |
+          cd ib
+          echo "## ❌ ImageBuilder 构建失败" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -80 ib-build.log 2>/dev/null >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package firmware artifacts
+        if: success()
+        run: |
+          cd ib
+          mkdir -p ../release/firmware
+          find bin/targets -type f -not -path "*/packages/*" -exec cp {} ../release/firmware/ \; 2>/dev/null || true
+          # IB 不输出 passwall 独立包(passwall 由 build-via-sdk 单独发布)
+          echo "📦 固件: $(find ../release/firmware -type f | wc -l) 个文件"
+
+      - name: Generate build info
+        if: success()
+        run: |
+          cat > build-info.json <<JSONEOF
+          {
+            "target": "${TARGET}",
+            "config": "${{ inputs.matrix_config }}",
+            "source_repo": "${{ inputs.matrix_repo }}",
+            "source_ref": "${{ inputs.matrix_ref }}",
+            "source_sha": "${{ steps.resolve.outputs.ib_source_sha }}",
+            "packages_repo": "${{ inputs.packages_feed_repo }}",
+            "packages_branch": "${{ inputs.matrix_packages_branch }}",
+            "packages_sha": "${{ steps.pkgs_sha.outputs.packages_sha_full }}",
+            "duration_sec": "${{ steps.build.outputs.duration }}",
+            "duration_fmt": "${{ steps.build.outputs.duration_fmt }}",
+            "toolchain_hit": "n/a",
+            "toolchain_exact": "n/a",
+            "ccache_hit": "n/a",
+            "build_mode": "ib",
+            "ib_version": "${{ inputs.ib_version }}",
+            "ib_file": "${{ steps.resolve.outputs.ib_file }}",
+            "release_repo": "${{ inputs.matrix_release_repo }}",
+            "release_tag": "${{ inputs.version }}",
+            "timestamp": "$(TZ=$TZ date +'%Y-%m-%d %H:%M:%S')"
+          }
+          JSONEOF
+
+      - name: Generate release notes
+        if: success()
+        run: |
+          {
+            echo "## ${TARGET} Build (via ImageBuilder)"
+            echo ""
+            echo "**源码**: [${{ inputs.matrix_ref }}](https://github.com/${{ inputs.matrix_repo }}) @ \`${{ steps.resolve.outputs.ib_source_sha }}\`"
+            echo "**IB 版本**: ${{ inputs.ib_version }} (\`${{ steps.resolve.outputs.ib_file }}\`)"
+            echo "**软件包**: [${{ inputs.matrix_packages_branch }}](https://github.com/${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) @ [${{ steps.pkgs_sha.outputs.packages_sha }}](https://github.com/${{ inputs.packages_feed_repo }}/commit/${{ steps.pkgs_sha.outputs.packages_sha_full }})"
+            echo "**编译耗时**: ${{ steps.build.outputs.duration_fmt }}"
+          } > release-body.md
+
+      - name: Upload firmware artifact
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARGET }}-ib-firmware
+          path: release/firmware
+          retention-days: 7
+
+      - name: Upload build info
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARGET }}-ib-build-info
+          path: |
+            build-info.json
+            release-body.md
+          retention-days: 7

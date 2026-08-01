@@ -1,0 +1,280 @@
+# Reusable workflow: build-via-sdk
+# 使用自建 SDK 编译指定的软件包列表 (替代 v1 的 compile-passwall + compile-packages)
+# 由 firmware_builder_v2.yml 调用
+name: build-via-sdk
+
+on:
+  workflow_call:
+    inputs:
+      # ── 矩阵 target 完整描述 ──
+      matrix_target:             { required: true, type: string }
+      matrix_config:             { required: true, type: string }
+      matrix_packages_branch:    { required: true, type: string }
+      matrix_passwall_repo:      { required: true, type: string }
+      matrix_passwall_tag:        { required: true, type: string }
+      matrix_apk_signing:        { required: true, type: boolean }
+      matrix_sdk_release_repo:   { required: true, type: string }
+      matrix_sdk_release_tag:    { required: true, type: string }
+      matrix_sdk_packages:       { required: false, type: string, default: '*' }
+      # ── 默认值（workflow 内置）──
+      defaults_repo:             { required: false, type: string, default: 'solarflows/AutoWorkflows' }
+      packages_feed_repo:        { required: false, type: string, default: 'solarflows/openwrt-packages' }
+      packages_feed_name:        { required: false, type: string, default: 'solarflows' }
+      # ── 全局上下文 ──
+      version:                   { required: true, type: string }
+      sdk_version:               { required: true, type: string }
+    secrets:
+      ACCESS_TOKEN:              { required: true }
+      APK_BUILD_KEY:             { required: false }
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build-via-sdk:
+    name: Build via SDK ${{ inputs.matrix_target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARGET: ${{ inputs.matrix_target }}
+    steps:
+      - name: Checkout defaults repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.defaults_repo }}
+          path: AutoWorkFlows
+
+      - name: Checkout packages feed repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.packages_feed_repo }}
+          ref: ${{ inputs.matrix_packages_branch }}
+          path: pkgs-feed
+          fetch-depth: 1
+
+      - name: Resolve SDK file name
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          TAG="${{ inputs.matrix_sdk_release_tag }}"
+          REPO="${{ inputs.matrix_sdk_release_repo }}"
+
+          mkdir -p /tmp/sdk_index
+          (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "index.json" 2>/dev/null) || {
+            echo "::error::SDK index.json 不存在,build-via-sdk 不可用 (需先跑 build-firmware 生成 SDK)"
+            exit 1
+          }
+
+          # index.json 的 key 是源码 VERSION_NUMBER (如 21.02.7 / SNAPSHOT-20260801),
+          # 与本次 run 的 inputs.sdk_version (构建时间戳) 无关,故取 built_at 最新的一条.
+          VERSION=$(jq -r 'to_entries | sort_by(.value.built_at) | last | .key // empty' /tmp/sdk_index/index.json)
+          SDK_FILE=$(jq -r --arg v "$VERSION" '.[$v].file // empty' /tmp/sdk_index/index.json)
+          if [ -z "$SDK_FILE" ]; then
+            echo "::error::SDK index.json 中无可用版本"
+            jq . /tmp/sdk_index/index.json
+            exit 1
+          fi
+          echo "📌 选用最新 SDK 版本: ${VERSION}"
+          SDK_SHA256=$(jq -r --arg v "$VERSION" '.[$v].sha256 // empty' /tmp/sdk_index/index.json)
+
+          echo "sdk_file=${SDK_FILE}" >> $GITHUB_OUTPUT
+          echo "sdk_sha256=${SDK_SHA256}" >> $GITHUB_OUTPUT
+          echo "📋 SDK: ${SDK_FILE}"
+
+      - name: Download SDK tarball
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          mkdir -p sdk-dl
+          gh release download "${{ inputs.matrix_sdk_release_tag }}" \
+            --repo "${{ inputs.matrix_sdk_release_repo }}" \
+            --pattern "${{ steps.resolve.outputs.sdk_file }}" \
+            --pattern "${{ steps.resolve.outputs.sdk_file }}.sha256" \
+            --dir sdk-dl/ 2>/dev/null || {
+              gh release download "${{ inputs.matrix_sdk_release_tag }}" \
+                --repo "${{ inputs.matrix_sdk_release_repo }}" \
+                --pattern "${{ steps.resolve.outputs.sdk_file }}" \
+                --dir sdk-dl/
+              (cd sdk-dl && sha256sum "${{ steps.resolve.outputs.sdk_file }}" | awk '{print $1}' > "${{ steps.resolve.outputs.sdk_file }}.sha256")
+            }
+          cd sdk-dl
+          sha256sum -c "${{ steps.resolve.outputs.sdk_file }}.sha256" || {
+            echo "::error::SDK tarball 损坏"
+            exit 1
+          }
+
+      - name: Extract SDK
+        run: |
+          mkdir -p sdk
+          tar xf sdk-dl/${{ steps.resolve.outputs.sdk_file }} -C sdk/ --strip-components=1
+          echo "SDK 解包完成"
+          ls sdk/
+
+      - name: Setup APK Signing Key
+        if: inputs.matrix_apk_signing == true
+        env:
+          APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
+        run: |
+          if [ -z "$APK_BUILD_KEY" ]; then
+            echo "ℹ️ APK_BUILD_KEY 未设置,跳过"
+            exit 0
+          fi
+          printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > private-key.pem
+          chmod 600 private-key.pem
+          sed -i 's/\r$//' private-key.pem
+          openssl ec -in private-key.pem -pubout -out public-key.pem 2>/dev/null || \
+            openssl rsa -in private-key.pem -pubout -out public-key.pem
+          chmod 644 public-key.pem
+
+      - name: Resolve SDK packages
+        id: resolve-pkgs
+        run: |
+          SDK_PKGS="${{ inputs.matrix_sdk_packages }}"
+          if [ "$SDK_PKGS" = "*" ]; then
+            CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}/sdk.config"
+            if [ -f "$CONFIG_FILE" ]; then
+              # 提取 CONFIG_PACKAGE_*=y 的包名,处理多子包目录折叠
+              SDK_PKGS=$(grep '^CONFIG_PACKAGE_.*=[ym]' "$CONFIG_FILE" | sed 's/CONFIG_PACKAGE_\(.*\)=[ym]/\1/' | tr '\n' ' ')
+              SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/shadowsocksr-libev-ssr-[^ ]*/shadowsocksr-libev/g')
+              SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/simple-obfs-client/simple-obfs/g')
+              SDK_PKGS=$(echo "$SDK_PKGS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+              # 传给 make 的列表: 移除 luci-i18n-* (随父 luci app 自动编译)
+              BUILD_PKGS=$(echo "$SDK_PKGS" | sed 's/luci-i18n-[^ ]*//g' | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+            else
+              echo "::warning::sdk.config 不存在"
+              SDK_PKGS=""
+              BUILD_PKGS=""
+            fi
+          else
+            BUILD_PKGS="$SDK_PKGS"
+          fi
+          echo "packages=${BUILD_PKGS}" >> $GITHUB_OUTPUT
+          echo "collect_packages=${SDK_PKGS}" >> $GITHUB_OUTPUT
+
+      - name: Build packages via SDK
+        if: steps.resolve-pkgs.outputs.packages != ''
+        id: compile
+        run: |
+          PACKAGES="${{ steps.resolve-pkgs.outputs.packages }}"
+          echo "📦 待编译: ${PACKAGES}"
+
+          # 直接在 host 上使用自建 SDK (已含工具链,无需 docker 镜像)
+          # 这也实现了「不再依赖 ghcr.io/openwrt/sdk:* 上游 Docker 容器」的目标
+          cd sdk
+
+          # feeds.conf: 指向 checkout 出的 pkgs-feed (深度 1)
+          echo "src-link ${{ inputs.packages_feed_name }} ${{ github.workspace }}/pkgs-feed/" >> feeds.conf
+
+          # apk 签名: 私钥放在 SDK 根目录 (OpenWrt 构建系统读取 ./private-key.pem)
+          if [ "${{ inputs.matrix_apk_signing }}" = "true" ] && [ -f ../private-key.pem ]; then
+            cp ../private-key.pem ./private-key.pem
+            chmod 600 ./private-key.pem
+            cp ../public-key.pem ./public-key.pem 2>/dev/null || true
+          fi
+
+          echo "::group::📋 Configure feeds"
+          ./scripts/feeds update -a 2>&1
+          make defconfig 2>&1
+          echo "::endgroup::"
+
+          # 按列表逐包编译 (失败不阻断,最后由 artifacts 统计结果)
+          for pkg in $PACKAGES; do
+            echo "::group::📦 Compile $pkg"
+            ./scripts/feeds install -p ${{ inputs.packages_feed_name }} -f "$pkg" 2>&1
+            make package/"$pkg"/download V=s 2>&1
+            make package/"$pkg"/compile \
+              BUILD_LOG=1 V=s -j$(nproc 2>/dev/null || echo 4) 2>&1 || \
+              echo "::warning::⚠️ $pkg build failed, continuing"
+            echo "::endgroup::"
+          done
+
+      - name: Collect artifacts
+        id: artifacts
+        run: |
+          mkdir -p upload
+          SDK_PKGS="${{ steps.resolve-pkgs.outputs.collect_packages }}"
+          if [ -z "$SDK_PKGS" ]; then
+            echo "⚠️ 无软件包列表,跳过收集"
+          else
+            for pkg in $SDK_PKGS; do
+              find sdk/bin/packages/ -type f \( \
+                -name "${pkg}_*.ipk" -o \
+                -name "${pkg}_*.apk" -o \
+                -name "${pkg}*.ipk" -o \
+                -name "${pkg}*.apk" \
+              \) -exec cp {} upload/ \; 2>/dev/null || true
+            done
+          fi
+          if [ -f public-key.pem ]; then
+            cp public-key.pem upload/solarflows-apk-public.pem
+          fi
+          FILE_COUNT=$(find upload/ -type f 2>/dev/null | wc -l)
+          echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
+          echo "📦 收集到 ${FILE_COUNT} 个文件"
+          ls -la upload/ 2>/dev/null || echo "  (空)"
+
+      - name: Generate build info
+        if: steps.artifacts.outputs.file_count > 0
+        run: |
+          PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
+          PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
+          PKG_FORMAT="${{ inputs.matrix_apk_signing == true && 'apk' || 'ipk' }}"
+          cat > build-info.json <<JSONEOF
+          {
+            "target": "${TARGET}",
+            "config": "${{ inputs.matrix_config }}",
+            "packages_repo": "${{ inputs.packages_feed_repo }}",
+            "packages_branch": "${{ inputs.matrix_packages_branch }}",
+            "packages_sha": "${PKG_COMMIT_FULL}",
+            "packages_commit": "${PKG_COMMIT}",
+            "packages_format": "${PKG_FORMAT}",
+            "sdk_version": "${{ inputs.sdk_version }}",
+            "sdk_file": "${{ steps.resolve.outputs.sdk_file }}",
+            "build_mode": "sdk",
+            "release_tag": "${{ inputs.version }}",
+            "passwall_repo": "${{ inputs.matrix_passwall_repo }}",
+            "passwall_tag": "${{ inputs.matrix_passwall_tag }}",
+            "release_repo": "${{ inputs.matrix_passwall_repo }}",
+            "apk_signing": ${{ inputs.matrix_apk_signing }},
+            "file_count": "${{ steps.artifacts.outputs.file_count }}",
+            "timestamp": "$(TZ=$TZ date +'%Y-%m-%d %H:%M:%S')"
+          }
+          JSONEOF
+
+      - name: Upload packages artifact
+        if: steps.artifacts.outputs.file_count > 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARGET }}-sdk-packages
+          path: upload/
+          retention-days: 7
+
+      - name: Upload build info
+        if: steps.artifacts.outputs.file_count > 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARGET }}-sdk-build-info
+          path: build-info.json
+          retention-days: 7
+
+      - name: SDK Build Diagnostics
+        if: failure()
+        run: |
+          echo "## ❌ SDK 软件包构建失败" >> "$GITHUB_STEP_SUMMARY"
+          if [ -d sdk/logs ]; then
+            for logfile in $(find sdk/logs -name 'compile.txt' -type f | sort); do
+              LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+              if ! echo "$LAST_LINE" | grep -q '^time:'; then
+                PKG=$(echo "$logfile" | sed 's|.*logs/||; s|/compile.txt||')
+                echo "### ❌ ${PKG}" >> "$GITHUB_STEP_SUMMARY"
+                echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$logfile" 2>/dev/null | tail -50 >> "$GITHUB_STEP_SUMMARY"
+                echo '```' >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done
+          else
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            tail -50 sdk/ib-build.log 2>/dev/null >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi

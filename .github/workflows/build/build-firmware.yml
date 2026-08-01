@@ -1,0 +1,574 @@
+# Reusable workflow: build-firmware
+# 全量编译 ImmortalWrt 固件 + 产出 SDK / ImageBuilder tarball 上传到 Release
+# 由 firmware_builder_v2.yml (plan job) 调用，workflow_call 触发
+name: build-firmware
+
+on:
+  workflow_call:
+    inputs:
+      # ── 矩阵 target 完整描述（已经合并 defaults 后的对象）──
+      matrix_target:        { required: true, type: string }
+      matrix_repo:          { required: true, type: string }
+      matrix_ref:           { required: true, type: string }
+      matrix_config:       { required: true, type: string }
+      matrix_packages_branch: { required: true, type: string }
+      matrix_release_repo:  { required: true, type: string }
+      matrix_passwall_repo: { required: true, type: string }
+      matrix_passwall_tag:  { required: true, type: string }
+      matrix_apk_signing:   { required: true, type: boolean }
+      matrix_sdk_release_repo: { required: true, type: string }
+      matrix_sdk_release_tag:  { required: true, type: string }
+      matrix_ib_release_repo:  { required: true, type: string }
+      matrix_ib_release_tag:   { required: true, type: string }
+      matrix_ib_keep_versions: { required: true, type: number  }
+      matrix_ib_profile:       { required: false, type: string, default: '' }
+      # ── 默认值（workflow 内置;调用方不传则用这里,见 firmware_builder_v2 env）──
+      defaults_repo:        { required: false, type: string, default: 'solarflows/AutoWorkflows' }
+      packages_feed_repo:   { required: false, type: string, default: 'solarflows/openwrt-packages' }
+      packages_feed_name:   { required: false, type: string, default: 'solarflows' }
+      # ── 全局上下文 ──
+      version:              { required: true, type: string }
+      sdk_version:          { required: true, type: string }
+      ib_version:           { required: true, type: string }
+      cache_strategy:       { required: false, type: string, default: 'smart' }
+      use_ccache:           { required: false, type: boolean, default: true }
+      free_disk_space:      { required: false, type: boolean, default: false }
+      publish_sdk_ib:       { required: false, type: boolean, default: true }
+    secrets:
+      ACCESS_TOKEN:         { required: true }
+      APK_BUILD_KEY:        { required: false }
+
+env:
+  TZ: Asia/Shanghai
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-firmware:
+    name: Build firmware ${{ inputs.matrix_target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 480
+    env:
+      TARGET: ${{ inputs.matrix_target }}
+    steps:
+      - name: Checkout defaults repo (AutoWorkflows)
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.defaults_repo }}
+          path: AutoWorkFlows
+
+      - name: Checkout Source Repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.matrix_repo }}
+          ref: ${{ inputs.matrix_ref }}
+          path: openwrt
+          fetch-depth: 1
+
+      - name: Get source & clone packages
+        id: clone_packages
+        run: |
+          cd openwrt
+          SHA=$(git rev-parse --short HEAD)
+          SHA_FULL=$(git rev-parse HEAD)
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+          echo "sha_full=${SHA_FULL}" >> $GITHUB_OUTPUT
+
+          git clone --depth 1 https://github.com/${{ inputs.packages_feed_repo }}.git package/${{ inputs.packages_feed_name }} -b ${{ inputs.matrix_packages_branch }}
+          PKG_SHA=$(git -C package/${{ inputs.packages_feed_name }} rev-parse --short HEAD)
+          PKG_SHA_FULL=$(git -C package/${{ inputs.packages_feed_name }} rev-parse HEAD)
+          echo "packages_sha=${PKG_SHA}" >> $GITHUB_OUTPUT
+          echo "packages_sha_full=${PKG_SHA_FULL}" >> $GITHUB_OUTPUT
+
+      - name: Disk space - Initial
+        id: disk-1
+        run: |
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          AVAIL_GB=$(($(df --output=avail / | tail -1) / 1024 / 1024))
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+
+      - name: Compute toolchain hash
+        id: toolchain_hash
+        run: |
+          HASH=$(git -C openwrt log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
+          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
+            HASH="force-${HASH}"
+          fi
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+
+      - name: Prepare Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt -y purge firefox 2>/dev/null || true
+          sudo -E apt update
+          sudo -E apt -yqq full-upgrade
+          sudo -E apt -yqq autoremove --purge
+          sudo -E apt -yqq autoclean
+          sudo -E apt -yqq clean
+          sudo -E apt -yqq install dos2unix libfuse-dev
+          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.eu.org/init_build_environment.sh)'
+          sudo -E systemctl daemon-reload
+          sudo timedatectl set-timezone "$TZ"
+
+      - name: Free Disk Space
+        if: inputs.free_disk_space == true
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Restore toolchain cache
+        id: cache-tc
+        uses: actions/cache@v5
+        with:
+          key: immwrt-toolchain-${{ env.TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          restore-keys: |
+            immwrt-toolchain-${{ env.TARGET }}-
+          path: |
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
+
+      - name: Restore ccache
+        if: inputs.use_ccache == true
+        id: cache-cc
+        uses: actions/cache@v5
+        with:
+          key: immwrt-ccache-${{ env.TARGET }}-${{ github.run_id }}
+          restore-keys: |
+            immwrt-ccache-${{ env.TARGET }}-
+          path: openwrt/.ccache
+
+      - name: Verify & report cache status
+        id: cache-refresh
+        run: |
+          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
+            rm -rf openwrt/staging_dir/host* openwrt/staging_dir/tool* 2>/dev/null || true
+          fi
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ]; then
+            command -v ccache &>/dev/null && ccache -C 2>/dev/null || true
+            rm -rf openwrt/.ccache 2>/dev/null || true
+          fi
+
+          TOOLCHAIN_RESTORED=false
+          if [ "$CACHE_STRATEGY" != "clean-all" ] && [ "$CACHE_STRATEGY" != "clean-toolchain" ] \
+             && [ -d openwrt/staging_dir ] \
+             && [ "$(find openwrt/staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | head -1)" ]; then
+            find openwrt/staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | while read -r d; do
+              find "$d" -type f -exec touch {} +
+            done
+            if [ -x openwrt/staging_dir/host/bin/ccache ]; then
+              for cmd in gcc g++ cc c++; do
+                ln -sf ccache "openwrt/staging_dir/host/bin/$cmd" 2>/dev/null || true
+              done
+            fi
+            mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
+            TOOLCHAIN_RESTORED=true
+          fi
+          echo "toolchain_restored=${TOOLCHAIN_RESTORED}" >> $GITHUB_OUTPUT
+          echo "toolchain_exact=${{ steps.cache-tc.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+
+          CCACHE_RESTORED=false
+          if [ "$CACHE_STRATEGY" != "clean-all" ] && [ "$CACHE_STRATEGY" != "clean-ccache" ] \
+             && [ -d openwrt/.ccache ] \
+             && [ "$(find openwrt/.ccache -type f 2>/dev/null | head -1)" ]; then
+            CCACHE_RESTORED=true
+          fi
+          echo "ccache_restored=${CCACHE_RESTORED}" >> $GITHUB_OUTPUT
+
+      - name: Setup APK Signing Key
+        if: inputs.matrix_apk_signing == true
+        id: signing_key
+        env:
+          APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APK_BUILD_KEY" ]; then
+            echo "::warning::APK_BUILD_KEY secret 未设置"
+            echo "fingerprint=none" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > openwrt/private-key.pem
+          chmod 600 openwrt/private-key.pem
+          sed -i 's/\r$//' openwrt/private-key.pem
+          openssl ec -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem 2>/dev/null || \
+            openssl rsa -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem
+          chmod 644 openwrt/public-key.pem
+          FP=$(openssl sha256 < openwrt/public-key.pem | awk '{print $NF}')
+          echo "fingerprint=${FP}" >> $GITHUB_OUTPUT
+
+      - name: Update Feeds & Packages
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a && ./scripts/feeds install -a
+
+      - name: Apply Configuration
+        id: apply_config
+        run: |
+          cd openwrt
+          SEED_DIR="../AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}"
+          find "$SEED_DIR" -type f -name '*.seed' | sort | while read -r f; do
+            [ -s "$f" ] && cat "$f"
+            [ -z "$(tail -c1 "$f")" ] || echo
+            true
+          done > .config
+          sed -i 's/\r$//; s/\xef\xbb\xbf//g' .config
+          VERSION="${{ inputs.version }}"
+          timeout 300 make defconfig || { echo "defconfig 失败"; exit 1; }
+
+          # 在 patch 前读取原始版本号，用作 SDK/IB tarball 的版本标识
+          ORIG_VER=$(grep -m1 '^VERSION_NUMBER:=' include/version.mk | cut -d= -f2 | tr -d '[:space:]')
+          if echo "$ORIG_VER" | grep -qi 'snapshot'; then
+            SOURCE_VER="${ORIG_VER}-$(TZ=$TZ date +'%Y%m%d')"
+          else
+            SOURCE_VER="$ORIG_VER"
+          fi
+          echo "source_version=${SOURCE_VER}" >> $GITHUB_OUTPUT
+          echo "🏷️ source_version: ${SOURCE_VER}"
+
+          sed -i "/^VERSION_NUMBER:=/s/SNAPSHOT/${VERSION}/g" include/version.mk
+          sed -i 's/^IMG_PREFIX_VERNUM:=.*/IMG_PREFIX_VERNUM:=$(call sanitize,$(VERSION_NUMBER))-/' include/image.mk
+
+      - name: Download Source Packages
+        run: |
+          cd openwrt
+          export CURL_OPTIONS="--connect-timeout 10 --retry 1 --max-time 180"
+          timeout 1800 make download -j$(nproc) || {
+            timeout 3600 make download -j1 || { echo "download 失败"; exit 1; }
+          }
+          find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
+
+      - name: Build Firmware
+        id: build
+        run: |
+          set +o pipefail
+          cd openwrt
+          export CCACHE_DIR="$(pwd)/.ccache"
+          ccache --max-size 10G
+          ccache --set-config=compiler_check=content
+          ccache --set-config=hash_dir=false
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          START_TIME=$(date +%s)
+          make -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
+          MAKE_EXIT=${PIPESTATUS[0]}
+          END_TIME=$(date +%s)
+          echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
+          echo "duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
+
+      - name: Retry build
+        if: always() && !cancelled() && steps.build.outputs.make_exit != '0'
+        id: retry
+        run: |
+          set +o pipefail
+          cd openwrt
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          cp build.log build.1.log 2>/dev/null || true
+          rm -rf logs/
+          git pull origin ${{ inputs.matrix_ref }} 2>/dev/null || echo " (无更新)"
+          git -C package/${{ inputs.packages_feed_name }} pull origin ${{ inputs.matrix_packages_branch }} 2>/dev/null || echo " (无更新)"
+          ./scripts/feeds update -a && ./scripts/feeds install -a
+          START_TIME=$(date +%s)
+          RETRY_EXIT=1
+          make -j$(nproc) -k 2>&1 | tee build.log
+          RETRY_EXIT=${PIPESTATUS[0]}
+          if [ "$RETRY_EXIT" -ne 0 ]; then
+            make -j1 -k 2>&1 | tee build.log
+            RETRY_EXIT=${PIPESTATUS[0]}
+          fi
+          END_TIME=$(date +%s)
+          echo "retry_duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
+          [ "$RETRY_EXIT" -ne 0 ] && exit 1
+
+      - name: Total Build Duration
+        if: always()
+        id: total_duration
+        run: |
+          BUILD_DUR="${{ steps.build.outputs.duration || '0' }}"
+          RETRY_DUR="${{ steps.retry.outputs.retry_duration || '0' }}"
+          TOTAL_SEC=$((BUILD_DUR + RETRY_DUR))
+          echo "duration=${TOTAL_SEC}" >> $GITHUB_OUTPUT
+          echo "duration_fmt=$(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60)))" >> $GITHUB_OUTPUT
+
+      - name: ccache Stats & Cleanup
+        if: always()
+        run: |
+          if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
+            export CCACHE_DIR="$(pwd)/openwrt/.ccache"
+            ccache --cleanup 2>/dev/null || true
+          fi
+
+      - name: Build Error Diagnostics
+        if: failure()
+        run: |
+          cd openwrt
+          if [ -d logs ]; then
+            for logfile in $(find logs -name 'compile.txt' -type f | sort); do
+              LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+              if ! echo "$LAST_LINE" | grep -q '^time:'; then
+                PKG=$(echo "$logfile" | sed 's|logs/||; s|/compile.txt||')
+                echo "### ❌ ${PKG}" >> "$GITHUB_STEP_SUMMARY"
+                echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$logfile" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
+                echo '```' >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done
+          else
+            tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARGET }}-build-log
+          path: |
+            openwrt/build.log
+            openwrt/build.1.log
+            openwrt/logs/**
+            openwrt/.config
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Purge stale GitHub Actions caches
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
+          TC_EXACT_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ] || [ "$TC_EXACT_HIT" != "true" ]; then
+            gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
+              xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+          fi
+          CC_EXACT_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ] || [ "$CC_EXACT_HIT" != "true" ]; then
+            gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
+              xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+          fi
+
+      # ════════ 产物打包 ════════
+      - name: Package firmware artifacts
+        if: success()
+        run: |
+          cd openwrt
+          mkdir -p release/firmware
+          find bin/targets -type f -not -path "*/packages/*" -exec cp {} release/firmware/ \; 2>/dev/null || true
+          mkdir -p release/passwall
+          find bin/packages -name "*passwall*.ipk" -o -name "*passwall*.apk" -exec cp {} release/passwall/ \; 2>/dev/null || true
+          DEPS=(chinadns-ng dns2socks geoview haproxy hysteria ipt2socks microsocks naiveproxy \
+                shadowsocks-rust-sslocal shadowsocksr-libev simple-obfs shadow-tls sing-box \
+                tcping tuic-client v2ray-geoip v2ray-geosite v2ray-plugin xray-core)
+          for dep in "${DEPS[@]}"; do
+            find bin/packages \( -name "*${dep}*.ipk" -o -name "*${dep}*.apk" \) -exec cp {} release/passwall/ \; 2>/dev/null || true
+          done
+          if [ -f public-key.pem ]; then
+            cp public-key.pem release/passwall/solarflows-apk-public.pem
+          fi
+          (cd release && tar czf ../${TARGET}-release.tar.gz .)
+
+      - name: Generate build info
+        if: success()
+        id: build-info-step
+        run: |
+          PKG_FORMAT="${{ inputs.matrix_apk_signing == true && 'apk' || 'ipk' }}"
+          cat > build-info.json <<JSONEOF
+          {
+            "target": "${TARGET}",
+            "config": "${{ inputs.matrix_config }}",
+            "source_repo": "${{ inputs.matrix_repo }}",
+            "source_ref": "${{ inputs.matrix_ref }}",
+            "source_sha": "${{ steps.clone_packages.outputs.sha_full }}",
+            "packages_repo": "${{ inputs.packages_feed_repo }}",
+            "packages_branch": "${{ inputs.matrix_packages_branch }}",
+            "packages_sha": "${{ steps.clone_packages.outputs.packages_sha_full }}",
+            "duration_sec": "${{ steps.total_duration.outputs.duration }}",
+            "duration_fmt": "${{ steps.total_duration.outputs.duration_fmt }}",
+            "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}",
+            "toolchain_exact": "${{ steps.cache-refresh.outputs.toolchain_exact || 'false' }}",
+            "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored || 'false' }}",
+            "signing_key_fingerprint": "${{ steps.signing_key.outputs.fingerprint || 'none' }}",
+            "release_repo": "${{ inputs.matrix_release_repo }}",
+            "passwall_repo": "${{ inputs.matrix_passwall_repo }}",
+            "passwall_tag": "${{ inputs.matrix_passwall_tag }}",
+            "release_tag": "${{ inputs.version }}",
+            "build_mode": "firmware",
+            "packages_format": "${PKG_FORMAT}",
+            "timestamp": "$(TZ=${TZ} date +'%Y-%m-%d %H:%M:%S')"
+          }
+          JSONEOF
+
+      - name: Generate release notes
+        if: success()
+        run: |
+          SHA_SHORT="${{ steps.clone_packages.outputs.sha }}"
+          {
+            echo "## ${TARGET} Build"
+            echo ""
+            echo "**源码**: [${{ inputs.matrix_ref }}](https://github.com/${{ inputs.matrix_repo }}) @ [${SHA_SHORT}](https://github.com/${{ inputs.matrix_repo }}/commit/${{ steps.clone_packages.outputs.sha_full }})"
+            echo "**软件包**: [${{ inputs.matrix_packages_branch }}](https://github.com/${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) @ [${{ steps.clone_packages.outputs.packages_sha }}](https://github.com/${{ inputs.packages_feed_repo }}/commit/${{ steps.clone_packages.outputs.packages_sha_full }})"
+            echo "**编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}"
+          } > release-body.md
+
+      - name: Upload firmware artifact
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARGET }}-release
+          path: openwrt/${{ env.TARGET }}-release.tar.gz
+          retention-days: 7
+
+      - name: Upload passwall artifact
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARGET }}-passwall
+          path: openwrt/release/passwall
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload build info
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARGET }}-build-info
+          path: |
+            build-info.json
+            release-body.md
+          retention-days: 7
+
+      # ════════ SDK / IB 打包与发布 (v2 新增) ════════
+      - name: Package SDK & IB tarballs
+        if: success() && inputs.publish_sdk_ib == true
+        id: sdk_ib
+        run: |
+          cd openwrt
+          mkdir -p release/sdk release/ib
+
+          # SDK tarball + sha256
+          SDK_TARBALL=$(find bin/targets -type f -name 'sdk-*.tar.xz' | head -1)
+          if [ -n "$SDK_TARBALL" ]; then
+            cp "$SDK_TARBALL" release/sdk/
+            SDK_SHA256=$(find bin/targets -type f -name "$(basename "$SDK_TARBALL").sha256sum" | head -1)
+            if [ -n "$SDK_SHA256" ]; then cp "$SDK_SHA256" release/sdk/; else
+              (cd release/sdk && sha256sum "$(basename "$SDK_TARBALL")" | awk '{print $1}' > "$(basename "$SDK_TARBALL").sha256")
+            fi
+            ARCH=$(basename "$SDK_TARBALL" | sed -E 's/sdk-(.*)\.tar\.xz/\1/')
+            # v2 命名: sdk-<target>-<version>-<arch>.tar.xz (version 来自 version.mk)
+            SDK_VERSION="${{ steps.apply_config.outputs.source_version }}"
+            SDK_NEW_NAME="sdk-${TARGET}-${SDK_VERSION}-${ARCH}.tar.xz"
+            mv "release/sdk/$(basename "$SDK_TARBALL")" "release/sdk/${SDK_NEW_NAME}"
+            [ -f "release/sdk/$(basename "$SDK_TARBALL").sha256" ] && \
+              mv "release/sdk/$(basename "$SDK_TARBALL").sha256" "release/sdk/${SDK_NEW_NAME}.sha256"
+            echo "sdk_new_name=${SDK_NEW_NAME}" >> $GITHUB_OUTPUT
+            echo "sdk_version_key=${SDK_VERSION}" >> $GITHUB_OUTPUT            echo "sdk_arch=${ARCH}" >> $GITHUB_OUTPUT            echo "✅ SDK: ${SDK_NEW_NAME}"
+          else
+            echo "::warning::SDK tarball 未生成 (检查 01-base.seed 中 CONFIG_SDK=y)"
+          fi
+
+          # IB tarball + sha256
+          IB_TARBALL=$(find bin/targets -type f -name 'imagebuilder-*.tar.xz' | head -1)
+          if [ -n "$IB_TARBALL" ]; then
+            cp "$IB_TARBALL" release/ib/
+            IB_SHA256=$(find bin/targets -type f -name "$(basename "$IB_TARBALL").sha256sum" | head -1)
+            if [ -n "$IB_SHA256" ]; then cp "$IB_SHA256" release/ib/; else
+              (cd release/ib && sha256sum "$(basename "$IB_TARBALL")" | awk '{print $1}' > "$(basename "$IB_TARBALL").sha256")
+            fi
+            ARCH=$(basename "$IB_TARBALL" | sed -E 's/imagebuilder-(.*)\.tar\.xz/\1/')
+            IB_VERSION="${{ steps.apply_config.outputs.source_version }}"
+            IB_NEW_NAME="ib-${TARGET}-${IB_VERSION}-${ARCH}.tar.xz"
+            mv "release/ib/$(basename "$IB_TARBALL")" "release/ib/${IB_NEW_NAME}"
+            [ -f "release/ib/$(basename "$IB_TARBALL").sha256" ] && \
+              mv "release/ib/$(basename "$IB_TARBALL").sha256" "release/ib/${IB_NEW_NAME}.sha256"
+            echo "ib_new_name=${IB_NEW_NAME}" >> $GITHUB_OUTPUT
+            echo "ib_version_key=${IB_VERSION}" >> $GITHUB_OUTPUT
+            echo "ib_arch=${ARCH}" >> $GITHUB_OUTPUT
+            echo "✅ IB:  ${IB_NEW_NAME}"
+          else
+            echo "::warning::IB tarball 未生成 (检查 01-base.seed 中 CONFIG_IB=y)"
+          fi
+
+      - name: Upload SDK to release
+        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.sdk_new_name != ''
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          TAG="${{ inputs.matrix_sdk_release_tag }}"
+          REPO="${{ inputs.matrix_sdk_release_repo }}"
+          # 确保 release 存在 (非 draft, 多版本共存)
+          gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
+            gh release create "$TAG" --repo "$REPO" \
+              --title "${TAG} Builds" --notes "Multi-version SDK builds (${TARGET})" --latest=false
+          SDK_FILE="openwrt/release/sdk/${{ steps.sdk_ib.outputs.sdk_new_name }}"
+          SDK_SHA="${SDK_FILE}.sha256"
+          gh release upload "$TAG" --repo "$REPO" "$SDK_FILE" "$SDK_SHA" --clobber
+          echo "📤 SDK 已上传到 ${REPO}@${TAG}"
+
+          # ── 更新 index.json ──
+          mkdir -p /tmp/sdk_index
+          (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "index.json" 2>/dev/null) || echo '{}' > /tmp/sdk_index/index.json
+          SHA256=$(cat "$SDK_SHA" | awk '{print $1}')
+          jq --arg v "${{ steps.sdk_ib.outputs.sdk_version_key }}" \
+             --arg f "${{ steps.sdk_ib.outputs.sdk_new_name }}" \
+             --arg s "$SHA256" \
+             --arg src "${{ steps.clone_packages.outputs.sha_full }}" \
+             --arg arch "${{ steps.sdk_ib.outputs.sdk_arch }}" \
+             --arg ts "$(TZ=$TZ date -Iseconds)" \
+             '.[$v] = {file:$f, sha256:$s, source_sha:$src, arch:$arch, built_at:$ts}' \
+             /tmp/sdk_index/index.json > /tmp/sdk_index/index_new.json
+          # 按 version 号排序 + 保留最近 N 个版本
+          KEEP=${{ inputs.matrix_ib_keep_versions }}
+          jq --argjson n "$KEEP" 'to_entries | sort_by(.key | [splits("[.-]")] | map(try (tonumber? // 0)) ) | .[-$n:] | from_entries' \
+             /tmp/sdk_index/index_new.json > /tmp/sdk_index/index.json
+          gh release upload "$TAG" --repo "$REPO" /tmp/sdk_index/index.json --clobber
+
+      - name: Upload IB to release
+        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.ib_new_name != ''
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          TAG="${{ inputs.matrix_ib_release_tag }}"
+          REPO="${{ inputs.matrix_ib_release_repo }}"
+          gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
+            gh release create "$TAG" --repo "$REPO" \
+              --title "${TAG} Builds" --notes "Multi-version ImageBuilder builds (${TARGET})" --latest=false
+          IB_FILE="openwrt/release/ib/${{ steps.sdk_ib.outputs.ib_new_name }}"
+          IB_SHA="${IB_FILE}.sha256"
+          gh release upload "$TAG" --repo "$REPO" "$IB_FILE" "$IB_SHA" --clobber
+          echo "📤 IB 已上传到 ${REPO}@${TAG}"
+
+          # 更新 index.json (同 SDK 逻辑)
+          mkdir -p /tmp/ib_index
+          (cd /tmp/ib_index && gh release download "$TAG" --repo "$REPO" --pattern "index.json" 2>/dev/null) || echo '{}' > /tmp/ib_index/index.json
+          SHA256=$(cat "$IB_SHA" | awk '{print $1}')
+          jq --arg v "${{ steps.sdk_ib.outputs.ib_version_key }}" \
+             --arg f "${{ steps.sdk_ib.outputs.ib_new_name }}" \
+             --arg s "$SHA256" \
+             --arg src "${{ steps.clone_packages.outputs.sha_full }}" \
+             --arg arch "${{ steps.sdk_ib.outputs.ib_arch }}" \
+             --arg ts "$(TZ=$TZ date -Iseconds)" \
+             '.[$v] = {file:$f, sha256:$s, source_sha:$src, arch:$arch, built_at:$ts}' \
+             /tmp/ib_index/index.json > /tmp/ib_index/index_new.json
+          KEEP=${{ inputs.matrix_ib_keep_versions }}
+          jq --argjson n "$KEEP" 'to_entries | sort_by(.key | [splits("[.-]")] | map(try (tonumber? // 0)) ) | .[-$n:] | from_entries' \
+             /tmp/ib_index/index_new.json > /tmp/ib_index/index.json
+          gh release upload "$TAG" --repo "$REPO" /tmp/ib_index/index.json --clobber
+
+      - name: Cleanup draft release on failure
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          if gh release view "$VERSION" --repo ${{ inputs.matrix_release_repo }} &>/dev/null; then
+            gh release delete "$VERSION" --repo ${{ inputs.matrix_release_repo }} --yes 2>/dev/null || true
+          fi

@@ -1,34 +1,29 @@
-﻿{
-  "_comment": "字段说明见同目录 README.md。带 * 为必填字段，其余可选（jq 自动补默认值）。",
-
+{
+  "_comment": "字段说明见同目录 README.md。本文件仅保存每个 target 的差异化配置。默认值统一在 firmware_builder_v2.yml 及 reusable workflow 的 inputs.default 中定义（可审计可版本化）。jq 解析时通过 `//` 兜底所有缺失字段。",
   "targets": [
     {
       "target": "mt798x",
       "repo": "solarflows/immortalwrt-mt798x",
       "ref": "test",
       "config": "mt798x",
-
       "packages_branch": "mt798x",
       "release_repo": "solarflows/immortalwrt-mt798x",
-      "passwall_repo": "solarflows/openwrt-packages",
       "apk_signing": false,
-      "passwall_tag": "packages",
       "sdk_container": "aarch64_cortex-a53-21.02.7",
-      "sdk_packages": "*"
+      "sdk_release_tag": "sdk-mt798x",
+      "ib_release_tag": "ib-mt798x"
     },
     {
       "target": "qualcommax",
       "repo": "solarflows/ImmortalWrt-QualcommAX",
       "ref": "VIKINGYFY-main",
       "config": "qualcommax",
-
       "packages_branch": "qualcommax",
       "release_repo": "solarflows/ImmortalWrt-QualcommAX",
-      "passwall_repo": "solarflows/openwrt-packages",
       "apk_signing": true,
-      "passwall_tag": "packages",
       "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
-      "sdk_packages": "*"
+      "sdk_release_tag": "sdk-qualcommax",
+      "ib_release_tag": "ib-qualcommax"
     }
   ]
 }

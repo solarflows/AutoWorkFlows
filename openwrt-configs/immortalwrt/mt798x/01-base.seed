@@ -23,6 +23,8 @@ CONFIG_TOOLCHAINOPTS=y             # 高级工具链选项
 CONFIG_BUSYBOX_CUSTOM=y            # 自定义 busybox
 CONFIG_TARGET_PER_DEVICE_ROOTFS=y  # 按设备独立 rootfs
 CONFIG_JSON_OVERVIEW_IMAGE_INFO=y  # 生成固件信息 JSON
+CONFIG_SDK=y                       # 生成 SDK tarball (v2: build-via-sdk 使用)
+CONFIG_IB=y                        # 生成 ImageBuilder tarball (v2: build-via-ib 使用)
 
 # ═══════ 内核选项 ═══════
 # CONFIG_GDB is not set
