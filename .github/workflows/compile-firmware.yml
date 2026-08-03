@@ -264,61 +264,78 @@ jobs:
           cd openwrt
           export CURL_OPTIONS="--connect-timeout 10 --retry 1 --max-time 180"
           timeout 1800 make download -j$(nproc) || {
-            timeout 3600 make download -j1 || { echo "download 失败"; exit 1; }
+            echo "⚠️ make download 并行失败,重试单线程..."
+            timeout 3600 make download -j1 || { echo "❌ make download 彻底失败"; exit 1; }
           }
           find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
 
       - name: Build Firmware
         id: build
         run: |
-          set +o pipefail
+          set -euo pipefail
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
+          ccache --max-size 10G
+          ccache --set-config=compiler_check=content
+          ccache --set-config=hash_dir=false
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
           if [ "${{ inputs.cache_strategy }}" != "no-cache" ]; then
-            ccache --max-size 10G
-            ccache --set-config=compiler_check=content
-            ccache --set-config=hash_dir=false
-            ccache --set-config=compression=true
-            ccache --set-config=compression_level=6
-            ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
             export CC="ccache gcc"
             export CXX="ccache g++"
           else
-            echo "🔧 no-cache 模式: 不使用 ccache 编译"
+            echo "🔧 no-cache 模式: 不使用 ccache 包装编译 (CONFIG_CCACHE 仍由 seed 控制)"
           fi
+          MAKE_EXIT=1
+          echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           START_TIME=$(date +%s)
+          set +o pipefail
           make -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
           MAKE_EXIT=${PIPESTATUS[0]}
+          set -o pipefail
           END_TIME=$(date +%s)
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           echo "duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
+          echo "⏱️ 并行编译耗时: $(printf '%dh %dm %ds' $(((END_TIME-START_TIME)/3600)) $((((END_TIME-START_TIME)%3600)/60)) $(((END_TIME-START_TIME)%60)))"
 
       - name: Retry build
         if: always() && !cancelled() && steps.build.outputs.make_exit != '0'
         id: retry
         run: |
-          set +o pipefail
+          set -euo pipefail
           cd openwrt
           if [ "${{ inputs.cache_strategy }}" != "no-cache" ]; then
             export CC="ccache gcc"
             export CXX="ccache g++"
           fi
-          cp build.log build.1.log 2>/dev/null || true
-          rm -rf logs/
-          git pull origin ${{ inputs.matrix_ref }} 2>/dev/null || echo " (无更新)"
-          git -C package/${{ inputs.packages_feed_name }} pull origin ${{ inputs.matrix_packages_branch }} 2>/dev/null || echo " (无更新)"
+          cp build.log build.1.log || echo "⚠️ 备份 build.log 失败: $?"
+          rm -rf logs.1
+          [ -d logs ] && mv logs logs.1 || echo "ℹ️ 无初次 logs 目录可保留"
+          echo "⚠️ 并行编译有错误 → 更新仓库后重试..."
+          git pull origin ${{ inputs.matrix_ref }} || echo "⚠️ 源码 pull 失败: $? (可能无远端更新或非分支引用)"
+          git -C package/${{ inputs.packages_feed_name }} pull origin ${{ inputs.matrix_packages_branch }} || echo "⚠️ packages pull 失败: $?"
           ./scripts/feeds update -a && ./scripts/feeds install -a
           START_TIME=$(date +%s)
           RETRY_EXIT=1
+          set +o pipefail
           make -j$(nproc) -k 2>&1 | tee build.log
           RETRY_EXIT=${PIPESTATUS[0]}
+          set -o pipefail
           if [ "$RETRY_EXIT" -ne 0 ]; then
+            echo "⚠️ 并行重试仍有错误 → 单线程最后一搏..."
+            set +o pipefail
             make -j1 -k 2>&1 | tee build.log
             RETRY_EXIT=${PIPESTATUS[0]}
+            set -o pipefail
           fi
           END_TIME=$(date +%s)
           echo "retry_duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
-          [ "$RETRY_EXIT" -ne 0 ] && exit 1
+          if [ "$RETRY_EXIT" -ne 0 ]; then
+            echo "💥 构建彻底失败 · 请查看 build.log 及 logs/logs.1 目录"
+            exit 1
+          fi
+          echo "✅ 重试完成"
 
       - name: Total Build Duration
         if: always()
@@ -343,18 +360,24 @@ jobs:
         run: |
           echo "> 👈 触发/目标/版本等整体计划见 **Plan job Summary**" >> "$GITHUB_STEP_SUMMARY"
           cd openwrt
-          if [ -d logs ]; then
-            for logfile in $(find logs -name 'compile.txt' -type f | sort); do
+          # logs = 重试轮, logs.1 = 初次 build (retry 前 mv 保留)
+          LOG_ROOTS="logs logs.1"
+          FOUND=0
+          for ROOT in $LOG_ROOTS; do
+            [ -d "$ROOT" ] || continue
+            for logfile in $(find "$ROOT" -name 'compile.txt' -type f | sort); do
               LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
               if ! echo "$LAST_LINE" | grep -q '^time:'; then
-                PKG=$(echo "$logfile" | sed 's|logs/||; s|/compile.txt||')
-                echo "### ❌ ${PKG}" >> "$GITHUB_STEP_SUMMARY"
+                FOUND=1
+                PKG=$(echo "$logfile" | sed "s|$ROOT/||; s|/compile.txt||")
+                echo "### ❌ ${PKG} ($ROOT)" >> "$GITHUB_STEP_SUMMARY"
                 echo '```text' >> "$GITHUB_STEP_SUMMARY"
                 grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$logfile" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
                 echo '```' >> "$GITHUB_STEP_SUMMARY"
               fi
             done
-          else
+          done
+          if [ "$FOUND" = "0" ]; then
             tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -367,6 +390,7 @@ jobs:
             openwrt/build.log
             openwrt/build.1.log
             openwrt/logs/**
+            openwrt/logs.1/**
             openwrt/.config
           retention-days: 7
           if-no-files-found: ignore
