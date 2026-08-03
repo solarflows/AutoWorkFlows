@@ -516,8 +516,11 @@ jobs:
   # ════════════════════ run-firmware (全量编译) ════════════════════
   run-firmware:
     name: Compile Firmware / ${{ matrix.target }}
-    needs: plan
-    if: needs.plan.outputs.should_build_firmware == 'true'
+    needs: [plan, run-imagebuilder]
+    if: |
+      always() &&
+      (needs.plan.outputs.should_build_firmware == 'true' ||
+       (needs.plan.outputs.should_build_ib == 'true' && needs.run-imagebuilder.result == 'failure'))
     strategy:
       fail-fast: false
       matrix:
@@ -719,7 +722,11 @@ jobs:
                 --notes-file /tmp/release_body.md --draft=false 2>/dev/null || true
               echo "✅ [${TARGET}] 固件 Release $RELEASE_TAG 已发布"
             else
-              echo "⚠️  [${TARGET}] 无固件文件 (mode=$BUILD_MODE)"
+              if [ "$BUILD_MODE" = "ib" ] && [ "${{ needs.run-imagebuilder.result }}" = "failure" ]; then
+                echo "⚠️  [${TARGET}] ImageBuilder 重打包失败,无固件产出,已跳过固件发布 (release 不回退)"
+              else
+                echo "⚠️  [${TARGET}] 无固件文件 (mode=$BUILD_MODE)"
+              fi
             fi
 
             local PW_DIR=""
