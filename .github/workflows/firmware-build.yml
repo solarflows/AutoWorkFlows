@@ -24,10 +24,10 @@ on:
         default: 'smart'
         type: choice
         options:
-          - 'smart'      # 智能检测 (仅软件包变更 → SDK; 上游 kernel 变 → 全量; 仅 feed/package 变 → IB)
-          - 'firmware'   # 强制全量编译 (生成 SDK + IB)
-          - 'packages'   # 强制 SDK 编译软件包
-          - 'ib'          # 强制 IB 路线
+          - 'smart'           # 智能检测 (自动选择最快构建路径)
+          - 'full'            # 全量编译 (固件 + SDK + ImageBuilder)
+          - 'sdk-packages'    # 仅用 SDK 编译软件包
+          - 'imagebuilder'    # 用 ImageBuilder 重打包固件
       cache_strategy:
         description: '缓存策略 (仅 build-firmware 模式生效)'
         required: false
@@ -120,7 +120,7 @@ jobs:
           echo "updater_id=$RUN_ID" >> $GITHUB_OUTPUT
 
       - name: Trigger Sync_Push
-        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'packages'
+        if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'sdk-packages'
         id: trigger-sync
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -385,18 +385,18 @@ jobs:
           done
           echo "SDK_READY=$SDK_READY  IB_READY=$IB_READY"
 
-          if [ "$TRIGGER" = "firmware" ]; then
+          if [ "$TRIGGER" = "full" ]; then
             SHOULD_FW=true; SHOULD_PUB_FW=true
-          elif [ "$TRIGGER" = "packages" ]; then
+          elif [ "$TRIGGER" = "sdk-packages" ]; then
             if [ "$SDK_READY" = "false" ]; then
-              echo "⚠️ SDK 不存在,packages 模式升级为全量编译"
+              echo "⚠️ SDK 不存在,sdk-packages 模式升级为全量编译"
               SHOULD_FW=true; SHOULD_PUB_FW=true
             else
               SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
             fi
-          elif [ "$TRIGGER" = "ib" ]; then
+          elif [ "$TRIGGER" = "imagebuilder" ]; then
             if [ "$IB_READY" = "false" ]; then
-              echo "⚠️ IB 不存在,ib 模式升级为全量编译"
+              echo "⚠️ IB 不存在,imagebuilder 模式升级为全量编译"
               SHOULD_FW=true; SHOULD_PUB_FW=true
             else
               SHOULD_IB=true; SHOULD_PUB_FW=true
@@ -513,13 +513,13 @@ jobs:
             fi
           done
 
-  # ════════════════════ compile-firmware (全量编译) ════════════════════
-  compile-firmware:
+  # ════════════════════ run-firmware (全量编译) ════════════════════
+  run-firmware:
     name: Compile Firmware / ${{ matrix.target }}
-    needs: plan
+    needs: [plan, run-imagebuilder]
     if: |
       needs.plan.outputs.should_build_firmware == 'true' ||
-      (needs.plan.outputs.should_build_ib == 'true' && needs.repack-imagebuilder.result == 'failure')
+      (needs.plan.outputs.should_build_ib == 'true' && needs.run-imagebuilder.result == 'failure')
     strategy:
       fail-fast: false
       matrix:
@@ -557,8 +557,8 @@ jobs:
       group: compile-fw-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
 
-  # ════════════════════ repack-imagebuilder (IB 重新打包) ════════════════════
-  repack-imagebuilder:
+  # ════════════════════ run-imagebuilder (IB 重新打包) ════════════════════
+  run-imagebuilder:
     name: Repack ImageBuilder / ${{ matrix.target }}
     needs: plan
     if: needs.plan.outputs.should_build_ib == 'true'
@@ -591,8 +591,8 @@ jobs:
       group: repack-ib-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
 
-  # ════════════════════ compile-packages (SDK 编译软件包) ════════════════════
-  compile-packages:
+  # ════════════════════ run-packages (SDK 编译软件包) ════════════════════
+  run-packages:
     name: Compile Packages / ${{ matrix.target }}
     needs: plan
     if: needs.plan.outputs.should_build_sdk_pkgs == 'true'
@@ -625,7 +625,7 @@ jobs:
   # ════════════════════ release: 固件 + 软件包发布 ════════════════════
   release:
     name: Release
-    needs: [plan, compile-firmware, repack-imagebuilder, compile-packages]
+    needs: [plan, run-firmware, run-imagebuilder, run-packages]
     if: |
       always() &&
       !cancelled() &&
