@@ -32,7 +32,6 @@ on:
       sdk_version:          { required: true, type: string }
       ib_version:           { required: true, type: string }
       cache_strategy:       { required: false, type: string, default: 'smart' }
-      use_ccache:           { required: false, type: boolean, default: true }
       free_disk_space:      { required: false, type: boolean, default: false }
       publish_sdk_ib:       { required: false, type: boolean, default: true }
     secrets:
@@ -125,6 +124,7 @@ jobs:
 
       - name: Restore toolchain cache
         id: cache-tc
+        if: inputs.cache_strategy != 'no-cache'
         uses: actions/cache@v5
         with:
           key: immwrt-toolchain-${{ env.TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
@@ -135,7 +135,7 @@ jobs:
             openwrt/staging_dir/tool*
 
       - name: Restore ccache
-        if: inputs.use_ccache == true
+        if: inputs.cache_strategy != 'no-cache'
         id: cache-cc
         uses: actions/cache@v5
         with:
@@ -145,6 +145,7 @@ jobs:
           path: openwrt/.ccache
 
       - name: Verify & report cache status
+        if: inputs.cache_strategy != 'no-cache'
         id: cache-refresh
         run: |
           CACHE_STRATEGY="${{ inputs.cache_strategy }}"
@@ -273,14 +274,18 @@ jobs:
           set +o pipefail
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
-          ccache --max-size 10G
-          ccache --set-config=compiler_check=content
-          ccache --set-config=hash_dir=false
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
-          export CC="ccache gcc"
-          export CXX="ccache g++"
+          if [ "${{ inputs.cache_strategy }}" != "no-cache" ]; then
+            ccache --max-size 10G
+            ccache --set-config=compiler_check=content
+            ccache --set-config=hash_dir=false
+            ccache --set-config=compression=true
+            ccache --set-config=compression_level=6
+            ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+          else
+            echo "🔧 no-cache 模式: 不使用 ccache 编译"
+          fi
           START_TIME=$(date +%s)
           make -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
           MAKE_EXIT=${PIPESTATUS[0]}
@@ -294,8 +299,10 @@ jobs:
         run: |
           set +o pipefail
           cd openwrt
-          export CC="ccache gcc"
-          export CXX="ccache g++"
+          if [ "${{ inputs.cache_strategy }}" != "no-cache" ]; then
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+          fi
           cp build.log build.1.log 2>/dev/null || true
           rm -rf logs/
           git pull origin ${{ inputs.matrix_ref }} 2>/dev/null || echo " (无更新)"
@@ -324,7 +331,7 @@ jobs:
           echo "duration_fmt=$(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60)))" >> $GITHUB_OUTPUT
 
       - name: ccache Stats & Cleanup
-        if: always()
+        if: always() && inputs.cache_strategy != 'no-cache'
         run: |
           if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
             export CCACHE_DIR="$(pwd)/openwrt/.ccache"
@@ -370,6 +377,10 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           CACHE_STRATEGY="${{ inputs.cache_strategy }}"
+          if [ "$CACHE_STRATEGY" = "no-cache" ]; then
+            echo "🔧 no-cache 模式: 跳过缓存清理"
+            exit 0
+          fi
           TC_EXACT_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
           if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ] || [ "$TC_EXACT_HIT" != "true" ]; then
             gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \

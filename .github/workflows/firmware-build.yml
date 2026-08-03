@@ -34,19 +34,15 @@ on:
         default: 'smart'
         type: choice
         options:
-          - 'smart'
-          - 'clean-toolchain'
-          - 'clean-ccache'
-          - 'clean-all'
+          - 'smart'            # 使用工具链 + ccache 缓存
+          - 'clean-toolchain'  # 不用工具链缓存, ccache 正常
+          - 'clean-ccache'     # 不用 ccache, 工具链缓存正常
+          - 'clean-all'        # 两者都清空重建
+          - 'no-cache'         # 不使用任何缓存 (不恢复/不编译 ccache/不清理)
       skip_upstream:
         description: '跳过上游同步 (节省时间)'
         required: false
         default: false
-        type: boolean
-      use_ccache:
-        description: '启用 ccache (仅 build-firmware)'
-        required: false
-        default: true
         type: boolean
       free_disk_space:
         description: '清理磁盘空间 (仅 build-firmware)'
@@ -552,7 +548,6 @@ jobs:
       sdk_version:               ${{ needs.plan.outputs.sdk_version }}
       ib_version:                ${{ needs.plan.outputs.ib_version }}
       cache_strategy:            ${{ github.event.inputs.cache_strategy || 'smart' }}
-      use_ccache:                ${{ github.event.inputs.use_ccache != 'false' }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
       publish_sdk_ib:            true
     secrets:
