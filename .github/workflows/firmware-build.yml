@@ -516,10 +516,8 @@ jobs:
   # ════════════════════ run-firmware (全量编译) ════════════════════
   run-firmware:
     name: Compile Firmware / ${{ matrix.target }}
-    needs: [plan, run-imagebuilder]
-    if: |
-      needs.plan.outputs.should_build_firmware == 'true' ||
-      (needs.plan.outputs.should_build_ib == 'true' && needs.run-imagebuilder.result == 'failure')
+    needs: plan
+    if: needs.plan.outputs.should_build_firmware == 'true'
     strategy:
       fail-fast: false
       matrix:
