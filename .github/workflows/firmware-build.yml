@@ -75,7 +75,8 @@ env:
   PACKAGES_FEED_NAME:  solarflows
   SDK_RELEASE_REPO:    solarflows/AutoWorkflows
   IB_RELEASE_REPO:     solarflows/AutoWorkflows
-  IB_KEEP_VERSIONS:    3
+  SDK_KEEP_VERSIONS:   7
+  IB_KEEP_VERSIONS:    7
   IB_PROFILE:          ''
 
 jobs:
@@ -203,6 +204,7 @@ jobs:
             --arg sdk_repo "${{ env.SDK_RELEASE_REPO }}" \
             --arg ib_repo "${{ env.IB_RELEASE_REPO }}" \
             --arg ib_profile "${{ env.IB_PROFILE }}" \
+            --argjson sdk_keep "${{ env.SDK_KEEP_VERSIONS }}" \
             --argjson ib_keep "${{ env.IB_KEEP_VERSIONS }}" '
             if $t == "both" then .targets
             else [.targets[] | select(.target == $t)] end |
@@ -220,6 +222,7 @@ jobs:
               ib_release_repo:   (.ib_release_repo   // $ib_repo),
               ib_release_tag:    (.ib_release_tag    // ("ib-" + .target)),
               ib_profile:        (.ib_profile        // $ib_profile),
+              sdk_keep_versions: (.sdk_keep_versions // $sdk_keep),
               ib_keep_versions:  (.ib_keep_versions  // $ib_keep)
             })
           ' "$JSON_FILE")
@@ -239,8 +242,10 @@ jobs:
           SRC_CHANGED=false
           PKG_CHANGED=false
           ANY_KERNEL_CHANGE=false
+          : > /tmp/change_report.txt
 
           for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
+            SRC_STATUS="—"; PKG_STATUS="—"; KERNEL_STATUS="—"
             [ "$SRC_CHANGED" = "true" ] && [ "$PKG_CHANGED" = "true" ] && [ "$ANY_KERNEL_CHANGE" = "true" ] && break
 
             CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .repo')
@@ -251,9 +256,11 @@ jobs:
             LAST_SRC=$(jq -r ".\"${TARGET}\".source_sha // empty" build-state.json)
             if [ -n "$LAST_SRC" ] && [ "$LAST_SRC" = "$CURR_SRC" ]; then
               echo "  ✅ [${TARGET}] 源码未变更 (${CURR_SRC:0:7})"
+              SRC_STATUS="✅ 未变更"
             else
               echo "  🔵 [${TARGET}] 源码变更: ${LAST_SRC:-无} → ${CURR_SRC:0:7}"
               SRC_CHANGED=true
+              SRC_STATUS="🔵 变更"
 
               # ── 上游变更范围检测 (compare API 优先,本地浅克隆兜底) ──
               if [ -n "$LAST_SRC" ]; then
@@ -295,17 +302,21 @@ jobs:
                   if [ "$KERNEL_COUNT" -gt 0 ]; then
                     echo "    🔴 检测到 kernel/toolchain 范围变更 (${KERNEL_COUNT} 个文件)"
                     ANY_KERNEL_CHANGE=true
+                    KERNEL_STATUS="🔴 变更"
                   else
                     echo "    🟢 仅 feed/package 范围变更"
+                    KERNEL_STATUS="🟢 仅 package"
                   fi
                 else
                   # API 和本地都失败 → 保守降级到全量
                   echo "    ⚪ 变更范围不可测,降级为 kernel 变更处理"
                   ANY_KERNEL_CHANGE=true
+                  KERNEL_STATUS="🔴 不可测"
                 fi
               else
                 # 首次构建,无 last_src → 必然走全量
                 ANY_KERNEL_CHANGE=true
+                KERNEL_STATUS="🔴 首次构建"
               fi
             fi
 
@@ -314,11 +325,26 @@ jobs:
             LAST_PKG=$(jq -r ".\"${TARGET}\".packages_sha // empty" build-state.json)
             if [ -n "$LAST_PKG" ] && [ "$LAST_PKG" = "$CURR_PKG" ]; then
               echo "  ✅ [${TARGET}] 软件包未变更 (${CURR_PKG:0:7})"
+              PKG_STATUS="✅ 未变更"
             else
               echo "  🟡 [${TARGET}] 软件包变更: ${LAST_PKG:-无} → ${CURR_PKG:0:7}"
               PKG_CHANGED=true
+              PKG_STATUS="🟡 变更"
             fi
+            echo "${TARGET}|${SRC_STATUS}|${PKG_STATUS}|${KERNEL_STATUS}" >> /tmp/change_report.txt
           done
+
+          {
+            echo "### 🔍 变更检测"
+            echo ""
+            echo "| 目标 | 源码 | 软件包 | 内核/Toolchain |"
+            echo "|---|---|---|---|"
+            while IFS='|' read -r t s p k; do
+              echo "| \`${t}\` | ${s} | ${p} | ${k} |"
+            done < /tmp/change_report.txt
+            echo ""
+            echo "**源码变更**: ${SRC_CHANGED} | **软件包变更**: ${PKG_CHANGED} | **内核/Toolchain 变更**: ${ANY_KERNEL_CHANGE}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           echo "source_changed=${SRC_CHANGED}" >> $GITHUB_OUTPUT
           echo "packages_changed=${PKG_CHANGED}" >> $GITHUB_OUTPUT
@@ -420,8 +446,18 @@ jobs:
           echo "should_publish_firmware=${SHOULD_PUB_FW}" >> $GITHUB_OUTPUT
           echo "should_publish_pkgs=${SHOULD_PUB_PKGS}" >> $GITHUB_OUTPUT
 
+          TARGETS="${{ steps.build-matrix.outputs.targets_to_build }}"
+          VER="${{ steps.version.outputs.version }}"
+          SDKV="${{ steps.version.outputs.sdk_version }}"
+          IBV="${{ steps.version.outputs.ib_version }}"
           {
             echo "## 🎯 Build Decision"
+            echo ""
+            echo "**触发**: \`${TRIGGER}\` | **目标**: \`${{ github.event.inputs.target || 'both' }}\` | **缓存**: \`${{ github.event.inputs.cache_strategy || 'smart' }}\`"
+            echo ""
+            echo "**版本**: 固件 \`${VER}\` / SDK \`${SDKV}\` / IB \`${IBV}\`"
+            echo ""
+            echo "**构建目标**: \`${TARGETS}\`"
             echo ""
             echo "| 项 | 值 |"
             echo "|---|---|"
@@ -431,6 +467,27 @@ jobs:
             echo "| **should_build_sdk_pkgs** | ${SHOULD_SDK_PKGS} |"
             echo "| **should_publish_firmware** | ${SHOULD_PUB_FW} |"
             echo "| **should_publish_pkgs** | ${SHOULD_PUB_PKGS} |"
+            echo ""
+            echo "### 📦 本次工作内容"
+            echo ""
+            if [ "$SHOULD_FW" = "true" ]; then
+              echo "- 🔨 **compile-firmware**: 全量编译固件 + 生成 SDK/IB 上传 (sdk-*/ib-* tag, 同名替换 / 异名保留最近 ${{ env.SDK_KEEP_VERSIONS }} 组)"
+            fi
+            if [ "$SHOULD_IB" = "true" ]; then
+              echo "- 📦 **repack-imagebuilder**: 基于现有 IB 重打包固件"
+            fi
+            if [ "$SHOULD_SDK_PKGS" = "true" ]; then
+              echo "- 📦 **compile-packages**: 基于 SDK 增量编译软件包 → packages tag"
+            fi
+            if [ "$SHOULD_PUB_FW" = "true" ]; then
+              echo "- 🚀 **release**: 发布固件到 \`${VER}\` release"
+            fi
+            if [ "$SHOULD_PUB_PKGS" = "true" ]; then
+              echo "- 🚀 **release**: 发布软件包到 packages tag"
+            fi
+            if [ "$SHOULD_FW" != "true" ] && [ "$SHOULD_IB" != "true" ] && [ "$SHOULD_SDK_PKGS" != "true" ]; then
+              echo "- ⏭️ **无构建任务** (无变更或模式不匹配)"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ── 创建固件 Draft Release (按当前 commit SHA 复用) ──
@@ -488,6 +545,7 @@ jobs:
       matrix_ib_release_tag:     ${{ matrix.ib_release_tag }}
       matrix_ib_profile:         ${{ matrix.ib_profile }}
       matrix_ib_keep_versions:    ${{ matrix.ib_keep_versions }}
+      matrix_sdk_keep_versions:   ${{ matrix.sdk_keep_versions }}
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}

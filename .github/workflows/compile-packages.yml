@@ -261,6 +261,7 @@ jobs:
       - name: SDK Build Diagnostics
         if: failure()
         run: |
+          echo "> 👈 触发/目标/版本等整体计划见 **Plan job Summary**" >> "$GITHUB_STEP_SUMMARY"
           echo "## ❌ SDK 软件包构建失败" >> "$GITHUB_STEP_SUMMARY"
           if [ -d sdk/logs ]; then
             for logfile in $(find sdk/logs -name 'compile.txt' -type f | sort); do

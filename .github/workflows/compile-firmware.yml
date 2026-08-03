@@ -21,6 +21,7 @@ on:
       matrix_ib_release_repo:  { required: true, type: string }
       matrix_ib_release_tag:   { required: true, type: string }
       matrix_ib_keep_versions: { required: true, type: number  }
+      matrix_sdk_keep_versions: { required: false, type: number, default: 7 }
       matrix_ib_profile:       { required: false, type: string, default: '' }
       # ── 默认值（workflow 内置;调用方不传则用这里,见 firmware_builder_v2 env）──
       defaults_repo:        { required: false, type: string, default: 'solarflows/AutoWorkflows' }
@@ -333,6 +334,7 @@ jobs:
       - name: Build Error Diagnostics
         if: failure()
         run: |
+          echo "> 👈 触发/目标/版本等整体计划见 **Plan job Summary**" >> "$GITHUB_STEP_SUMMARY"
           cd openwrt
           if [ -d logs ]; then
             for logfile in $(find logs -name 'compile.txt' -type f | sort); do
@@ -548,11 +550,41 @@ jobs:
              --arg ts "$(TZ=$TZ date -Iseconds)" \
              '.[$v] = {file:$f, sha256:$s, source_sha:$src, arch:$arch, built_at:$ts}' \
              /tmp/sdk_index/index.json > /tmp/sdk_index/index_new.json
-          # 按 version 号排序 + 保留最近 N 个版本
-          KEEP=${{ inputs.matrix_ib_keep_versions }}
-          jq --argjson n "$KEEP" 'to_entries | sort_by(.key | [splits("[.-]")] | map(try (tonumber? // 0)) ) | .[-$n:] | from_entries' \
-             /tmp/sdk_index/index_new.json > /tmp/sdk_index/index.json
+          # 按 version 号排序 + 保留最近 N 个版本 (健壮比较: 数字段按数值, SNAPSHOT=-1, V<数字> 解析数字)
+          KEEP=${{ inputs.matrix_sdk_keep_versions }}
+          jq --argjson n "$KEEP" '
+            def vtok: if test("^[0-9]+$") then tonumber
+                      elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
+                      elif . == "SNAPSHOT" then -1 else 0 end;
+            to_entries | sort_by([.key | splits("[.-]") | vtok]) | .[-$n:] | from_entries
+          ' /tmp/sdk_index/index_new.json > /tmp/sdk_index/index.json
           gh release upload "$TAG" --repo "$REPO" /tmp/sdk_index/index.json --clobber
+
+          # ── 清理旧版本 tarball (同名由 --clobber 替换; 异名按版本号保留最近 KEEP 组) ──
+          NEW_FILE="${{ steps.sdk_ib.outputs.sdk_new_name }}"
+          gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' \
+            | grep -E "^sdk-${TARGET}-.*\.tar\.(xz|zst)$" > /tmp/sdk_files.txt || echo "  (当前无历史 SDK tarball, 跳过清理)"
+          KEEP_HEAD=$(jq -Rr --argjson n "$KEEP" '
+            def vtok: if test("^[0-9]+$") then tonumber
+                      elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
+                      elif . == "SNAPSHOT" then -1 else 0 end;
+            [inputs] | sort_by([splits("[._-]") | vtok]) | .[-$n:][]
+          ' /tmp/sdk_files.txt)
+          while read -r f; do
+            [ -z "$f" ] && continue
+            [ "$f" = "$NEW_FILE" ] && { echo "  (保留本次上传: $f)"; continue; }
+            if echo "$KEEP_HEAD" | grep -qxF "$f"; then
+              echo "  (保留: $f)"
+            else
+              echo "🗑️ 删除旧版本: $f"
+              gh release delete-asset "$TAG" --repo "$REPO" "$f" --yes || echo "  ⚠️ 删除失败: $f"
+              if gh release delete-asset "$TAG" --repo "$REPO" "$f.sha256" --yes 2>/dev/null; then
+                echo "  🧹 已同步删除 ${f}.sha256"
+              else
+                echo "  (无 ${f}.sha256 伴生文件)"
+              fi
+            fi
+          done < /tmp/sdk_files.txt
 
       - name: Upload IB to release
         if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.ib_new_name != ''
@@ -582,9 +614,39 @@ jobs:
              '.[$v] = {file:$f, sha256:$s, source_sha:$src, arch:$arch, built_at:$ts}' \
              /tmp/ib_index/index.json > /tmp/ib_index/index_new.json
           KEEP=${{ inputs.matrix_ib_keep_versions }}
-          jq --argjson n "$KEEP" 'to_entries | sort_by(.key | [splits("[.-]")] | map(try (tonumber? // 0)) ) | .[-$n:] | from_entries' \
-             /tmp/ib_index/index_new.json > /tmp/ib_index/index.json
+          jq --argjson n "$KEEP" '
+            def vtok: if test("^[0-9]+$") then tonumber
+                      elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
+                      elif . == "SNAPSHOT" then -1 else 0 end;
+            to_entries | sort_by([.key | splits("[.-]") | vtok]) | .[-$n:] | from_entries
+          ' /tmp/ib_index/index_new.json > /tmp/ib_index/index.json
           gh release upload "$TAG" --repo "$REPO" /tmp/ib_index/index.json --clobber
+
+          # ── 清理旧版本 tarball (同名由 --clobber 替换; 异名按版本号保留最近 KEEP 组) ──
+          NEW_FILE="${{ steps.sdk_ib.outputs.ib_new_name }}"
+          gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' \
+            | grep -E "^ib-${TARGET}-.*\.tar\.(xz|zst)$" > /tmp/ib_files.txt || echo "  (当前无历史 IB tarball, 跳过清理)"
+          KEEP_HEAD=$(jq -Rr --argjson n "$KEEP" '
+            def vtok: if test("^[0-9]+$") then tonumber
+                      elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
+                      elif . == "SNAPSHOT" then -1 else 0 end;
+            [inputs] | sort_by([splits("[._-]") | vtok]) | .[-$n:][]
+          ' /tmp/ib_files.txt)
+          while read -r f; do
+            [ -z "$f" ] && continue
+            [ "$f" = "$NEW_FILE" ] && { echo "  (保留本次上传: $f)"; continue; }
+            if echo "$KEEP_HEAD" | grep -qxF "$f"; then
+              echo "  (保留: $f)"
+            else
+              echo "🗑️ 删除旧版本: $f"
+              gh release delete-asset "$TAG" --repo "$REPO" "$f" --yes || echo "  ⚠️ 删除失败: $f"
+              if gh release delete-asset "$TAG" --repo "$REPO" "$f.sha256" --yes 2>/dev/null; then
+                echo "  🧹 已同步删除 ${f}.sha256"
+              else
+                echo "  (无 ${f}.sha256 伴生文件)"
+              fi
+            fi
+          done < /tmp/ib_files.txt
 
       - name: Cleanup draft release on failure
         if: failure() || cancelled()
