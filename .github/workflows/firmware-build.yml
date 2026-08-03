@@ -514,13 +514,12 @@ jobs:
           done
 
   # ════════════════════ run-firmware (全量编译) ════════════════════
+  # 升级 full 仅由 plan 决策判断 (SDK/IB 不存在等前置条件), 不做任务失败回退:
+  # 单独用 sdk-packages / imagebuilder 构建时改错就错, 不升级 full
   run-firmware:
     name: Compile Firmware / ${{ matrix.target }}
-    needs: [plan, run-imagebuilder]
-    if: |
-      always() &&
-      (needs.plan.outputs.should_build_firmware == 'true' ||
-       (needs.plan.outputs.should_build_ib == 'true' && needs.run-imagebuilder.result == 'failure'))
+    needs: plan
+    if: needs.plan.outputs.should_build_firmware == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -723,7 +722,7 @@ jobs:
               echo "✅ [${TARGET}] 固件 Release $RELEASE_TAG 已发布"
             else
               if [ "$BUILD_MODE" = "ib" ] && [ "${{ needs.run-imagebuilder.result }}" = "failure" ]; then
-                echo "⚠️  [${TARGET}] ImageBuilder 重打包失败,无固件产出,已跳过固件发布 (release 不回退)"
+                echo "⚠️  [${TARGET}] ImageBuilder 重打包失败,无固件产出,已跳过固件发布 (改错就错,不回退全量)"
               else
                 echo "⚠️  [${TARGET}] 无固件文件 (mode=$BUILD_MODE)"
               fi
