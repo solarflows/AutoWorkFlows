@@ -79,12 +79,25 @@ jobs:
           echo "packages_sha=${PKG_SHA}" >> $GITHUB_OUTPUT
           echo "packages_sha_full=${PKG_SHA_FULL}" >> $GITHUB_OUTPUT
 
-      - name: Disk space - Initial
+      # ───────── 磁盘空间监控（第 1 阶段：初始状态）─────────
+      # 刻意设计: 4 阶段磁盘监控用于诊断空间不足/缓存膨胀, 数据写入 outputs 供最后汇总表
+      - name: 💽 Disk space · Initial
         id: disk-1
         run: |
+          echo "📊 初始磁盘空间（克隆后，环境准备前）"
           df -h / | awk 'NR==1{print} NR==2{print}'
-          AVAIL_GB=$(($(df --output=avail / | tail -1) / 1024 / 1024))
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
           echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
+          echo "📊 openwrt/ : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
 
       - name: Compute toolchain hash
         id: toolchain_hash
@@ -110,6 +123,24 @@ jobs:
           sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.eu.org/init_build_environment.sh)'
           sudo -E systemctl daemon-reload
           sudo timedatectl set-timezone "$TZ"
+
+      # ───────── 磁盘空间监控（第 2 阶段：环境准备后）─────────
+      - name: 💽 Disk space · After env prep
+        id: disk-2
+        run: |
+          echo "📊 环境准备后磁盘空间"
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
 
       - name: Free Disk Space
         if: inputs.free_disk_space == true
@@ -144,9 +175,13 @@ jobs:
             immwrt-ccache-${{ env.TARGET }}-
           path: openwrt/.ccache
 
+      # ───────── 缓存恢复与状态上报 ─────────
+      # 刻意设计: 诊断性质步骤(v1 遗产), 缓存恢复失败不应阻塞后续构建,
+      # 故 continue-on-error: true, 由 ccache Stats 步骤做指标报告
       - name: Verify & report cache status
         if: inputs.cache_strategy != 'no-cache'
         id: cache-refresh
+        continue-on-error: true
         run: |
           CACHE_STRATEGY="${{ inputs.cache_strategy }}"
           if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
@@ -204,8 +239,10 @@ jobs:
           FP=$(openssl sha256 < openwrt/public-key.pem | awk '{print $NF}')
           echo "fingerprint=${FP}" >> $GITHUB_OUTPUT
 
+      # ───────── 更新 feeds（源码 + 软件包索引）─────────
       - name: Update Feeds & Packages
         run: |
+          set -euo pipefail
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install -a
 
@@ -259,7 +296,9 @@ jobs:
           echo "📋 image.mk IMG_PREFIX_VERNUM:"
           grep 'IMG_PREFIX_VERNUM' include/image.mk || true
 
-      - name: Download Source Packages
+      # ───────── 下载源码包（dl/ 目录）─────────
+      # 刻意设计: 并行下载失败时降级单线程重试; 清理 <1KB 的残缺文件(下载失败残留)
+      - name: 📥 Download Source Packages
         run: |
           cd openwrt
           export CURL_OPTIONS="--connect-timeout 10 --retry 1 --max-time 180"
@@ -269,10 +308,36 @@ jobs:
           }
           find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
 
-      - name: Build Firmware
+      # ───────── 磁盘空间监控（第 3 阶段：编译前）─────────
+      - name: 💽 Disk space · Before build
+        id: disk-3
+        run: |
+          echo "📊 编译前磁盘空间"
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
+          echo "  📂 openwrt/        : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ staging_dir/  : $(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ .ccache/      : $(du -sh openwrt/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ dl/           : $(du -sh openwrt/dl 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+
+      - name: 🔨 5. Build Firmware
         id: build
         run: |
           set -euo pipefail
+          echo "╔══════════════════════════════════════╗"
+          echo "║  🔨 5. Build Firmware                ║"
+          echo "╚══════════════════════════════════════╝"
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
           ccache --max-size 10G
@@ -297,13 +362,64 @@ jobs:
           END_TIME=$(date +%s)
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           echo "duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
-          echo "⏱️ 并行编译耗时: $(printf '%dh %dm %ds' $(((END_TIME-START_TIME)/3600)) $((((END_TIME-START_TIME)%3600)/60)) $(((END_TIME-START_TIME)%60)))"
+          echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $(((END_TIME-START_TIME)/3600)) $((((END_TIME-START_TIME)%3600)/60)) $(((END_TIME-START_TIME)%60)))"
 
-      - name: Retry build
+      # ───────── 磁盘空间监控（第 4 阶段：编译后 + 4 阶段汇总表）─────────
+      - name: 💽 Disk space · After build
+        if: always()
+        id: disk-4
+        run: |
+          echo "📊 编译后磁盘空间"
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
+          echo "  📂 openwrt/        : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ staging_dir/  : $(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ .ccache/      : $(du -sh openwrt/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ dl/           : $(du -sh openwrt/dl 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+
+          # ── 计算各阶段空间消耗差值 ──
+          D1_USED=${{ steps.disk-1.outputs.used_gb || 0 }}
+          D2_USED=${{ steps.disk-2.outputs.used_gb || 0 }}
+          D3_USED=${{ steps.disk-3.outputs.used_gb || 0 }}
+          D4_USED=${USED_GB}
+          DELTA_1_2=$((D2_USED - D1_USED))
+          DELTA_2_3=$((D3_USED - D2_USED))
+          DELTA_3_4=$((D4_USED - D3_USED))
+          fmt_delta() { local d=$1; if [ "$d" -ge 0 ]; then echo "+${d}G"; else echo "${d}G"; fi; }
+
+          {
+            echo ""
+            echo "### 💽 磁盘空间变化"
+            echo "| 阶段 | 总容量 | 已用 | 已用% | 阶段消耗 |"
+            echo "|------|--------|------|-------|----------|"
+            echo "| ① 初始 | ${TOTAL_GB}G | ${D1_USED}G | ${{ steps.disk-1.outputs.used_pct || 'N/A' }}% | — |"
+            echo "| ② 环境准备后 | ${TOTAL_GB}G | ${D2_USED}G | ${{ steps.disk-2.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_1_2) |"
+            echo "| ③ 编译前 | ${TOTAL_GB}G | ${D3_USED}G | ${{ steps.disk-3.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_2_3) |"
+            echo "| ④ 编译后 | ${TOTAL_GB}G | ${D4_USED}G | ${USED_PCT}% | $(fmt_delta $DELTA_3_4) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ───────── 重试编译（并行失败后更新仓库再试, 保留初次日志 logs.1）─────────
+      # 刻意设计: 失败后先 git pull 最新源码再重试(上游可能已修),
+      # logs/ → logs.1/ 保留初次轮日志用于对比诊断; 单线程轮用 V=sc 输出完整日志
+      - name: 🔁 Retry build
         if: always() && !cancelled() && steps.build.outputs.make_exit != '0'
         id: retry
         run: |
           set -euo pipefail
+          echo "╔══════════════════════════════════════╗"
+          echo "║  🔁 Retry build (更新仓库后重试)      ║"
+          echo "╚══════════════════════════════════════╝"
           cd openwrt
           if [ "${{ inputs.cache_strategy }}" != "no-cache" ]; then
             export CC="ccache gcc"
@@ -323,9 +439,11 @@ jobs:
           RETRY_EXIT=${PIPESTATUS[0]}
           set -o pipefail
           if [ "$RETRY_EXIT" -ne 0 ]; then
-            echo "⚠️ 并行重试仍有错误 → 单线程最后一搏..."
+            echo "⚠️ 并行重试仍有错误 → 单线程最后一搏 (V=sc 完整日志)..."
             set +o pipefail
-            make -j1 -k 2>&1 | tee build.log
+            # 刻意设计: 单线程 + V=sc 输出完整编译命令与完整日志,
+            # 确保失败包的真实错误(如 configure 具体报错)不会被并行模式截断
+            make -j1 V=sc -k 2>&1 | tee build.log
             RETRY_EXIT=${PIPESTATUS[0]}
             set -o pipefail
           fi
@@ -337,7 +455,8 @@ jobs:
           fi
           echo "✅ 重试完成"
 
-      - name: Total Build Duration
+      # ───────── 总耗时汇总 ─────────
+      - name: ⏱️ Total Build Duration
         if: always()
         id: total_duration
         run: |
@@ -346,40 +465,269 @@ jobs:
           TOTAL_SEC=$((BUILD_DUR + RETRY_DUR))
           echo "duration=${TOTAL_SEC}" >> $GITHUB_OUTPUT
           echo "duration_fmt=$(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60)))" >> $GITHUB_OUTPUT
+          echo "⏱️ 总编译耗时: $(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60))) (并行 ${BUILD_DUR}s + 重试 ${RETRY_DUR}s)"
 
-      - name: ccache Stats & Cleanup
+      # ───────── 编译日志统计（仅成功时运行）─────────
+      # 刻意设计: 统计工具是必要的分析手段(v1 遗产), 统计每个包的编译耗时,
+      # 用于定位最耗时的编译瓶颈。Top5 写入 Summary。
+      - name: 📊 Build Log Analysis
+        if: success()
+        run: |
+          cd openwrt
+
+          # 一次性提取所有 compile.txt 末行，再用 awk 分流统计
+          TAIL_ALL=$(find logs -name 'compile.txt' -print0 | xargs -0 tail -qn1 2>/dev/null || true)
+
+          TOTAL=$(find logs -name 'compile.txt' 2>/dev/null | wc -l)
+          INCOMPLETE=$((TOTAL - $(echo "$TAIL_ALL" | grep -c '^time: ' || true)))
+          EMPTY=$(find logs -name 'compile.txt' -size 0 2>/dev/null | wc -l)
+
+          # 耗时提取
+          echo "$TAIL_ALL" | grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
+
+          # 统计输出到终端日志
+          echo "📊 compile.txt: 总计 ${TOTAL}, 未完成 ${INCOMPLETE}, 空 ${EMPTY}"
+
+          # Summary 只保留 Top 5
+          {
+            echo ""
+            echo "### 📊 编译耗时 Top 5"
+            echo "\`\`\`"
+            awk -F'#' '{
+              pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
+              real=$2;
+              printf "%8.2fs  %s\n", real, pkg
+            }' build_time_clean.log 2>/dev/null | sort -rn 2>/dev/null | head -5 || true
+            echo "\`\`\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # ───────── ccache 统计与清理（独立步骤，不受构建成败影响）─────────
+      # 刻意设计: ccache 命中率/压缩比是判断"缓存是否有效"的关键指标,
+      # no-cache 模式跳过本步骤(无缓存可统计)
+      - name: 📈 ccache Stats & Cleanup
         if: always() && inputs.cache_strategy != 'no-cache'
         run: |
+          echo "╔══════════════════════════════════════╗"
+          echo "║  📈 ccache 统计与压缩测量             ║"
+          echo "╚══════════════════════════════════════╝"
+
           if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
             export CCACHE_DIR="$(pwd)/openwrt/.ccache"
-            ccache --cleanup 2>/dev/null || true
+
+            # ── 磁盘用量 + 压缩大小 ──
+            DISK_USAGE_HUMAN=$(du -sh "openwrt/.ccache" 2>/dev/null | cut -f1)
+            DISK_USAGE_BYTES=$(du -sb "openwrt/.ccache" 2>/dev/null | awk '{print $1}')
+            CC_GZIP_BYTES=$(timeout 60 tar cf - openwrt/.ccache 2>/dev/null | gzip -1 -c | wc -c 2>/dev/null || echo 0)
+            CC_GZIP_HUMAN=""
+            if [ -n "$CC_GZIP_BYTES" ] && [ "$CC_GZIP_BYTES" -gt 0 ] && [ -n "$DISK_USAGE_BYTES" ] && [ "$DISK_USAGE_BYTES" -gt 0 ]; then
+              CC_GZIP_HUMAN=$(numfmt --to=iec "$CC_GZIP_BYTES" 2>/dev/null || echo "${CC_GZIP_BYTES} B")
+            fi
+
+            # ── 解析关键指标（兼容 ccache 3.x 旧格式 + 4.x 新格式）──
+            CC_RAW=$(ccache -s 2>/dev/null || true)
+            HITS_DIRECT=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(direct\)|Direct):\s*\K[0-9]+' | head -1)
+            HITS_PREP=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(preprocessed\)|Preprocessed):\s*\K[0-9]+' | head -1)
+            MISSES=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache miss|Misses):\s*\K[0-9]+' | head -1)
+            CACHE_SIZE=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache size \(|Cache size \()G(?:B|iB)\):\s*\K[0-9.]+' | head -1)
+            # 如果 4.x 格式的 Direct/Preprocessed/Misses 没抓到，说明可能是其他格式，置空即可
+            [ -z "$HITS_DIRECT" ] && HITS_DIRECT="?"
+            [ -z "$HITS_PREP" ] && HITS_PREP="?"
+            [ -z "$MISSES" ] && MISSES="?"
+            [ -z "$CACHE_SIZE" ] && CACHE_SIZE="?"
+
+            # ── 终端日志 ──
+            echo "📈 ccache 统计:"
+            echo "  Direct hits:   ${HITS_DIRECT}"
+            echo "  Preprocessed:  ${HITS_PREP}"
+            echo "  Misses:        ${MISSES}"
+            echo "  Cache size:    ${CACHE_SIZE}G (disk ${DISK_USAGE_HUMAN}, gzip ~${CC_GZIP_HUMAN})"
+
+            # ── Summary ──
+            TC_HIT_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
+            TC_DISK=$(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo "N/A")
+            {
+              echo ""
+              echo "### 📈 ccache 统计"
+              echo "| 项 | Direct hits | Preprocessed | Misses | 缓存大小 | 压缩后 |"
+              echo "|---|---|---|---|---|---|"
+              echo "| **ccache** | ${HITS_DIRECT} | ${HITS_PREP} | ${MISSES} | ${CACHE_SIZE}G | ~${CC_GZIP_HUMAN} |"
+              echo "| **工具链** | ${TC_HIT_LABEL} | — | — | ${TC_DISK} | — |"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ ccache 不可用或无缓存目录, 跳过统计"
           fi
 
-      - name: Build Error Diagnostics
+      # ───────── 编译/下载错误诊断（统一处理）─────────
+      # 刻意设计: 失败时自动查找失败软件包, 从 error.txt/compile.txt 末行(time: 标记)
+      # 判定哪个包失败, 避免人工翻 build.log 大海捞针。logs=重试轮, logs.1=初次轮。
+      - name: 🔍 Build Error Diagnostics
         if: failure()
         run: |
           echo "> 👈 触发/目标/版本等整体计划见 **Plan job Summary**" >> "$GITHUB_STEP_SUMMARY"
           cd openwrt
-          # logs = 重试轮, logs.1 = 初次 build (retry 前 mv 保留)
-          LOG_ROOTS="logs logs.1"
-          FOUND=0
-          for ROOT in $LOG_ROOTS; do
+          FAILED_PKGS=""
+          PKG_COUNT=0
+
+          # ── 判断失败阶段：优先检查 download.txt（下载阶段），再检查 compile.txt（编译阶段）──
+          HAS_DOWNLOAD_LOGS=false
+          HAS_COMPILE_LOGS=false
+
+          # 同时扫描 logs(重试) 与 logs.1(初次)
+          for ROOT in logs logs.1; do
             [ -d "$ROOT" ] || continue
-            for logfile in $(find "$ROOT" -name 'compile.txt' -type f | sort); do
-              LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
-              if ! echo "$LAST_LINE" | grep -q '^time:'; then
-                FOUND=1
-                PKG=$(echo "$logfile" | sed "s|$ROOT/||; s|/compile.txt||")
-                echo "### ❌ ${PKG} ($ROOT)" >> "$GITHUB_STEP_SUMMARY"
-                echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$logfile" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
-                echo '```' >> "$GITHUB_STEP_SUMMARY"
-              fi
-            done
+            if [ -n "$(find $ROOT -name 'download.txt' -type f 2>/dev/null | head -1)" ]; then
+              HAS_DOWNLOAD_LOGS=true
+            fi
+            if [ -n "$(find $ROOT -name 'compile.txt' -type f 2>/dev/null | head -1)" ]; then
+              HAS_COMPILE_LOGS=true
+            fi
           done
-          if [ "$FOUND" = "0" ]; then
+
+          if [ "$HAS_COMPILE_LOGS" = "true" ]; then
+            # 有 compile.txt → 编译阶段失败
+            echo "## ❌ 编译错误详情" >> "$GITHUB_STEP_SUMMARY"
+
+            # 扫描 logs/ + logs.1/ 中所有未正常完成的编译日志（末行不含 time: 标记的为失败）
+            for ROOT in logs logs.1; do
+              [ -d "$ROOT" ] || continue
+              for logfile in $(find $ROOT -name 'compile.txt' -type f 2>/dev/null | sort); do
+                LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+                if ! echo "$LAST_LINE" | grep -q '^time:'; then
+                  PKG=$(echo "$logfile" | sed "s|$ROOT/||; s|/compile.txt||")
+                  FAILED_PKGS="$FAILED_PKGS $PKG"
+                fi
+              done
+            done
+
+            if [ -n "$FAILED_PKGS" ]; then
+              PKG_COUNT=$(echo "$FAILED_PKGS" | wc -w)
+              echo "共 ${PKG_COUNT} 个软件包编译失败" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+
+              for pkg in $FAILED_PKGS; do
+                # 优先 error.txt(如存在), 否则用 compile.txt
+                LOGFILE=""
+                for ROOT in logs logs.1; do
+                  if [ -f "$ROOT/${pkg}/error.txt" ]; then
+                    LOGFILE="$ROOT/${pkg}/error.txt"; break
+                  elif [ -f "$ROOT/${pkg}/compile.txt" ]; then
+                    LOGFILE="$ROOT/${pkg}/compile.txt"; break
+                  fi
+                done
+                if [ -n "$LOGFILE" ]; then
+                  echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                  # 过滤 make 目录切换噪音，取最后 60 行有效错误
+                  grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$LOGFILE" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                fi
+              done
+            else
+              echo "未在 logs/ 中找到失败软件包（编译可能在其他阶段出错）" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo '```text' >> "$GITHUB_STEP_SUMMARY"
+              # 从 build.log 提取 make 错误摘要
+              grep -E 'make\[[0-9]+\].*(Error [0-9]+|Stop\.?)$' build.log 2>/dev/null | head -40 >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          elif [ "$HAS_DOWNLOAD_LOGS" = "true" ]; then
+            # 有 download.txt 但无 compile.txt → 下载阶段失败
+            echo "## ❌ 下载失败详情" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+
+            # 扫描 download.txt 找出失败的包（末行不含 time: 或包含错误信息）
+            FAILED_DOWNLOAD_PKGS=""
+            for ROOT in logs logs.1; do
+              [ -d "$ROOT" ] || continue
+              for logfile in $(find $ROOT -name 'download.txt' -type f 2>/dev/null | sort); do
+                LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+                # 下载成功通常以 time: 结尾，失败则包含错误信息
+                if ! echo "$LAST_LINE" | grep -q '^time:'; then
+                  PKG=$(echo "$logfile" | sed "s|$ROOT/||; s|/download.txt||")
+                  FAILED_DOWNLOAD_PKGS="$FAILED_DOWNLOAD_PKGS $PKG"
+                fi
+              done
+            done
+
+            if [ -n "$FAILED_DOWNLOAD_PKGS" ]; then
+              PKG_COUNT=$(echo "$FAILED_DOWNLOAD_PKGS" | wc -w)
+              echo "共 ${PKG_COUNT} 个软件包下载失败" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+
+              for pkg in $FAILED_DOWNLOAD_PKGS; do
+                LOGFILE=""
+                for ROOT in logs logs.1; do
+                  if [ -f "$ROOT/${pkg}/download.txt" ]; then
+                    LOGFILE="$ROOT/${pkg}/download.txt"; break
+                  fi
+                done
+                if [ -n "$LOGFILE" ]; then
+                  echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                  # 过滤 make 目录切换噪音，取最后 60 行有效错误
+                  grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$LOGFILE" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                fi
+              done
+            else
+              # 兜底：从 build.log 提取下载失败信息
+              FAILED_DOWNLOADS=$(grep -E '(Download failed|make\[[0-9]+\].*\[.*download\].*Error|No rule to make target.*download)' build.log 2>/dev/null | head -30 || true)
+
+              if [ -n "$FAILED_DOWNLOADS" ]; then
+                echo "以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                echo "$FAILED_DOWNLOADS" >> "$GITHUB_STEP_SUMMARY"
+                echo '```' >> "$GITHUB_STEP_SUMMARY"
+              else
+                # 尝试从 make 输出中提取失败的包目录
+                FAILED_PKGS2=$(grep -E 'make\[[0-9]+\].*Error [0-9]+' build.log 2>/dev/null | \
+                  sed -n 's/.*\[\(.*\)\].*/\1/p' | sort -u | head -20 || true)
+                if [ -n "$FAILED_PKGS2" ]; then
+                  echo "推测以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                  echo "$FAILED_PKGS2" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                else
+                  echo "无法从日志自动提取失败包名，请查看完整 build.log" >> "$GITHUB_STEP_SUMMARY"
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
+                  tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+                  echo '```' >> "$GITHUB_STEP_SUMMARY"
+                fi
+              fi
+            fi
+          else
+            # 无 logs/ 目录或无 download.txt/compile.txt → 极早期失败或配置错误
+            echo "## ❌ 构建失败详情" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
             tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+          # ── 提示初始构建日志（retry 时保存的 build.1.log）──
+          if [ -f build.1.log ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> 📎 初始构建日志（更新仓库前）已保存至 artifact: \`build.1.log\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 📋 logs/ 概览" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          TOTAL_COMPILE=$(find logs logs.1 -name 'compile.txt' -type f 2>/dev/null | wc -l)
+          TOTAL_DOWNLOAD=$(find logs logs.1 -name 'download.txt' -type f 2>/dev/null | wc -l)
+          EMPTY_COMPILE=$(find logs logs.1 -name 'compile.txt' -type f -size 0 2>/dev/null | wc -l)
+          EMPTY_DOWNLOAD=$(find logs logs.1 -name 'download.txt' -type f -size 0 2>/dev/null | wc -l)
+          echo "编译日志: ${TOTAL_COMPILE} (空: ${EMPTY_COMPILE})"
+          echo "下载日志: ${TOTAL_DOWNLOAD} (空: ${EMPTY_DOWNLOAD})"
+          echo "失败包:   ${PKG_COUNT}"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload build log on failure
         if: failure()
@@ -416,11 +764,15 @@ jobs:
               xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
           fi
 
-      # ════════ 产物打包 ════════
-      - name: Package firmware artifacts
+      # ════════════ 产物打包 ════════════
+      # 刻意设计: 打包后输出 release/ 根目录结构(深度1), 便于人工快速核验产物完整性
+      - name: 📦 Package firmware artifacts
         if: success()
         run: |
           cd openwrt
+          echo "╔══════════════════════════════════════╗"
+          echo "║  📦 Package firmware artifacts        ║"
+          echo "╚══════════════════════════════════════╝"
           mkdir -p release/firmware
           find bin/targets -type f -not -path "*/packages/*" -exec cp {} release/firmware/ \; 2>/dev/null || true
           mkdir -p release/passwall
@@ -435,6 +787,22 @@ jobs:
             cp public-key.pem release/passwall/solarflows-apk-public.pem
           fi
           (cd release && tar czf ../${TARGET}-release.tar.gz .)
+
+          # ── 产物根目录结构（深度 1）──
+          echo ""
+          echo "📂 release/ 根目录结构 (深度 1):"
+          echo '```text'
+          if command -v tree &>/dev/null; then
+            tree -L 1 release 2>/dev/null || ls -al release
+          else
+            ls -al release
+          fi
+          echo '```'
+          echo ""
+          echo "📦 产物汇总:"
+          echo "  固件:    $(find release/firmware -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/firmware 2>/dev/null | cut -f1)"
+          echo "  Passwall: $(find release/passwall -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/passwall 2>/dev/null | cut -f1)"
+          echo "  tarball: $(ls -lh ${TARGET}-release.tar.gz 2>/dev/null | awk '{print $5}')"
 
       - name: Generate build info
         if: success()
@@ -507,10 +875,15 @@ jobs:
           retention-days: 7
 
       # ════════ SDK / IB 打包与发布 (v2 新增) ════════
-      - name: Package SDK & IB tarballs
+      # 刻意设计: SDK/IB 以 release tag (sdk-<target> / ib-<target>) 存储多版本,
+      # 同名版本 --clobber 替换, 异名版本按版本号保留最近 KEEP 组 (index.json 追踪)。
+      - name: 📦 Package SDK & IB tarballs
         if: success() && inputs.publish_sdk_ib == true
         id: sdk_ib
         run: |
+          echo "╔══════════════════════════════════════╗"
+          echo "║  📦 Package SDK & IB tarballs         ║"
+          echo "╚══════════════════════════════════════╝"
           cd openwrt
           mkdir -p release/sdk release/ib
 
@@ -530,7 +903,9 @@ jobs:
             [ -f "release/sdk/$(basename "$SDK_TARBALL").sha256" ] && \
               mv "release/sdk/$(basename "$SDK_TARBALL").sha256" "release/sdk/${SDK_NEW_NAME}.sha256"
             echo "sdk_new_name=${SDK_NEW_NAME}" >> $GITHUB_OUTPUT
-            echo "sdk_version_key=${SDK_VERSION}" >> $GITHUB_OUTPUT            echo "sdk_arch=${ARCH}" >> $GITHUB_OUTPUT            echo "✅ SDK: ${SDK_NEW_NAME}"
+            echo "sdk_version_key=${SDK_VERSION}" >> $GITHUB_OUTPUT
+            echo "sdk_arch=${ARCH}" >> $GITHUB_OUTPUT
+            echo "✅ SDK: ${SDK_NEW_NAME}"
           else
             echo "::warning::SDK tarball 未生成 (检查 01-base.seed 中 CONFIG_SDK=y)"
           fi
@@ -556,6 +931,18 @@ jobs:
           else
             echo "::warning::IB tarball 未生成 (检查 01-base.seed 中 CONFIG_IB=y)"
           fi
+
+          # ── SDK/IB 目录结构（深度 1）──
+          echo ""
+          echo "📂 release/sdk/ + release/ib/ 目录结构 (深度 1):"
+          echo '```text'
+          if command -v tree &>/dev/null; then
+            tree -L 1 release/sdk release/ib 2>/dev/null || { ls -al release/sdk; ls -al release/ib; }
+          else
+            ls -al release/sdk
+            ls -al release/ib
+          fi
+          echo '```'
 
       - name: Upload SDK to release
         if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.sdk_new_name != ''

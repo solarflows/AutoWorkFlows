@@ -623,6 +623,9 @@ jobs:
       cancel-in-progress: false
 
   # ════════════════════ release: 固件 + 软件包发布 ════════════════════
+  # 刻意设计: 仅在"至少一个被计划的任务真正成功完成"时才执行发布。
+  # 若所有任务失败/被跳过(如 smart 无变更、编译失败), release 应整体跳过,
+  # 避免空转 30 分钟 + 误建空 release。
   release:
     name: Release
     needs: [plan, run-firmware, run-imagebuilder, run-packages]
@@ -632,6 +635,11 @@ jobs:
       (
         needs.plan.outputs.should_publish_firmware == 'true' ||
         needs.plan.outputs.should_publish_pkgs == 'true'
+      ) &&
+      (
+        (needs.plan.outputs.should_build_firmware == 'true' && needs.run-firmware.result == 'success') ||
+        (needs.plan.outputs.should_build_ib == 'true' && needs.run-imagebuilder.result == 'success') ||
+        (needs.plan.outputs.should_build_sdk_pkgs == 'true' && needs.run-packages.result == 'success')
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 30

@@ -12,3 +12,6 @@ build-info.json
 Thumbs.db
 .codegraph/
 .reasonix/
+
+# 临时对比/工具脚本（不入库）
+scripts/
