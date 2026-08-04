@@ -153,10 +153,14 @@ jobs:
           large-packages: true
           swap-storage: true
 
+      # ───────── 工具链缓存恢复（独立 restore, 仅非 clean 模式）─────────
+      # 刻意设计: 拆为独立 restore + save(见 Purge 前) 而非一体式 actions/cache@v5。
+      # clean-toolchain/clean-all 时跳过 restore(不下载旧缓存), 实现真正的刷新。
+      # save 仅构建成功时触发(if: success()), 避免失败半成品污染缓存 key。
       - name: Restore toolchain cache
-        id: cache-tc
-        if: inputs.cache_strategy != 'no-cache'
-        uses: actions/cache@v5
+        id: cache-tc-restore
+        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
+        uses: actions/cache/restore@v5
         with:
           key: immwrt-toolchain-${{ env.TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
           restore-keys: |
@@ -184,9 +188,7 @@ jobs:
         continue-on-error: true
         run: |
           CACHE_STRATEGY="${{ inputs.cache_strategy }}"
-          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
-            rm -rf openwrt/staging_dir/host* openwrt/staging_dir/tool* 2>/dev/null || true
-          fi
+          # clean-toolchain 模式: restore 已跳过(见上一步), 无需 rm -rf
           if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ]; then
             command -v ccache &>/dev/null && ccache -C 2>/dev/null || true
             rm -rf openwrt/.ccache 2>/dev/null || true
@@ -208,7 +210,7 @@ jobs:
             TOOLCHAIN_RESTORED=true
           fi
           echo "toolchain_restored=${TOOLCHAIN_RESTORED}" >> $GITHUB_OUTPUT
-          echo "toolchain_exact=${{ steps.cache-tc.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+          echo "toolchain_exact=${{ steps.cache-tc-restore.outputs.cache-hit || 'false' }}" >> $GITHUB_OUTPUT
 
           CCACHE_RESTORED=false
           if [ "$CACHE_STRATEGY" != "clean-all" ] && [ "$CACHE_STRATEGY" != "clean-ccache" ] \
@@ -743,6 +745,16 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      # ───────── 工具链缓存保存（独立 save, 仅成功时写入）─────────
+      - name: Save toolchain cache
+        if: success() && inputs.cache_strategy != 'no-cache'
+        uses: actions/cache/save@v5
+        with:
+          key: immwrt-toolchain-${{ env.TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          path: |
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
+
       - name: Purge stale GitHub Actions caches
         if: success()
         env:
@@ -753,7 +765,7 @@ jobs:
             echo "🔧 no-cache 模式: 跳过缓存清理"
             exit 0
           fi
-          TC_EXACT_HIT="${{ steps.cache-tc.outputs.cache-hit }}"
+          TC_EXACT_HIT="${{ steps.cache-tc-restore.outputs.cache-hit || 'false' }}"
           if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ] || [ "$TC_EXACT_HIT" != "true" ]; then
             gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
               xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
