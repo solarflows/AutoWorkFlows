@@ -104,6 +104,50 @@ jobs:
           sparse-checkout: openwrt-configs/immortalwrt/targets.json
           path: AutoWorkFlows
 
+      # ── 每月缓存清理（schedule 触发 + 每月 1 号）─────────
+      # 刻意设计: 工具链/ccache 缓存随时间膨胀, 每月初自动全清一次。
+      # 仅 schedule 触发且当天为 1 号才执行, 避免 workflow_dispatch 误清。
+      # 清理后 restore 步骤因 key 不命中自然走新鲜构建, 无需额外通知。
+      - name: 🧹 Monthly cache flush
+        if: github.event_name == 'schedule'
+        id: monthly-flush
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          DAY=$(TZ=$TZ date +%d)
+          if [ "$DAY" != "01" ]; then
+            echo "📅 今天不是月初 ($(TZ=$TZ date +%Y-%m-%d)), 跳过缓存清理"
+            echo "flushed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "🧹 月初缓存清理 ($(TZ=$TZ date +%Y-%m-%d))..."
+          FLUSHED=0
+
+          for KEY_PREFIX in "immwrt-toolchain-" "immwrt-ccache-"; do
+            CACHE_IDS=$(gh cache list --repo "${{ github.repository }}" --key "$KEY_PREFIX" --limit 100 --json id --jq '.[].id' 2>/dev/null || true)
+            if [ -n "$CACHE_IDS" ]; then
+              COUNT=$(echo "$CACHE_IDS" | wc -l)
+              echo "  🗑️ ${KEY_PREFIX}* → ${COUNT} 个缓存"
+              for id in $CACHE_IDS; do
+                gh cache delete "$id" --repo "${{ github.repository }}" 2>/dev/null && FLUSHED=$((FLUSHED + 1)) || true
+              done
+            else
+              echo "  📭 ${KEY_PREFIX}* → 无缓存"
+            fi
+          done
+
+          echo "✅ 月初清理完成: ${FLUSHED} 个缓存已删除"
+          echo "flushed=true" >> $GITHUB_OUTPUT
+          echo "flushed_count=${FLUSHED}" >> $GITHUB_OUTPUT
+
+          # ── Summary ──
+          {
+            echo ""
+            echo "### 🧹 月初缓存清理"
+            echo "清理 \`immwrt-toolchain-*\` + \`immwrt-ccache-*\`: **${FLUSHED} 个** — 本次构建将全新编译工具链"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # ── 触发上游同步工作流 (可跳过) ──
       - name: Trigger OpenWRT_Packages_Updater
         if: github.event.inputs.skip_upstream != 'true'
