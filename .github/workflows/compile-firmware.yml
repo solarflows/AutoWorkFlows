@@ -48,7 +48,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 480
     env:
-      TARGET: ${{ inputs.matrix_target }}
+      # 刻意不叫 TARGET/HOST/ARCH: 这些名字会被 autoconf AX_ENABLE_BUILDDIR 等宏读取,
+      # 导致 configure 把 build 树建到 ./$TARGET/ 而非 ./$host/ (libffi 因此 InstallDev 失败)
+      IMMWRT_TARGET: ${{ inputs.matrix_target }}
     steps:
       - name: Checkout defaults repo (AutoWorkflows)
         uses: actions/checkout@v6
@@ -162,9 +164,9 @@ jobs:
         if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-toolchain-${{ env.TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
           restore-keys: |
-            immwrt-toolchain-${{ env.TARGET }}-
+            immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -174,9 +176,9 @@ jobs:
         id: cache-cc
         uses: actions/cache@v5
         with:
-          key: immwrt-ccache-${{ env.TARGET }}-${{ github.run_id }}
+          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           restore-keys: |
-            immwrt-ccache-${{ env.TARGET }}-
+            immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
           path: openwrt/.ccache
 
       # ───────── 缓存恢复与状态上报 ─────────
@@ -735,7 +737,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-build-log
+          name: ${{ env.IMMWRT_TARGET }}-build-log
           path: |
             openwrt/build.log
             openwrt/build.1.log
@@ -750,7 +752,7 @@ jobs:
         if: success() && inputs.cache_strategy != 'no-cache'
         uses: actions/cache/save@v5
         with:
-          key: immwrt-toolchain-${{ env.TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -767,12 +769,12 @@ jobs:
           fi
           TC_EXACT_HIT="${{ steps.cache-tc-restore.outputs.cache-hit || 'false' }}"
           if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ] || [ "$TC_EXACT_HIT" != "true" ]; then
-            gh cache list --repo "${{ github.repository }}" --key "immwrt-toolchain-${TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
+            gh cache list --repo "${{ github.repository }}" --key "immwrt-v2-toolchain-${IMMWRT_TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
               xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
           fi
           CC_EXACT_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
           if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ] || [ "$CC_EXACT_HIT" != "true" ]; then
-            gh cache list --repo "${{ github.repository }}" --key "immwrt-ccache-${TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
+            gh cache list --repo "${{ github.repository }}" --key "immwrt-v2-ccache-${IMMWRT_TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
               xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
           fi
 
@@ -798,7 +800,7 @@ jobs:
           if [ -f public-key.pem ]; then
             cp public-key.pem release/passwall/solarflows-apk-public.pem
           fi
-          (cd release && tar czf ../${TARGET}-release.tar.gz .)
+          (cd release && tar czf ../${IMMWRT_TARGET}-release.tar.gz .)
 
           # ── 产物根目录结构（深度 1）──
           echo ""
@@ -814,7 +816,7 @@ jobs:
           echo "📦 产物汇总:"
           echo "  固件:    $(find release/firmware -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/firmware 2>/dev/null | cut -f1)"
           echo "  Passwall: $(find release/passwall -type f 2>/dev/null | wc -l) 个文件, $(du -sh release/passwall 2>/dev/null | cut -f1)"
-          echo "  tarball: $(ls -lh ${TARGET}-release.tar.gz 2>/dev/null | awk '{print $5}')"
+          echo "  tarball: $(ls -lh ${IMMWRT_TARGET}-release.tar.gz 2>/dev/null | awk '{print $5}')"
 
       - name: Generate build info
         if: success()
@@ -823,7 +825,7 @@ jobs:
           PKG_FORMAT="${{ inputs.matrix_apk_signing == true && 'apk' || 'ipk' }}"
           cat > build-info.json <<JSONEOF
           {
-            "target": "${TARGET}",
+            "target": "${IMMWRT_TARGET}",
             "config": "${{ inputs.matrix_config }}",
             "source_repo": "${{ inputs.matrix_repo }}",
             "source_ref": "${{ inputs.matrix_ref }}",
@@ -852,7 +854,7 @@ jobs:
         run: |
           SHA_SHORT="${{ steps.clone_packages.outputs.sha }}"
           {
-            echo "## ${TARGET} Build"
+            echo "## ${IMMWRT_TARGET} Build"
             echo ""
             echo "**源码**: [${{ inputs.matrix_ref }}](https://github.com/${{ inputs.matrix_repo }}) @ [${SHA_SHORT}](https://github.com/${{ inputs.matrix_repo }}/commit/${{ steps.clone_packages.outputs.sha_full }})"
             echo "**软件包**: [${{ inputs.matrix_packages_branch }}](https://github.com/${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) @ [${{ steps.clone_packages.outputs.packages_sha }}](https://github.com/${{ inputs.packages_feed_repo }}/commit/${{ steps.clone_packages.outputs.packages_sha_full }})"
@@ -863,15 +865,15 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-release
-          path: openwrt/${{ env.TARGET }}-release.tar.gz
+          name: ${{ env.IMMWRT_TARGET }}-release
+          path: openwrt/${{ env.IMMWRT_TARGET }}-release.tar.gz
           retention-days: 7
 
       - name: Upload passwall artifact
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-passwall
+          name: ${{ env.IMMWRT_TARGET }}-passwall
           path: openwrt/release/passwall
           retention-days: 7
           if-no-files-found: ignore
@@ -880,7 +882,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-build-info
+          name: ${{ env.IMMWRT_TARGET }}-build-info
           path: |
             build-info.json
             release-body.md
@@ -910,7 +912,7 @@ jobs:
             ARCH=$(basename "$SDK_TARBALL" | sed -E 's/sdk-(.*)\.tar\.xz/\1/')
             # v2 命名: sdk-<target>-<version>-<arch>.tar.xz (version 来自 version.mk)
             SDK_VERSION="${{ steps.apply_config.outputs.source_version }}"
-            SDK_NEW_NAME="sdk-${TARGET}-${SDK_VERSION}-${ARCH}.tar.xz"
+            SDK_NEW_NAME="sdk-${IMMWRT_TARGET}-${SDK_VERSION}-${ARCH}.tar.xz"
             mv "release/sdk/$(basename "$SDK_TARBALL")" "release/sdk/${SDK_NEW_NAME}"
             [ -f "release/sdk/$(basename "$SDK_TARBALL").sha256" ] && \
               mv "release/sdk/$(basename "$SDK_TARBALL").sha256" "release/sdk/${SDK_NEW_NAME}.sha256"
@@ -932,7 +934,7 @@ jobs:
             fi
             ARCH=$(basename "$IB_TARBALL" | sed -E 's/imagebuilder-(.*)\.tar\.xz/\1/')
             IB_VERSION="${{ steps.apply_config.outputs.source_version }}"
-            IB_NEW_NAME="ib-${TARGET}-${IB_VERSION}-${ARCH}.tar.xz"
+            IB_NEW_NAME="ib-${IMMWRT_TARGET}-${IB_VERSION}-${ARCH}.tar.xz"
             mv "release/ib/$(basename "$IB_TARBALL")" "release/ib/${IB_NEW_NAME}"
             [ -f "release/ib/$(basename "$IB_TARBALL").sha256" ] && \
               mv "release/ib/$(basename "$IB_TARBALL").sha256" "release/ib/${IB_NEW_NAME}.sha256"
@@ -966,7 +968,7 @@ jobs:
           # 确保 release 存在 (非 draft, 多版本共存)
           gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
             gh release create "$TAG" --repo "$REPO" \
-              --title "${TAG} Builds" --notes "Multi-version SDK builds (${TARGET})" --latest=false
+              --title "${TAG} Builds" --notes "Multi-version SDK builds (${IMMWRT_TARGET})" --latest=false
           SDK_FILE="openwrt/release/sdk/${{ steps.sdk_ib.outputs.sdk_new_name }}"
           SDK_SHA="${SDK_FILE}.sha256"
           gh release upload "$TAG" --repo "$REPO" "$SDK_FILE" "$SDK_SHA" --clobber
@@ -997,7 +999,7 @@ jobs:
           # ── 清理旧版本 tarball (同名由 --clobber 替换; 异名按版本号保留最近 KEEP 组) ──
           NEW_FILE="${{ steps.sdk_ib.outputs.sdk_new_name }}"
           gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' \
-            | grep -E "^sdk-${TARGET}-.*\.tar\.(xz|zst)$" > /tmp/sdk_files.txt || echo "  (当前无历史 SDK tarball, 跳过清理)"
+            | grep -E "^sdk-${IMMWRT_TARGET}-.*\.tar\.(xz|zst)$" > /tmp/sdk_files.txt || echo "  (当前无历史 SDK tarball, 跳过清理)"
           KEEP_HEAD=$(jq -Rr --argjson n "$KEEP" '
             def vtok: if test("^[0-9]+$") then tonumber
                       elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
@@ -1029,7 +1031,7 @@ jobs:
           REPO="${{ inputs.matrix_ib_release_repo }}"
           gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
             gh release create "$TAG" --repo "$REPO" \
-              --title "${TAG} Builds" --notes "Multi-version ImageBuilder builds (${TARGET})" --latest=false
+              --title "${TAG} Builds" --notes "Multi-version ImageBuilder builds (${IMMWRT_TARGET})" --latest=false
           IB_FILE="openwrt/release/ib/${{ steps.sdk_ib.outputs.ib_new_name }}"
           IB_SHA="${IB_FILE}.sha256"
           gh release upload "$TAG" --repo "$REPO" "$IB_FILE" "$IB_SHA" --clobber
@@ -1059,7 +1061,7 @@ jobs:
           # ── 清理旧版本 tarball (同名由 --clobber 替换; 异名按版本号保留最近 KEEP 组) ──
           NEW_FILE="${{ steps.sdk_ib.outputs.ib_new_name }}"
           gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' \
-            | grep -E "^ib-${TARGET}-.*\.tar\.(xz|zst)$" > /tmp/ib_files.txt || echo "  (当前无历史 IB tarball, 跳过清理)"
+            | grep -E "^ib-${IMMWRT_TARGET}-.*\.tar\.(xz|zst)$" > /tmp/ib_files.txt || echo "  (当前无历史 IB tarball, 跳过清理)"
           KEEP_HEAD=$(jq -Rr --argjson n "$KEEP" '
             def vtok: if test("^[0-9]+$") then tonumber
                       elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)

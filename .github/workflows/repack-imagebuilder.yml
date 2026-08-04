@@ -39,7 +39,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      TARGET: ${{ inputs.matrix_target }}
+      # 刻意不用 TARGET/HOST 等裸名: autoconf 的 AX_ENABLE_BUILDDIR 等宏会读取同名
+      # 环境变量并改变 build 目录布局 (曾导致 libffi 的 fficonfig.h 路径错位)
+      IMMWRT_TARGET: ${{ inputs.matrix_target }}
     steps:
       - name: Checkout defaults repo
         uses: actions/checkout@v6
@@ -132,7 +134,7 @@ jobs:
         id: dl_pkgs
         uses: actions/download-artifact@v8
         with:
-          name: ${{ env.TARGET }}-sdk-packages
+          name: ${{ env.IMMWRT_TARGET }}-sdk-packages
           path: custom-packages/
         continue-on-error: true
 
@@ -241,7 +243,7 @@ jobs:
         run: |
           cat > build-info.json <<JSONEOF
           {
-            "target": "${TARGET}",
+            "target": "${IMMWRT_TARGET}",
             "config": "${{ inputs.matrix_config }}",
             "source_repo": "${{ inputs.matrix_repo }}",
             "source_ref": "${{ inputs.matrix_ref }}",
@@ -267,7 +269,7 @@ jobs:
         if: success()
         run: |
           {
-            echo "## ${TARGET} Build (via ImageBuilder)"
+            echo "## ${IMMWRT_TARGET} Build (via ImageBuilder)"
             echo ""
             echo "**源码**: [${{ inputs.matrix_ref }}](https://github.com/${{ inputs.matrix_repo }}) @ \`${{ steps.resolve.outputs.ib_source_sha }}\`"
             echo "**IB 版本**: ${{ inputs.ib_version }} (\`${{ steps.resolve.outputs.ib_file }}\`)"
@@ -279,7 +281,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-ib-firmware
+          name: ${{ env.IMMWRT_TARGET }}-ib-firmware
           path: release/firmware
           retention-days: 7
 
@@ -287,7 +289,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-ib-build-info
+          name: ${{ env.IMMWRT_TARGET }}-ib-build-info
           path: |
             build-info.json
             release-body.md

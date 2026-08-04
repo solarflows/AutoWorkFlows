@@ -36,7 +36,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      TARGET: ${{ inputs.matrix_target }}
+      # 刻意加前缀: 裸 TARGET/HOST 会被 autoconf 的 AX_ENABLE_BUILDDIR 当作 builddir 名
+      IMMWRT_TARGET: ${{ inputs.matrix_target }}
     steps:
       - name: Checkout defaults repo
         uses: actions/checkout@v6
@@ -222,7 +223,7 @@ jobs:
           PKG_FORMAT="${{ inputs.matrix_apk_signing == true && 'apk' || 'ipk' }}"
           cat > build-info.json <<JSONEOF
           {
-            "target": "${TARGET}",
+            "target": "${IMMWRT_TARGET}",
             "config": "${{ inputs.matrix_config }}",
             "packages_repo": "${{ inputs.packages_feed_repo }}",
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
@@ -246,7 +247,7 @@ jobs:
         if: steps.artifacts.outputs.file_count > 0
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-sdk-packages
+          name: ${{ env.IMMWRT_TARGET }}-sdk-packages
           path: upload/
           retention-days: 7
 
@@ -254,7 +255,7 @@ jobs:
         if: steps.artifacts.outputs.file_count > 0
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-sdk-build-info
+          name: ${{ env.IMMWRT_TARGET }}-sdk-build-info
           path: build-info.json
           retention-days: 7
 

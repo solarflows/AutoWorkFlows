@@ -124,7 +124,7 @@ jobs:
           echo "🧹 月初缓存清理 ($(TZ=$TZ date +%Y-%m-%d))..."
           FLUSHED=0
 
-          for KEY_PREFIX in "immwrt-toolchain-" "immwrt-ccache-"; do
+          for KEY_PREFIX in "immwrt-v2-toolchain-" "immwrt-v2-ccache-"; do
             CACHE_IDS=$(gh cache list --repo "${{ github.repository }}" --key "$KEY_PREFIX" --limit 100 --json id --jq '.[].id' 2>/dev/null || true)
             if [ -n "$CACHE_IDS" ]; then
               COUNT=$(echo "$CACHE_IDS" | wc -l)
@@ -145,7 +145,7 @@ jobs:
           {
             echo ""
             echo "### 🧹 月初缓存清理"
-            echo "清理 \`immwrt-toolchain-*\` + \`immwrt-ccache-*\`: **${FLUSHED} 个** — 本次构建将全新编译工具链"
+            echo "清理 \`immwrt-v2-toolchain-*\` + \`immwrt-v2-ccache-*\`: **${FLUSHED} 个** — 本次构建将全新编译工具链"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ── 触发上游同步工作流 (可跳过) ──
@@ -219,8 +219,8 @@ jobs:
         id: cache-build-state
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-state-v2-${{ github.run_id }}
-          restore-keys: immwrt-state-v2-
+          key: immwrt-v2-state-${{ github.run_id }}
+          restore-keys: immwrt-v2-state-
           path: build-state.json
 
       # ── 加载目标 + SHA 状态检查 + 上游变更范围检测 ──
@@ -871,5 +871,5 @@ jobs:
         if: always()
         uses: actions/cache/save@v5
         with:
-          key: immwrt-state-v2-${{ github.run_id }}
+          key: immwrt-v2-state-${{ github.run_id }}
           path: build-state.json
