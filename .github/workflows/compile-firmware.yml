@@ -792,16 +792,16 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # ───────── 工具链缓存保存（独立 save, 仅成功时写入）─────────
-      - name: Save toolchain cache
-        if: success() && inputs.cache_strategy != 'no-cache'
-        uses: actions/cache/save@v5
-        with:
-          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
-          path: |
-            openwrt/staging_dir/host*
-            openwrt/staging_dir/tool*
-
+      # ───────── 清理远端 GitHub Actions 缓存（仅构建成功时执行）─────────
+      # 顺序: Purge 必须先于 Save。早期版本 Save 在 Purge 之前同步执行,
+      # smart 模式因 exact key 未命中而全删, 把刚 Save 的缓存一并删除,
+      # 导致缓存永远无法累积 (见 docs/openwrt-build-pitfalls.md § Toolchain Cache Self-Deletion)。
+      # Purge 先于 Save 时, 清理执行时本次缓存尚不存在, 结构上不可能误删本轮成果,
+      # 与 v1 / ccache 一体化 action 的 post-action 保存时序一致。
+      # 规则: 仅显式 clean-all / clean-toolchain / clean-ccache 才删除全部;
+      # smart 模式保留最近 KEEP_N 个。
+      # 错误可见性: 不静默 gh 错误 (无 2>/dev/null / || true)。list 失败 -> stderr 警告并跳过删除
+      # (避免凭空猜测删除), delete 失败 -> 显式警告。无缓存是正常空结果 (rc=0), 与执行错误区分。
       - name: Purge stale GitHub Actions caches
         if: success()
         env:
@@ -812,16 +812,61 @@ jobs:
             echo "🔧 no-cache 模式: 跳过缓存清理"
             exit 0
           fi
-          TC_EXACT_HIT="${{ steps.cache-tc-restore.outputs.cache-hit || 'false' }}"
-          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ] || [ "$TC_EXACT_HIT" != "true" ]; then
-            gh cache list --repo "${{ github.repository }}" --key "immwrt-v2-toolchain-${IMMWRT_TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
-              xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+
+          KEEP_N=3
+          REPO="${{ github.repository }}"
+
+          # ── 工具链缓存 ──
+          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
+            echo "🧹 ${CACHE_STRATEGY}: 删除全部工具链缓存"
+            TC_FILTER='.[].id'
+          else
+            echo "🧹 smart: 工具链缓存保留最近 ${KEEP_N} 个, 仅删除更旧缓存"
+            TC_FILTER='sort_by(.createdAt) | .[0:-'"$KEEP_N"'] | .[].id'
           fi
-          CC_EXACT_HIT="${{ steps.cache-cc.outputs.cache-hit }}"
-          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ] || [ "$CC_EXACT_HIT" != "true" ]; then
-            gh cache list --repo "${{ github.repository }}" --key "immwrt-v2-ccache-${IMMWRT_TARGET}-" --limit 100 --json id --jq '.[].id' 2>/dev/null | \
-              xargs -r -P4 -I{} gh cache delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+          TC_IDS=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt --jq "$TC_FILTER")
+          TC_RC=$?
+          if [ "$TC_RC" -ne 0 ]; then
+            echo "⚠️ 获取工具链缓存列表失败 (rc=${TC_RC}), 跳过工具链缓存清理" >&2
+          elif [ -n "$TC_IDS" ]; then
+            echo "$TC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
+              || echo "⚠️ 部分工具链缓存删除失败, 见上方 gh cache delete 错误" >&2
+          else
+            echo "ℹ️ 无过期工具链缓存"
           fi
+
+          # ── ccache 缓存 ──
+          CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
+          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ]; then
+            echo "🧹 ${CACHE_STRATEGY}: 删除全部 ccache 缓存"
+            CC_FILTER='.[].id'
+          else
+            echo "🧹 smart: ccache 缓存保留最近 ${KEEP_N} 个, 仅删除更旧缓存"
+            CC_FILTER='sort_by(.createdAt) | .[0:-'"$KEEP_N"'] | .[].id'
+          fi
+          CC_IDS=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt --jq "$CC_FILTER")
+          CC_RC=$?
+          if [ "$CC_RC" -ne 0 ]; then
+            echo "⚠️ 获取 ccache 缓存列表失败 (rc=${CC_RC}), 跳过 ccache 缓存清理" >&2
+          elif [ -n "$CC_IDS" ]; then
+            echo "$CC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
+              || echo "⚠️ 部分 ccache 缓存删除失败, 见上方 gh cache delete 错误" >&2
+          else
+            echo "ℹ️ 无过期 ccache 缓存"
+          fi
+
+      # ───────── 工具链缓存保存（独立 save, 仅成功时写入）─────────
+      # 顺序: Save 在 Purge 之后, 因此 Purge 清理的是历史缓存,
+      # 本次构建结果在 Purge 完成后才写入, 结构上不会被误删 (方案 B)。
+      - name: Save toolchain cache
+        if: success() && inputs.cache_strategy != 'no-cache'
+        uses: actions/cache/save@v5
+        with:
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          path: |
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
 
       # ════════════ 产物打包 ════════════
       # 刻意设计: 打包后输出 release/ 根目录结构(深度1), 便于人工快速核验产物完整性
