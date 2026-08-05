@@ -17,7 +17,7 @@ Automated CI/CD workflows for [solarflows/openwrt-packages](https://github.com/s
 
 ### Decision vs. Execution
 
-The `plan` job in `firmware-build.yml` owns all decisions: trigger mode, change detection, versioning, cache strategy. The three reusable workflows (`compile-firmware.yml`, `compile-packages.yml`, `repack-imagebuilder.yml`) only execute. **Never add fallback or escalation logic to reusable workflows.**
+The `plan` job in `firmware-build.yml` owns all decisions: trigger mode, change detection, versioning, cache strategy. The three reusable workflows (`compile-firmware.yml`, `compile-packages.yml`, `build-via-ib.yml`) only execute. **Never add fallback or escalation logic to reusable workflows.**
 
 ### Workflow ↔ Target Separation
 

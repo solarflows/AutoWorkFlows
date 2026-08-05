@@ -8,7 +8,7 @@ applyTo: [".github/workflows/compile-*.yml", ".github/workflows/repack-*.yml", "
 ## Architecture
 
 - `firmware-build.yml` is the orchestrator. Its `plan` job owns trigger, version, change-detection, cache, build, and publish decisions.
-- `compile-firmware.yml`, `compile-packages.yml`, and `repack-imagebuilder.yml` are reusable executors; do not add fallback or escalation decisions to them.
+- `compile-firmware.yml`, `compile-packages.yml`, and `build-via-ib.yml` are reusable executors; do not add fallback or escalation decisions to them.
 - Keep `run-firmware`, `run-imagebuilder`, and `run-packages` controlled by explicit `plan` outputs; `release` publishes only after a planned task succeeds.
 
 ## Required Behavior

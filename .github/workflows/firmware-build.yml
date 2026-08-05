@@ -1,8 +1,9 @@
 # ════════════════════════════════════════════════════════════════════════
 # ImmortalWrt Builder v2 — 主编排工作流
-# 通过 reusable workflow 调用 build/build-firmware.yml, build/build-via-ib.yml,
-# build/build-via-sdk.yml.默认值统一在本文件 env + 各 reusable workflow 的
-# inputs.default 中定义; targets.json 仅保存每个 target 的差异化配置.
+# 通过 reusable workflow 调用 compile-firmware.yml (全量编译),
+# build-via-ib.yml (基于 IB 重打包固件), compile-packages.yml (基于 SDK 编译软件包).
+# 默认值统一在本文件 env + 各 reusable workflow 的 inputs.default 中定义;
+# targets.json 仅保存每个 target 的差异化配置.
 # ════════════════════════════════════════════════════════════════════════
 name: ImmortalWrt Builder v2
 
@@ -182,34 +183,17 @@ jobs:
             echo "⚠️ 未在 30s 内发现新的 Updater run (等待步骤会补查)"
           fi
 
-      # ── 触发 Sync_Push (12h 去重: 上次成功 <12h 则跳过) ──
-      # 刻意设计: Sync_Push 每 12h 定时执行一次 (与 OpenWRT_Packages_Updater 的 12h 同步),
-      # 若最近一次已成功完成且距今 <12h, 说明源码已同步过, 无需重复触发浪费配额。
-      # OpenWRT_Packages_Updater (软件源) 则保证一定触发, 不做去重。
+      # ── 触发 Sync_Push (一定触发, 无 12h 去重) ──
+      # 刻意设计: 每次 full 构建都触发一次 Sync_Push, 不依据上次成功时间去重,
+      # 确保源码同步 (sync_lede 等) 不因上次成功时间而遗漏。
       - name: Trigger Sync_Push
         if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'sdk-packages'
         id: trigger-sync
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          LAST_TS=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --status success --limit 1 \
-            --json updatedAt --jq '.[0].updatedAt // empty' 2>/dev/null || true)
-          if [ -n "$LAST_TS" ]; then
-            NOW_TS=$(date +%s)
-            LAST_EPOCH=$(date -d "$LAST_TS" +%s 2>/dev/null || echo 0)
-            DIFF_H=$(( (NOW_TS - LAST_EPOCH) / 3600 ))
-            if [ "$DIFF_H" -lt 12 ]; then
-              echo "⏭️ Sync_Push ${DIFF_H}h 前已成功, 跳过触发 (12h 去重)"
-              echo "sync_skipped=true" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-            echo "🕐 Sync_Push 上次成功: ${DIFF_H}h 前, 已超过 12h, 正常触发"
-          else
-            echo "🕐 Sync_Push 无成功记录, 首次触发"
-          fi
           echo "🚀 触发 Sync_Push..."
           BEFORE=$(date +%s)
-          echo "before_ts=${BEFORE}" >> $GITHUB_OUTPUT
           gh workflow run Sync_Push.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }}
@@ -272,7 +256,7 @@ jobs:
             timeout 3600 gh run watch "$SYNC_ID" --repo ${{ github.repository }} --interval 5 --exit-status \
               && echo "✅ sync 完成" || echo "⚠️ sync 失败或超时"
           else
-            echo "⏭️ sync run ID 为空 (12h 去重或未触发), 跳过等待"
+            echo "⏭️ sync run ID 未获取, 跳过等待"
           fi
 
       # ── 版本号生成 ──
@@ -601,7 +585,7 @@ jobs:
               echo "- 🔨 **compile-firmware**: 全量编译固件 + 生成 SDK/IB 上传 (sdk-*/ib-* tag, 同名替换 / 异名保留最近 ${{ env.SDK_KEEP_VERSIONS }} 组)"
             fi
             if [ "$SHOULD_IB" = "true" ]; then
-              echo "- 📦 **repack-imagebuilder**: 基于现有 IB 重打包固件"
+              echo "- 📦 **build-via-ib**: 基于现有 IB 重打包固件"
             fi
             if [ "$SHOULD_SDK_PKGS" = "true" ]; then
               echo "- 📦 **compile-packages**: 基于 SDK 增量编译软件包 → packages tag"
@@ -688,16 +672,16 @@ jobs:
       group: compile-fw-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
 
-  # ════════════════════ run-imagebuilder (IB 重新打包) ════════════════════
+  # ════════════════════ run-imagebuilder (基于 IB 重打包固件) ════════════════════
   run-imagebuilder:
-    name: Repack ImageBuilder / ${{ matrix.target }}
+    name: Build via IB / ${{ matrix.target }}
     needs: plan
     if: needs.plan.outputs.should_build_ib == 'true'
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
-    uses: ./.github/workflows/repack-imagebuilder.yml
+    uses: ./.github/workflows/build-via-ib.yml
     with:
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}

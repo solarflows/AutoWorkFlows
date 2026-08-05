@@ -1,7 +1,7 @@
-# Reusable workflow: repack-imagebuilder
+# Reusable workflow: build-via-ib
 # 使用自建 ImageBuilder 重新打包固件 (远快于全量编译)
 # 由 firmware-build.yml 调用, 仅执行 IB 重打包; 是否构建由 plan 决策控制, 无失败回退
-name: Repack ImageBuilder
+name: Build Firmware via IB
 
 on:
   workflow_call:
@@ -34,8 +34,8 @@ env:
   TZ: Asia/Shanghai
 
 jobs:
-  repack-imagebuilder:
-    name: Repack ${{ inputs.matrix_target }}
+  build-via-ib:
+    name: Build via IB ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
