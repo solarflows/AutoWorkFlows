@@ -208,12 +208,13 @@ jobs:
           done
 
           # ── 目录树: SDK 编译产物 (排除中间目录) ──
+          # 可选诊断展示: 管道失败(如 head 截断触发 SIGPIPE)不阻断构建
           echo ""
           echo "📂 sdk/bin/packages/ 目录树 (编译后):"
           echo '```text'
           find bin/packages -maxdepth 4 \
             -not -path '*/staging_dir*' -not -path '*/build_dir*' -not -path '*/.git/*' \
-            -print 2>/dev/null | sort | sed 's|^bin/packages|.|' | head -100
+            -print 2>/dev/null | sort | sed 's|^bin/packages|.|' | head -100 || true
           echo '```'
 
       - name: Collect artifacts

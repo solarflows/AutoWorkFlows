@@ -277,12 +277,13 @@ jobs:
           ./scripts/feeds update -a && ./scripts/feeds install -a
 
           # ── 目录树: 各 feed 是否已 install (排除 .git/中间产物) ──
+          # 可选诊断展示: 管道失败(如 head 截断触发 SIGPIPE)不阻断构建
           echo ""
           echo "📂 openwrt/package/ 目录树 (feeds install 后):"
           echo '```text'
           find package -maxdepth 3 \
             -not -path '*/.git/*' -not -path '*/staging_dir*' -not -path '*/build_dir*' \
-            -print 2>/dev/null | sort | sed 's|^package|.|' | head -80
+            -print 2>/dev/null | sort | sed 's|^package|.|' | head -80 || true
           echo '```'
 
       - name: Apply Configuration
@@ -408,12 +409,13 @@ jobs:
           echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $(((END_TIME-START_TIME)/3600)) $((((END_TIME-START_TIME)%3600)/60)) $(((END_TIME-START_TIME)%60)))"
 
           # ── 目录树: 编译核心产物 bin/targets + bin/packages ──
+          # 可选诊断展示: 管道失败(如 head 截断触发 SIGPIPE)不阻断构建
           echo ""
           echo "📂 bin/ 产物目录树 (编译后):"
           echo '```text'
           find bin -maxdepth 5 \
             -not -path '*/staging_dir*' -not -path '*/build_dir*' -not -path '*/tmp*' -not -path '*/.git/*' \
-            -print 2>/dev/null | sort | sed 's|^bin|.|' | head -120
+            -print 2>/dev/null | sort | sed 's|^bin|.|' | head -120 || true
           echo '```'
 
       # ───────── 磁盘空间监控（第 4 阶段：编译后 + 4 阶段汇总表）─────────
@@ -852,10 +854,11 @@ jobs:
 
           # ── 产物完整目录树 (替换原 tree -L 1: ubuntu runner 无 tree 命令, 且深度1不完整) ──
           # 纯 find 实现, 无外部依赖; release/ 是最终交付物, 展开到最深
+          # 可选诊断展示: 管道失败不阻断构建
           echo ""
           echo "📂 release/ 完整目录结构:"
           echo '```text'
-          find release -print 2>/dev/null | sort | sed "s|^release|.|" | head -200
+          find release -print 2>/dev/null | sort | sed "s|^release|.|" | head -200 || true
           echo '```'
           echo ""
           echo "📦 产物汇总:"
@@ -874,7 +877,8 @@ jobs:
           # 不在 feeds.buildinfo 中, 故表格末尾手动附加一行 (用 packages_sha_full)。
           FEEDS_INFO=""
           FEEDS_MD_JSON=""
-          FW_FEEDS_FILE=$(find openwrt/bin/targets -name "feeds.buildinfo" 2>/dev/null | head -1)
+          # 存在性探测: feeds.buildinfo 可能不存在 (上游未生成), 属预期; || true 防 head 截断 SIGPIPE
+          FW_FEEDS_FILE=$(find openwrt/bin/targets -name "feeds.buildinfo" 2>/dev/null | head -1 || true)
           if [ -f "$FW_FEEDS_FILE" ] && [ -s "$FW_FEEDS_FILE" ]; then
             # 兼容 src-git 与 src-git-full, 跳过 # 注释行/空行
             if grep -Eq '^src-git(-full)?\b' "$FW_FEEDS_FILE" 2>/dev/null; then
