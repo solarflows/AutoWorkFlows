@@ -1,6 +1,6 @@
 ---
 description: "修改 OpenWrt/ImmortalWrt GitHub Actions 构建、缓存、SDK、ImageBuilder、固件发布或错误诊断时使用。"
-applyTo: ".github/workflows/**"
+applyTo: [".github/workflows/compile-*.yml", ".github/workflows/repack-*.yml", ".github/workflows/firmware-build.yml"]
 ---
 
 # OpenWrt Build Workflows

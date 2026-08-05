@@ -1,6 +1,6 @@
 ---
 description: "修改 SDK、ImageBuilder、固件、Passwall 产物的生成、打包、命名、Release 上传、CI Secret 或归档逻辑时使用。"
-applyTo: [".github/workflows/**", "openwrt-configs/**"]
+applyTo: [".github/workflows/*-release.yml", ".github/workflows/firmware-build.yml"]
 ---
 
 # Build Artifacts and Repository Operations
