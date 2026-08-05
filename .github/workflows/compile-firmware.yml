@@ -318,18 +318,48 @@ jobs:
           echo "📋 ======== defconfig 后 .config ========"
           cat .config
 
-          # 在 patch 前读取原始版本号，用作 SDK/IB tarball 的版本标识
-          ORIG_VER=$(grep -m1 '^VERSION_NUMBER:=' include/version.mk | cut -d= -f2 | tr -d '[:space:]')
+          # ── 原始版本号 (patch 前), 用作 SDK/IB tarball 版本标识 ──
+          # 陷阱: 不能直接 grep/cut version.mk —— 上游 version.mk 的 VERSION_NUMBER
+          # 可能是 make 表达式 (如 $(call qstrip,$(CONFIG_VERSION_NUMBER))), 直接截取
+          # 会把表达式当版本号注入后续 shell 脚本 / index.json, 导致 command not
+          # found (exit 127)。(见 docs/openwrt-build-pitfalls.md § Make 表达式版本号)
+          # 解析顺序: ① .config 的 CONFIG_VERSION_NUMBER (纯字符串)
+          #         ② version.mk 首行字面量 (无 $ 表达式)
+          #         ③ $(if ...,...,<fallback>) 的兜底字面量 (如 21.02-SNAPSHOT)
+          #         ④ 兜底 SNAPSHOT
+          VERSION="${{ inputs.version }}"
+          ORIG_VER=$(grep -m1 '^CONFIG_VERSION_NUMBER=' .config 2>/dev/null | cut -d'"' -f2 | tr -d '[:space:]' || true)
+          if [ -z "$ORIG_VER" ]; then
+            LITERAL=$(sed -n 's/^VERSION_NUMBER:=//p' include/version.mk | head -1 | tr -d '[:space:]')
+            case "$LITERAL" in
+              \$*|*'$('*) ;;                    # make 表达式 → 跳过
+              *) ORIG_VER="$LITERAL" ;;
+            esac
+          fi
+          if [ -z "$ORIG_VER" ]; then
+            # $(if $(VERSION_NUMBER),$(VERSION_NUMBER),<fallback>) → 取兜底字面量
+            FALLBACK=$(sed -n 's/^VERSION_NUMBER:=//p' include/version.mk | sed -n '2p' \
+              | sed -E 's/.*,[[:space:]]*([^,()]*)\)[[:space:]]*$/\1/' | tr -d '[:space:]')
+            case "$FALLBACK" in
+              \$*|*'$('*) ;;                    # 仍是表达式 → 兜底 SNAPSHOT
+              *) ORIG_VER="$FALLBACK" ;;
+            esac
+          fi
+          ORIG_VER="${ORIG_VER:-SNAPSHOT}"
+
           if echo "$ORIG_VER" | grep -qi 'snapshot'; then
             SOURCE_VER="${ORIG_VER}-$(TZ=$TZ date +'%Y%m%d')"
           else
             SOURCE_VER="$ORIG_VER"
           fi
+          # patch 后生效版本号 (与下方 version.mk sed 相同变换): 上游 SDK/IB 文件名
+          # 由本次构建生成, 内嵌的 <version>- 前缀是 patch 后的值, 需用它匹配剥离
+          PATCHED_VER=$(printf '%s' "$ORIG_VER" | sed "s/SNAPSHOT/${VERSION}/g")
           echo "source_version=${SOURCE_VER}" >> $GITHUB_OUTPUT
           echo "original_version=${ORIG_VER}" >> $GITHUB_OUTPUT
-          echo "🏷️ source_version: ${SOURCE_VER}"
+          echo "patched_version=${PATCHED_VER}" >> $GITHUB_OUTPUT
+          echo "🏷️ source_version: ${SOURCE_VER} | original: ${ORIG_VER} | patched: ${PATCHED_VER}"
 
-          VERSION="${{ inputs.version }}"
           sed -i "/^VERSION_NUMBER:=/s/SNAPSHOT/${VERSION}/g" include/version.mk
           echo "📋 version.mk:"
           grep 'VERSION_NUMBER' include/version.mk || true
@@ -1067,10 +1097,14 @@ jobs:
             cp "$SDK_TARBALL" release/sdk/
             # v2 命名: sdk-<target>-<version>-<arch>.tar.{xz,zst} (version 来自 version.mk)
             SDK_VERSION="${{ steps.apply_config.outputs.source_version }}"
-            SDK_ORIG_VER="${{ steps.apply_config.outputs.original_version }}"
+            # 防御: 版本号必须是纯字符串, 残留 make 表达式则显式报错 (曾发生 exit 127)
+            case "$SDK_VERSION" in
+              *'$('*) echo "::error::apply_config.source_version 含 make 表达式: ${SDK_VERSION}"; exit 1 ;;
+            esac
+            SDK_ORIG_VER="${{ steps.apply_config.outputs.patched_version }}"
             SDK_EXT=$(basename "$SDK_TARBALL" | sed -E 's/.*\.(tar\..*)$/\1/')
-            # 优先剥掉上游文件名里的版本前缀 (CONFIG_VERSION_FILENAMES=y 时含 <version>-, 用原始版本号匹配),
-            # 否则整体提取 (文件名无版本前缀)
+            # 优先剥掉上游文件名里的版本前缀 (CONFIG_VERSION_FILENAMES=y 时含 <version>-;
+            # 用 patch 后版本号匹配, 与构建期 VERSION_NUMBER 一致), 否则整体提取 (文件名无版本前缀)
             SDK_ARCH=$(basename "$SDK_TARBALL" | sed -E "s/.*-sdk-${SDK_ORIG_VER}-(.*)\.tar\..*/\1/")
             if [ "$SDK_ARCH" = "$(basename "$SDK_TARBALL")" ]; then
               SDK_ARCH=$(basename "$SDK_TARBALL" | sed -E 's/.*-sdk-(.*)\.tar\..*/\1/')
@@ -1097,7 +1131,7 @@ jobs:
           if [ -n "$IB_TARBALL" ]; then
             cp "$IB_TARBALL" release/ib/
             IB_VERSION="${{ steps.apply_config.outputs.source_version }}"
-            IB_ORIG_VER="${{ steps.apply_config.outputs.original_version }}"
+            IB_ORIG_VER="${{ steps.apply_config.outputs.patched_version }}"
             IB_EXT=$(basename "$IB_TARBALL" | sed -E 's/.*\.(tar\..*)$/\1/')
             IB_ARCH=$(basename "$IB_TARBALL" | sed -E "s/.*-imagebuilder-${IB_ORIG_VER}-(.*)\.tar\..*/\1/")
             if [ "$IB_ARCH" = "$(basename "$IB_TARBALL")" ]; then

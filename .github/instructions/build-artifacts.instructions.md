@@ -6,7 +6,7 @@ applyTo: [".github/workflows/*-release.yml", ".github/workflows/firmware-build.y
 # Build Artifacts and Repository Operations
 
 - Name SDK archives `sdk-<target>-<version>-<arch>.tar.xz` and ImageBuilder archives `ib-<target>-<version>-<arch>.tar.xz`.
-- Derive `<version>` from `VERSION_NUMBER` in `include/version.mk`; append the date for SNAPSHOT builds.
+- Derive `<version>` from `VERSION_NUMBER` in `include/version.mk`, but resolve it to a plain string first — the `VERSION_NUMBER:=` line may be a make expression (`$(call qstrip,$(CONFIG_VERSION_NUMBER))`). Resolve in order: `.config`'s `CONFIG_VERSION_NUMBER`, the literal `VERSION_NUMBER:=` value, the `$(if ...)` fallback literal (e.g. `21.02-SNAPSHOT`), then `SNAPSHOT`. Never inject the raw expression into shell steps or `index.json` keys (fails with `command not found`, exit 127). Append the date for SNAPSHOT builds.
 - Upstream artifacts are named `<dist>-sdk-*.tar.{xz,zst}` and `<dist>-imagebuilder-*.tar.{xz,zst}`; locate them with `*-sdk-*.tar.*` / `*-imagebuilder-*.tar.*` and rename to the `sdk-`/`ib-` prefixed form.
 - Recompute the checksum after renaming into a two-column `.sha256` (`<hash>  <filename>`). Do not reuse the upstream `.sha256sum`: its embedded filename or directory prefix may not match the renamed file, and `sha256sum -c` requires the listed filename to exist.
 - Name firmware archives `<target>-release.tar.gz` and include `release/firmware` and `release/passwall`.

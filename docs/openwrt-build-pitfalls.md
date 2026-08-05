@@ -91,6 +91,71 @@ Why v1 did not exhibit this — **save ordering, not hash stability**. Both v1 a
 - v1 uses the combined `actions/cache@v5`, whose save runs as a **post action after all main steps** — i.e. after the Purge step. Chain: miss → compile → Purge deletes old caches (the just-built result is not yet saved, so it is untouchable) → post-action save writes the fresh cache → next run's `restore-keys` prefix hits it → stamps are touched → `tools/*` is skipped. The cache accumulates one entry per run.
 - v2 splits restore and save; save becomes an explicit main step placed **before** the Purge step. Chain: miss → compile → save (now saved) → Purge's miss branch deletes every cache including the just-saved one → zero caches remain → next run misses again → full `tools/*` rebuild forever.
 
+## Make 表达式版本号注入 Shell (SDK/IB 打包崩溃)
+
+### Symptom
+
+`📦 Package SDK & IB tarballs` 步骤在脚本第 14 行失败, exit code 127:
+
+```text
+/home/runner/work/_temp/cc7632cc-eacd-4799-8a6c-66f9a5e9136c.sh: line 14: CONFIG_VERSION_NUMBER: command not found
+/home/runner/work/_temp/cc7632cc-eacd-4799-8a6c-66f9a5e9136c.sh: line 14: callqstrip,: command not found
+```
+
+### Verified Root Cause
+
+两个平台的源码仓库 `include/version.mk` 都把 `VERSION_NUMBER` 写成 make 表达式 (两行结构相同, 仅兜底值不同):
+
+```makefile
+VERSION_NUMBER:=$(call qstrip,$(CONFIG_VERSION_NUMBER))
+VERSION_NUMBER:=$(if $(VERSION_NUMBER),$(VERSION_NUMBER),21.02-SNAPSHOT)   # qualcommax: ...,SNAPSHOT)
+```
+
+`Apply Configuration` 步骤用 `grep -m1 '^VERSION_NUMBER:=' include/version.mk | cut -d= -f2 | tr -d '[:space:]'` 提取版本号, 得到:
+
+```text
+$(callqstrip,$(CONFIG_VERSION_NUMBER))     # tr -d '[:space:]' 连 "call qstrip," 里的空格一起删掉
+```
+
+该字符串被写入 `steps.apply_config.outputs.source_version` / `original_version`, 再被 SDK/IB 打包步骤注入 shell 脚本:
+
+```bash
+SDK_VERSION="$(callqstrip,$(CONFIG_VERSION_NUMBER))"    # 4 个变量全部被污染
+```
+
+bash 把 `$(...)` 当命令替换执行: `$(CONFIG_VERSION_NUMBER)` 运行命令 `CONFIG_VERSION_NUMBER` 报 "command not found", `$(callqstrip,...)` 运行命令 `callqstrip,` 同样报错, 步骤以 127 退出, SDK/IB 无法打包上传。
+
+Evidence (run #30992926916, commit 8c1fa4e) — `Apply Configuration` 输出:
+
+```text
+🏷️ source_version: $(callqstrip,$(CONFIG_VERSION_NUMBER))
+```
+
+随后 SDK/IB 打包步骤展开为:
+
+```text
+SDK_VERSION="$(callqstrip,$(CONFIG_VERSION_NUMBER))"
+SDK_ORIG_VER="$(callqstrip,$(CONFIG_VERSION_NUMBER))"
+IB_VERSION="$(callqstrip,$(CONFIG_VERSION_NUMBER))"
+IB_ORIG_VER="$(callqstrip,$(CONFIG_VERSION_NUMBER))"
+```
+
+注意: 直接解析 version.mk 的 `VERSION_NUMBER:=` 行不可行, 因为它是 make 表达式; `.config` 里也没有 `CONFIG_VERSION_NUMBER` (只在 version.mk 的 `PKG_CONFIG_DEPENDS` 引用, defconfig 不落盘)。
+
+### Fix
+
+`Apply Configuration` 按顺序解析纯字符串版本号, 任何 make 表达式一律不采用:
+
+1. `.config` 的 `CONFIG_VERSION_NUMBER="..."` (若存在)
+2. version.mk 首行 `VERSION_NUMBER:=` 字面量 (不含 `$(` 表达式)
+3. `$(if $(VERSION_NUMBER),$(VERSION_NUMBER),<fallback>)` 的兜底字面量 (如 `21.02-SNAPSHOT` / `SNAPSHOT`)
+4. 兜底 `SNAPSHOT`
+
+另输出 `patched_version` (对原始版本号做与 version.mk sed 相同的 `s/SNAPSHOT/${VERSION}/g` 变换) —— 上游 SDK/IB tarball 由本次构建生成, 内嵌的 `<version>-` 前缀是 patch 后的值 (如 `21.02-V260805`), 剥离前缀必须用它匹配, 而不是 patch 前的原始值。
+
+SDK/IB 打包步骤对注入的版本号加防御检查: 若含 `$(` 残留 make 表达式, 显式 `::error::` 报错并退出, 避免静默污染文件名与 index.json key。
+
+
 So the fix for v1/v2 is not to stabilise the checkout hash (impossible on rolling branches) but to prevent the purge from deleting the just-saved cache. The `test`-branch hash churn is only an aggravating factor: it makes exact-key misses frequent and the old delete-everything branch fire often. Even a stable hash would still self-delete in v2, because the first miss → save → purge would erase the save before the next run.
 
 ### Fix
