@@ -124,6 +124,23 @@ jobs:
           printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > private-key.pem
           chmod 600 private-key.pem
           sed -i 's/\r$//' private-key.pem
+
+          # ── 私钥格式校验 (对齐 compile-firmware): 无效密钥明确报错但继续构建 ──
+          echo "🔍 验证密钥格式..."
+          if openssl ec -in private-key.pem -check -noout 2>/dev/null; then
+            echo "✅ ECDSA 私钥格式验证通过"
+          elif openssl rsa -in private-key.pem -check -noout 2>/dev/null; then
+            echo "::warning::APK_BUILD_KEY 是 RSA 密钥, ImmortalWrt APK 构建系统默认使用 ECDSA prime256v1"
+            echo "::notice::建议重新生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
+          else
+            KEY_HEADER=$(head -c 50 private-key.pem 2>/dev/null)
+            echo "::error::APK_BUILD_KEY 不是有效的 PEM 格式私钥 (需要 ECDSA prime256v1 或 RSA)"
+            echo "::notice::密钥头部: ${KEY_HEADER}"
+            echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续以完成 SDK 编译"
+            rm -f private-key.pem
+            exit 0
+          fi
+
           openssl ec -in private-key.pem -pubout -out public-key.pem 2>/dev/null || \
             openssl rsa -in private-key.pem -pubout -out public-key.pem
           chmod 644 public-key.pem
@@ -189,6 +206,15 @@ jobs:
               echo "::warning::⚠️ $pkg build failed, continuing"
             echo "::endgroup::"
           done
+
+          # ── 目录树: SDK 编译产物 (排除中间目录) ──
+          echo ""
+          echo "📂 sdk/bin/packages/ 目录树 (编译后):"
+          echo '```text'
+          find bin/packages -maxdepth 4 \
+            -not -path '*/staging_dir*' -not -path '*/build_dir*' -not -path '*/.git/*' \
+            -print 2>/dev/null | sort | sed 's|^bin/packages|.|' | head -100
+          echo '```'
 
       - name: Collect artifacts
         id: artifacts

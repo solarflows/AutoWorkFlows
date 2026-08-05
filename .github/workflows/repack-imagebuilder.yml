@@ -217,7 +217,17 @@ jobs:
           fi
 
           echo "✅ IB 构建完成"
-          ls -la bin/targets/ 2>/dev/null || true
+
+          # ── 目录树: IB 固件产物 (排除中间目录) ──
+          echo ""
+          echo "📂 ib/bin/targets/ 目录树 (编译后):"
+          echo '```text'
+          find bin/targets -maxdepth 5 \
+            -not -path '*/staging_dir*' -not -path '*/build_dir*' -not -path '*/packages/*' -not -path '*/.git/*' \
+            -print 2>/dev/null | sort | sed 's|^bin/targets|.|' | head -120
+          echo '```'
+          echo ""
+          echo "📦 固件文件: $(find bin/targets -type f -not -path '*/packages/*' 2>/dev/null | wc -l) 个"
 
       - name: IB Build Diagnostics
         if: failure()

@@ -230,18 +230,44 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$APK_BUILD_KEY" ]; then
-            echo "::warning::APK_BUILD_KEY secret 未设置"
+            echo "::warning::APK_BUILD_KEY secret 未设置 — 构建系统将生成随机密钥, 设备 apk add 需 --allow-untrusted"
             echo "fingerprint=none" >> $GITHUB_OUTPUT
             exit 0
           fi
           printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > openwrt/private-key.pem
           chmod 600 openwrt/private-key.pem
           sed -i 's/\r$//' openwrt/private-key.pem
+          echo "📏 密钥文件: $(wc -c < openwrt/private-key.pem) 字节"
+
+          # ── 私钥格式校验 (恢复 v1): 无效密钥在专门步骤明确报错 ──
+          # 刻意设计: 校验失败时输出 ::error:: 但**不退出构建** (通过 if 分支规避 set -e)。
+          # 跳过签名让工具链/ccache 缓存正常生成, 修复密钥后下次直接增量构建; 产物标记未签名。
+          echo "🔍 验证密钥格式..."
+          if openssl ec -in openwrt/private-key.pem -check -noout 2>/dev/null; then
+            echo "✅ ECDSA 私钥格式验证通过"
+          elif openssl rsa -in openwrt/private-key.pem -check -noout 2>/dev/null; then
+            echo "::warning::APK_BUILD_KEY 是 RSA 密钥, ImmortalWrt APK 构建系统默认使用 ECDSA prime256v1"
+            echo "::warning::APK 本身支持 RSA, 但若构建系统依赖 ecparam 自动派生公钥则会失败"
+            echo "::notice::建议重新生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
+          else
+            KEY_HEADER=$(head -c 50 openwrt/private-key.pem 2>/dev/null)
+            echo "::error::APK_BUILD_KEY 不是有效的 PEM 格式私钥 (需要 ECDSA prime256v1 或 RSA)"
+            echo "::notice::密钥头部: ${KEY_HEADER}"
+            echo "::notice::生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
+            echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续以生成工具链/ccache 缓存"
+            rm -f openwrt/private-key.pem
+            echo "fingerprint=none" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # 派生公钥 (构建系统通过 package/base-files 安装到 /etc/apk/keys/)
           openssl ec -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem 2>/dev/null || \
             openssl rsa -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem
           chmod 644 openwrt/public-key.pem
+          echo "✅ 公钥已派生 → openwrt/public-key.pem"
           FP=$(openssl sha256 < openwrt/public-key.pem | awk '{print $NF}')
           echo "fingerprint=${FP}" >> $GITHUB_OUTPUT
+          echo "🔑 APK 签名密钥已注入 (公钥 SHA256: ${FP:0:16}...)"
 
       # ───────── 更新 feeds（源码 + 软件包索引）─────────
       - name: Update Feeds & Packages
@@ -249,6 +275,15 @@ jobs:
           set -euo pipefail
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install -a
+
+          # ── 目录树: 各 feed 是否已 install (排除 .git/中间产物) ──
+          echo ""
+          echo "📂 openwrt/package/ 目录树 (feeds install 后):"
+          echo '```text'
+          find package -maxdepth 3 \
+            -not -path '*/.git/*' -not -path '*/staging_dir*' -not -path '*/build_dir*' \
+            -print 2>/dev/null | sort | sed 's|^package|.|' | head -80
+          echo '```'
 
       - name: Apply Configuration
         id: apply_config
@@ -312,6 +347,10 @@ jobs:
           }
           find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
 
+          # ── dl/ 用统计而非树: 文件上千, 展开无意义 ──
+          echo ""
+          echo "📂 dl/ 下载缓存: $(find dl -type f 2>/dev/null | wc -l) 个文件, $(du -sh dl 2>/dev/null | cut -f1 || echo N/A)"
+
       # ───────── 磁盘空间监控（第 3 阶段：编译前）─────────
       - name: 💽 Disk space · Before build
         id: disk-3
@@ -367,6 +406,15 @@ jobs:
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           echo "duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
           echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $(((END_TIME-START_TIME)/3600)) $((((END_TIME-START_TIME)%3600)/60)) $(((END_TIME-START_TIME)%60)))"
+
+          # ── 目录树: 编译核心产物 bin/targets + bin/packages ──
+          echo ""
+          echo "📂 bin/ 产物目录树 (编译后):"
+          echo '```text'
+          find bin -maxdepth 5 \
+            -not -path '*/staging_dir*' -not -path '*/build_dir*' -not -path '*/tmp*' -not -path '*/.git/*' \
+            -print 2>/dev/null | sort | sed 's|^bin|.|' | head -120
+          echo '```'
 
       # ───────── 磁盘空间监控（第 4 阶段：编译后 + 4 阶段汇总表）─────────
       - name: 💽 Disk space · After build
@@ -802,15 +850,12 @@ jobs:
           fi
           (cd release && tar czf ../${IMMWRT_TARGET}-release.tar.gz .)
 
-          # ── 产物根目录结构（深度 1）──
+          # ── 产物完整目录树 (替换原 tree -L 1: ubuntu runner 无 tree 命令, 且深度1不完整) ──
+          # 纯 find 实现, 无外部依赖; release/ 是最终交付物, 展开到最深
           echo ""
-          echo "📂 release/ 根目录结构 (深度 1):"
+          echo "📂 release/ 完整目录结构:"
           echo '```text'
-          if command -v tree &>/dev/null; then
-            tree -L 1 release 2>/dev/null || ls -al release
-          else
-            ls -al release
-          fi
+          find release -print 2>/dev/null | sort | sed "s|^release|.|" | head -200
           echo '```'
           echo ""
           echo "📦 产物汇总:"
@@ -823,6 +868,50 @@ jobs:
         id: build-info-step
         run: |
           PKG_FORMAT="${{ inputs.matrix_apk_signing == true && 'apk' || 'ipk' }}"
+
+          # ── 从编译产物 feeds.buildinfo 提取各 feed 版本 (恢复 v1 功能) ──
+          # solarflows 软件包是直接 clone 到 package/solarflows/ (非 src-git feed),
+          # 不在 feeds.buildinfo 中, 故表格末尾手动附加一行 (用 packages_sha_full)。
+          FEEDS_INFO=""
+          FEEDS_MD_JSON=""
+          FW_FEEDS_FILE=$(find openwrt/bin/targets -name "feeds.buildinfo" 2>/dev/null | head -1)
+          if [ -f "$FW_FEEDS_FILE" ] && [ -s "$FW_FEEDS_FILE" ]; then
+            # 兼容 src-git 与 src-git-full, 跳过 # 注释行/空行
+            if grep -Eq '^src-git(-full)?\b' "$FW_FEEDS_FILE" 2>/dev/null; then
+              FEEDS_INFO=$(jq -Rs '.' "$FW_FEEDS_FILE")
+              FEEDS_MD_RAW=$(awk '{
+                if ($0 ~ /^#/ || $0 ~ /^[[:space:]]*$/) next
+                n=split($NF,a,"^"); url=a[1]; hash=a[2]
+                if (hash == "") hash="-"
+                sub(/\.git$/,"",url)
+                printf "| [%s](%s/tree/%s) | `%s` |\n", $2, url, hash, hash
+              }' "$FW_FEEDS_FILE")
+              # 手动附加 solarflows 软件包行 (printf 生成真实换行, 避免 YAML 块多行字面量)
+              SOLARFLOWS_ROW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.clone_packages.outputs.packages_sha_full }}\` |"
+              if [ -n "$FEEDS_MD_RAW" ]; then
+                FEEDS_MD_RAW=$(printf '%s\n%s' "$FEEDS_MD_RAW" "$SOLARFLOWS_ROW")
+              else
+                FEEDS_MD_RAW="$SOLARFLOWS_ROW"
+              fi
+              if [ -n "$FEEDS_MD_RAW" ]; then
+                FEEDS_MD_JSON=$(echo "$FEEDS_MD_RAW" | jq -Rs '.')
+              else
+                echo "⚠️ feeds.buildinfo 格式异常, 无法解析 feed 版本"
+                FEEDS_MD_JSON='""'
+              fi
+            else
+              echo "⚠️ feeds.buildinfo 内容不完整 (无 src-git 条目), 仅记录 solarflows"
+              FEEDS_INFO='""'
+              FEEDS_MD_RAW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.clone_packages.outputs.packages_sha_full }}\` |"
+              FEEDS_MD_JSON=$(echo "$FEEDS_MD_RAW" | jq -Rs '.')
+            fi
+          else
+            echo "⚠️ feeds.buildinfo 缺失, 仅记录 solarflows"
+            FEEDS_INFO='""'
+            FEEDS_MD_RAW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.clone_packages.outputs.packages_sha_full }}\` |"
+            FEEDS_MD_JSON=$(echo "$FEEDS_MD_RAW" | jq -Rs '.')
+          fi
+
           cat > build-info.json <<JSONEOF
           {
             "target": "${IMMWRT_TARGET}",
@@ -833,6 +922,8 @@ jobs:
             "packages_repo": "${{ inputs.packages_feed_repo }}",
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${{ steps.clone_packages.outputs.packages_sha_full }}",
+            "feeds_info": ${FEEDS_INFO},
+            "feeds_md": ${FEEDS_MD_JSON},
             "duration_sec": "${{ steps.total_duration.outputs.duration }}",
             "duration_fmt": "${{ steps.total_duration.outputs.duration_fmt }}",
             "toolchain_hit": "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}",
@@ -849,16 +940,39 @@ jobs:
           }
           JSONEOF
 
+          # ── Summary Feed 版本 ──
+          {
+            echo ""
+            echo "### 📌 Feed 版本"
+            echo ""
+            echo "| Feed | 版本 |"
+            echo "|------|------|"
+            printf '%s\n' "$FEEDS_MD_JSON" | jq -r '.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Generate release notes
         if: success()
         run: |
           SHA_SHORT="${{ steps.clone_packages.outputs.sha }}"
+          # 从 build-info.json 读取 Feed 表格 (含 solarflows 行), 软件包版本不再单列, 避免重复
+          # jq -r 已解码 JSON 字符串, 空值输出空串由 -n 过滤
+          FEEDS_MD_JSON=$(jq -r '.feeds_md // empty' build-info.json)
           {
             echo "## ${IMMWRT_TARGET} Build"
             echo ""
             echo "**源码**: [${{ inputs.matrix_ref }}](https://github.com/${{ inputs.matrix_repo }}) @ [${SHA_SHORT}](https://github.com/${{ inputs.matrix_repo }}/commit/${{ steps.clone_packages.outputs.sha_full }})"
-            echo "**软件包**: [${{ inputs.matrix_packages_branch }}](https://github.com/${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) @ [${{ steps.clone_packages.outputs.packages_sha }}](https://github.com/${{ inputs.packages_feed_repo }}/commit/${{ steps.clone_packages.outputs.packages_sha_full }})"
             echo "**编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}"
+            if [ -n "$FEEDS_MD_JSON" ]; then
+              echo ""
+              echo "### 📌 Feed 版本"
+              echo ""
+              echo "| Feed | 版本 |"
+              echo "|------|------|"
+              printf '%s\n' "$FEEDS_MD_JSON"
+            fi
+            echo ""
+            echo "---"
+            echo "ℹ️ 完整构建报告请查看 GitHub Actions Summary。"
           } > release-body.md
 
       - name: Upload firmware artifact

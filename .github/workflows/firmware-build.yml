@@ -52,8 +52,10 @@ on:
   schedule:
     - cron: '6 0 * * 1,6'  # 每周一和周六的 00:06 UTC
 
+# 全局固定并发组: 任意时刻全仓库只允许一个 v2 run 执行, 后续触发自动排队。
+# 防止短时间重复触发两个 run 并行 (会同时写 sdk-*/ib-* tag 与 packages tag, 污染远端仓库)。
 concurrency:
-  group: firmware-build-v2-${{ github.ref }}
+  group: firmware-build-v2
   cancel-in-progress: false
 
 permissions:
@@ -149,6 +151,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ── 触发上游同步工作流 (可跳过) ──
+      # 刻意设计: gh workflow run 不返回 run ID, 故记录触发前时间戳, 触发后轮询
+      # 直到出现 created_at 晚于该时刻的新 run (最大 30s)。避免 sleep 竞态:
+      # 若 5s 内 run 记录未创建或旧 run 恰好更晚, 会错拿旧 run ID 导致 watch 等错对象。
       - name: Trigger OpenWRT_Packages_Updater
         if: github.event.inputs.skip_upstream != 'true'
         id: trigger-updater
@@ -156,26 +161,69 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           echo "🚀 触发 OpenWRT_Packages_Updater..."
+          BEFORE=$(date +%s)
           gh workflow run OpenWRT_Packages_Updater.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }}
-          sleep 5
-          RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow OpenWRT_Packages_Updater.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-          echo "updater_id=$RUN_ID" >> $GITHUB_OUTPUT
+          RUN_ID=""
+          for i in $(seq 1 10); do
+            RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow OpenWRT_Packages_Updater.yml --limit 10 \
+              --json databaseId,createdAt --jq --argjson ts "$BEFORE" \
+              '[.[] | select((.createdAt | fromdateiso8601) > $ts)] | .[0].databaseId // empty' 2>/dev/null || true)
+            [ -n "$RUN_ID" ] && break
+            sleep 3
+          done
+          if [ -n "$RUN_ID" ]; then
+            echo "updater_id=$RUN_ID" >> $GITHUB_OUTPUT
+            echo "✅ Updater run: $RUN_ID"
+          else
+            echo "⚠️ 未在 30s 内发现新的 Updater run (仍会继续)"
+          fi
 
+      # ── 触发 Sync_Push (12h 去重: 上次成功 <12h 则跳过) ──
+      # 刻意设计: Sync_Push 每 12h 定时执行一次 (与 OpenWRT_Packages_Updater 的 12h 同步),
+      # 若最近一次已成功完成且距今 <12h, 说明源码已同步过, 无需重复触发浪费配额。
+      # OpenWRT_Packages_Updater (软件源) 则保证一定触发, 不做去重。
       - name: Trigger Sync_Push
         if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'sdk-packages'
         id: trigger-sync
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          LAST_TS=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --status success --limit 1 \
+            --json updatedAt --jq '.[0].updatedAt // empty' 2>/dev/null || true)
+          if [ -n "$LAST_TS" ]; then
+            NOW_TS=$(date +%s)
+            LAST_EPOCH=$(date -d "$LAST_TS" +%s 2>/dev/null || echo 0)
+            DIFF_H=$(( (NOW_TS - LAST_EPOCH) / 3600 ))
+            if [ "$DIFF_H" -lt 12 ]; then
+              echo "⏭️ Sync_Push ${DIFF_H}h 前已成功, 跳过触发 (12h 去重)"
+              echo "sync_skipped=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "🕐 Sync_Push 上次成功: ${DIFF_H}h 前, 已超过 12h, 正常触发"
+          else
+            echo "🕐 Sync_Push 无成功记录, 首次触发"
+          fi
           echo "🚀 触发 Sync_Push..."
+          BEFORE=$(date +%s)
           gh workflow run Sync_Push.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }}
-          sleep 5
-          RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-          echo "sync_id=$RUN_ID" >> $GITHUB_OUTPUT
+          RUN_ID=""
+          for i in $(seq 1 10); do
+            RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --limit 10 \
+              --json databaseId,createdAt --jq --argjson ts "$BEFORE" \
+              '[.[] | select((.createdAt | fromdateiso8601) > $ts)] | .[0].databaseId // empty' 2>/dev/null || true)
+            [ -n "$RUN_ID" ] && break
+            sleep 3
+          done
+          if [ -n "$RUN_ID" ]; then
+            echo "sync_id=$RUN_ID" >> $GITHUB_OUTPUT
+            echo "✅ Sync run: $RUN_ID"
+          else
+            echo "⚠️ 未在 30s 内发现新的 Sync run (仍会继续)"
+          fi
 
       - name: Purge stale draft releases
         env:
@@ -214,14 +262,26 @@ jobs:
           echo "sdk_version=${DETAILED}" >> $GITHUB_OUTPUT
           echo "ib_version=${DETAILED}" >> $GITHUB_OUTPUT
 
-      # ── 恢复构建状态缓存 (跨 run 持久化上次构建 SHA) ──
+      # ── 恢复构建状态 (跨 run 持久化上次构建 SHA) ──
+      # 刻意设计: 用 Repository Variable 单份存储 (替代 v1 的 immwrt-state-* 缓存 key)。
+      # actions/cache 不可变, 每 run 一个新 key 会累积挤占 10GB 配额; Variable 天然单份、
+      # 无配额、零清理逻辑。并发由全局 concurrency group 保证同一时刻只有一个 v2 run。
+      # ⚠️ 写 Variable 必须用 PAT (GITHUB_TOKEN 仅能读, 不能创建/修改 repository variables)。
       - name: Restore build state
         id: cache-build-state
-        uses: actions/cache/restore@v5
-        with:
-          key: immwrt-v2-state-${{ github.run_id }}
-          restore-keys: immwrt-v2-state-
-          path: build-state.json
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          STATE=$(gh api "repos/${{ github.repository }}/actions/variables/IMMWRT_BUILD_STATE" \
+            --jq '.value // empty' 2>/dev/null || true)
+          if [ -n "$STATE" ]; then
+            echo "$STATE" > build-state.json
+            echo "📦 构建状态已从 Variable 加载 ($(jq 'keys | length' build-state.json 2>/dev/null || echo 0) 个 target)"
+          else
+            echo "📦 无构建状态 Variable (首次构建)"
+            echo '{}' > build-state.json
+          fi
+          cat build-state.json
 
       # ── 加载目标 + SHA 状态检查 + 上游变更范围检测 ──
       - name: Load targets & check changes
@@ -456,16 +516,19 @@ jobs:
                 SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
               fi
             elif [ "$SRC_CHANGED" = "true" ] && [ "$HAS_KERNEL" = "true" ]; then
+              # 全量编译已包含全部软件包 (compile-firmware 会收集 passwall 包),
+              # 不再并行 SDK 增量编译, 避免重复编译 + 双写 packages tag
               SHOULD_FW=true; SHOULD_PUB_FW=true
-              [ "$PKG_CHANGED" = "true" ] && SHOULD_SDK_PKGS=true && SHOULD_PUB_PKGS=true
             elif [ "$SRC_CHANGED" = "true" ] && [ "$HAS_KERNEL" = "false" ]; then
               if [ "$IB_READY" = "false" ]; then
                 echo "⚠️ IB 不存在,升级为全量编译"
                 SHOULD_FW=true; SHOULD_PUB_FW=true
+                # 全量编译已覆盖软件包, 同样不并行 SDK 增量编译
               else
                 SHOULD_IB=true; SHOULD_PUB_FW=true
+                # IB 重打包与 SDK 增量编译互不依赖, 可并行; 但 SDK 必须先就绪
+                [ "$PKG_CHANGED" = "true" ] && [ "$SDK_READY" = "true" ] && SHOULD_SDK_PKGS=true && SHOULD_PUB_PKGS=true
               fi
-              [ "$PKG_CHANGED" = "true" ] && { [ "$SDK_READY" = "false" ] || SHOULD_SDK_PKGS=true; } && SHOULD_PUB_PKGS=true
             fi
           fi
 
@@ -867,9 +930,24 @@ jobs:
           JSONEOF
           cat build-state.json
 
-      - name: Persist state to Actions Cache
+      # ── 持久化构建状态到 Repository Variable (每次构建更新同一份) ──
+      # ⚠️ GITHUB_TOKEN 不能写 repository variables, 必须用 PAT (secrets.ACCESS_TOKEN)。
+      - name: Persist state to Repository Variable
         if: always()
-        uses: actions/cache/save@v5
-        with:
-          key: immwrt-v2-state-${{ github.run_id }}
-          path: build-state.json
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          # jq -c 输出紧凑 JSON (保留字符串内部空格, 如 last_build 时间戳), 避免 tr 误删
+          STATE_VAL=$(jq -c . build-state.json 2>/dev/null || cat build-state.json)
+          # Variable 值 ≤48KB, build-state.json 仅几百字节, 安全。
+          if gh api "repos/${{ github.repository }}/actions/variables/IMMWRT_BUILD_STATE" --jq .name &>/dev/null; then
+            gh api -X PATCH "repos/${{ github.repository }}/actions/variables/IMMWRT_BUILD_STATE" \
+              -f name=IMMWRT_BUILD_STATE -f value="$STATE_VAL" 2>/dev/null && \
+              echo "✅ 已更新 IMMWRT_BUILD_STATE Variable" || \
+              echo "⚠️ Variable 更新失败 (需 PAT 的 repo 权限, 不影响本次构建)"
+          else
+            gh api -X POST "repos/${{ github.repository }}/actions/variables" \
+              -f name=IMMWRT_BUILD_STATE -f value="$STATE_VAL" 2>/dev/null && \
+              echo "✅ 已创建 IMMWRT_BUILD_STATE Variable" || \
+              echo "⚠️ Variable 创建失败 (需 PAT 的 repo 权限, 不影响本次构建)"
+          fi
