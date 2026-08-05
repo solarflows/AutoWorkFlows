@@ -1,5 +1,14 @@
 # Diagnostic Signatures
 
+## `time:` Line Cannot Identify Failed Packages
+
+Evidence:
+
+- A failed `compile.txt` ends with `time: package/.../compile#...`
+- A job or summary claims no failed package was found, but the build clearly failed
+
+Interpretation: `scripts/time.pl` prints its timing line **regardless of the command's exit status** — it computes the elapsed time, prints `%s#%.2f#%.2f#%.2f\n`, and only then exits with the child's status. A failed build therefore also ends with a `time:` line. The authoritative failed-package source is `logs*/<pkg>/error.txt` (`ERROR: <pkg> failed to build.`). Treat the last-line check as a fallback for interrupted logs only.
+
 ## Generic Environment Variable Leakage
 
 Evidence:

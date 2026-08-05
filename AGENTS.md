@@ -58,6 +58,8 @@ When editing files under `.github/workflows/`:
 - ImageBuilder: `ib-<target>-<version>-<arch>.tar.xz`
 - Firmware: `<target>-release.tar.gz`
 - Version source: `VERSION_NUMBER` from `include/version.mk`; append date for SNAPSHOT
+- Upstream produces `<dist>-sdk-*.tar.{xz,zst}` and `<dist>-imagebuilder-*.tar.{xz,zst}`; match with `*-sdk-*.tar.*` / `*-imagebuilder-*.tar.*`, then rename to the `sdk-`/`ib-` prefixed form
+- Ship each tarball with a two-column `.sha256` (`<hash>  <filename>`) recomputed after rename; consumers verify with `sha256sum -c`
 - See [`.github/instructions/build-artifacts.instructions.md`](.github/instructions/build-artifacts.instructions.md)
 
 ## Build Diagnostics

@@ -7,6 +7,8 @@ applyTo: [".github/workflows/**", "openwrt-configs/**"]
 
 - Name SDK archives `sdk-<target>-<version>-<arch>.tar.xz` and ImageBuilder archives `ib-<target>-<version>-<arch>.tar.xz`.
 - Derive `<version>` from `VERSION_NUMBER` in `include/version.mk`; append the date for SNAPSHOT builds.
+- Upstream artifacts are named `<dist>-sdk-*.tar.{xz,zst}` and `<dist>-imagebuilder-*.tar.{xz,zst}`; locate them with `*-sdk-*.tar.*` / `*-imagebuilder-*.tar.*` and rename to the `sdk-`/`ib-` prefixed form.
+- Recompute the checksum after renaming into a two-column `.sha256` (`<hash>  <filename>`). Do not reuse the upstream `.sha256sum`: its embedded filename or directory prefix may not match the renamed file, and `sha256sum -c` requires the listed filename to exist.
 - Name firmware archives `<target>-release.tar.gz` and include `release/firmware` and `release/passwall`.
 - Workflows use `secrets.ACCESS_TOKEN` through `GH_TOKEN` for GitHub API operations.
 - Move deprecated workflows to `.github/archive/workflows/` instead of deleting them, preserving the audit trail.

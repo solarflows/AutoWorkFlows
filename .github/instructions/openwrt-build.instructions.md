@@ -20,6 +20,8 @@ applyTo: ".github/workflows/**"
 - Keep the global concurrency group `firmware-build-v2` fixed. Do not scope it per-ref; two parallel runs would write the same `sdk-*`/`ib-*`/`packages` tags and pollute remote repos.
 - Store SDK and ImageBuilder versions under `sdk-<target>` and `ib-<target>` release tags. Replace same-version files and retain the configured number of distinct versions.
 - Keep version sorting numeric and aware of SNAPSHOT and `V<n>` tokens.
+- Match SDK/ImageBuilder artifacts with `*-sdk-*.tar.*` / `*-imagebuilder-*.tar.*` (upstream names are `<dist>-sdk-*` / `<dist>-imagebuilder-*`); strip the embedded version prefix with `original_version`, not the dated `source_version`, when extracting the arch.
+- Write SDK/ImageBuilder checksums as two-column `.sha256` (`<hash>  <filename>`) recomputed after rename; consumers run `sha256sum -c`, which fails on single-column hashes or filenames that do not match the downloaded file.
 - Persist build state to the `IMMWRT_BUILD_STATE` repository variable, one copy, via `secrets.ACCESS_TOKEN` (PAT). `GITHUB_TOKEN` cannot write repository variables. Do not revert to per-run cache keys; they accumulate and consume the 10 GB cache quota.
 
 ## Diagnosis First
@@ -32,6 +34,8 @@ applyTo: ".github/workflows/**"
 - Preserve four-stage disk monitoring and its summary deltas.
 - Preserve build-log counts, incomplete and empty log detection, and the slowest-build summary.
 - Preserve automatic failed-package diagnostics and include `.config` in failure artifacts.
+- Treat `logs*/<pkg>/error.txt` as the authoritative failed-package source (`ERROR: <pkg> failed to build.`). Do not judge failure by whether a `compile.txt` ends with a `time:` line: `scripts/time.pl` prints that line regardless of the exit status, so failed logs also end with `time:`. Keep the last-line check only as a fallback for interrupted logs (e.g. OOM).
+- Output failed-package logs in full instead of filtering or truncating; cap only oversized files (>300 KB) to their tail and point to the artifact.
 - Move first-pass `logs` to `logs.1`; never delete the evidence before the single-thread retry.
 - Keep the `make -j1 V=sc -k` retry for complete configure and compiler diagnostics.
 - Preserve ccache statistics and cleanup, release-root listings, and diagnostic verification steps that intentionally use `continue-on-error`.
