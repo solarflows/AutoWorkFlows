@@ -1020,11 +1020,6 @@ jobs:
           SDK_TARBALL=$(find bin/targets -type f \( -name '*-sdk-*.tar.xz' -o -name '*-sdk-*.tar.zst' \) | head -1)
           if [ -n "$SDK_TARBALL" ]; then
             cp "$SDK_TARBALL" release/sdk/
-            # 兼容 .sha256sum (上游生成) 与 .sha256 (fallback 生成) 两种后缀
-            SDK_SHA256=$(find bin/targets -type f \( -name "$(basename "$SDK_TARBALL").sha256sum" -o -name "$(basename "$SDK_TARBALL").sha256" \) | head -1)
-            if [ -n "$SDK_SHA256" ]; then cp "$SDK_SHA256" release/sdk/; else
-              (cd release/sdk && sha256sum "$(basename "$SDK_TARBALL")" | awk '{print $1}' > "$(basename "$SDK_TARBALL").sha256")
-            fi
             # v2 命名: sdk-<target>-<version>-<arch>.tar.{xz,zst} (version 来自 version.mk)
             SDK_VERSION="${{ steps.apply_config.outputs.source_version }}"
             SDK_ORIG_VER="${{ steps.apply_config.outputs.original_version }}"
@@ -1037,10 +1032,11 @@ jobs:
             fi
             SDK_NEW_NAME="sdk-${IMMWRT_TARGET}-${SDK_VERSION}-${SDK_ARCH}.${SDK_EXT}"
             mv "release/sdk/$(basename "$SDK_TARBALL")" "release/sdk/${SDK_NEW_NAME}"
-            for SHA_SUFFIX in sha256sum sha256; do
-              [ -f "release/sdk/$(basename "$SDK_TARBALL").$SHA_SUFFIX" ] && \
-                mv "release/sdk/$(basename "$SDK_TARBALL").$SHA_SUFFIX" "release/sdk/${SDK_NEW_NAME}.sha256"
-            done
+
+            # sha256 统一为 ${SDK_NEW_NAME}.sha256 两列标准格式 (hash + 空格 + 文件名),
+            # 供消费方 sha256sum -c 校验。mv 后重算而非复用上游 .sha256sum:
+            # 上游文件名/目录前缀可能与新名不一致, 重算保证内容与上传文件名精确匹配
+            (cd release/sdk && sha256sum "$SDK_NEW_NAME" > "${SDK_NEW_NAME}.sha256")
             echo "sdk_new_name=${SDK_NEW_NAME}" >> $GITHUB_OUTPUT
             echo "sdk_version_key=${SDK_VERSION}" >> $GITHUB_OUTPUT
             echo "sdk_arch=${SDK_ARCH}" >> $GITHUB_OUTPUT
@@ -1055,10 +1051,6 @@ jobs:
           IB_TARBALL=$(find bin/targets -type f \( -name '*-imagebuilder-*.tar.xz' -o -name '*-imagebuilder-*.tar.zst' \) | head -1)
           if [ -n "$IB_TARBALL" ]; then
             cp "$IB_TARBALL" release/ib/
-            IB_SHA256=$(find bin/targets -type f \( -name "$(basename "$IB_TARBALL").sha256sum" -o -name "$(basename "$IB_TARBALL").sha256" \) | head -1)
-            if [ -n "$IB_SHA256" ]; then cp "$IB_SHA256" release/ib/; else
-              (cd release/ib && sha256sum "$(basename "$IB_TARBALL")" | awk '{print $1}' > "$(basename "$IB_TARBALL").sha256")
-            fi
             IB_VERSION="${{ steps.apply_config.outputs.source_version }}"
             IB_ORIG_VER="${{ steps.apply_config.outputs.original_version }}"
             IB_EXT=$(basename "$IB_TARBALL" | sed -E 's/.*\.(tar\..*)$/\1/')
@@ -1068,10 +1060,9 @@ jobs:
             fi
             IB_NEW_NAME="ib-${IMMWRT_TARGET}-${IB_VERSION}-${IB_ARCH}.${IB_EXT}"
             mv "release/ib/$(basename "$IB_TARBALL")" "release/ib/${IB_NEW_NAME}"
-            for SHA_SUFFIX in sha256sum sha256; do
-              [ -f "release/ib/$(basename "$IB_TARBALL").$SHA_SUFFIX" ] && \
-                mv "release/ib/$(basename "$IB_TARBALL").$SHA_SUFFIX" "release/ib/${IB_NEW_NAME}.sha256"
-            done
+
+            # sha256 统一为 ${IB_NEW_NAME}.sha256 两列标准格式 (同 SDK 逻辑, mv 后重算)
+            (cd release/ib && sha256sum "$IB_NEW_NAME" > "${IB_NEW_NAME}.sha256")
             echo "ib_new_name=${IB_NEW_NAME}" >> $GITHUB_OUTPUT
             echo "ib_version_key=${IB_VERSION}" >> $GITHUB_OUTPUT
             echo "ib_arch=${IB_ARCH}" >> $GITHUB_OUTPUT

@@ -99,7 +99,7 @@ jobs:
                 --repo "${{ inputs.matrix_ib_release_repo }}" \
                 --pattern "${{ steps.resolve.outputs.ib_file }}" \
                 --dir ib-dl/
-              (cd ib-dl && sha256sum "${{ steps.resolve.outputs.ib_file }}" | awk '{print $1}' > "${{ steps.resolve.outputs.ib_file }}.sha256")
+              (cd ib-dl && sha256sum "${{ steps.resolve.outputs.ib_file }}" > "${{ steps.resolve.outputs.ib_file }}.sha256")
             }
           cd ib-dl
           EXPECTED="${{ steps.resolve.outputs.ib_sha256 }}"

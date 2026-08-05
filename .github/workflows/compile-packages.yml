@@ -97,7 +97,7 @@ jobs:
                 --repo "${{ inputs.matrix_sdk_release_repo }}" \
                 --pattern "${{ steps.resolve.outputs.sdk_file }}" \
                 --dir sdk-dl/
-              (cd sdk-dl && sha256sum "${{ steps.resolve.outputs.sdk_file }}" | awk '{print $1}' > "${{ steps.resolve.outputs.sdk_file }}.sha256")
+              (cd sdk-dl && sha256sum "${{ steps.resolve.outputs.sdk_file }}" > "${{ steps.resolve.outputs.sdk_file }}.sha256")
             }
           cd sdk-dl
           sha256sum -c "${{ steps.resolve.outputs.sdk_file }}.sha256" || {
