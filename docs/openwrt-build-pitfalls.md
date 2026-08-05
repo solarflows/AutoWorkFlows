@@ -52,3 +52,29 @@ The supported strategies are `smart`, `clean-toolchain`, `clean-ccache`, `clean-
 ## SDK and ImageBuilder Retention
 
 SDK and ImageBuilder archives are stored under `sdk-<target>` and `ib-<target>` release tags with an `index.json`. Replace files for the same version with `--clobber`. For different versions, retain the configured number of version groups. Sorting must compare numeric fields numerically, map SNAPSHOT to a stable sentinel, and parse `V<n>` as a number.
+
+## `time:` Line Cannot Identify Failed Packages
+
+### Symptom
+
+A failed package log such as `logs/package/feeds/packages/libffi/compile.txt` ends with a `time:` line:
+
+```text
+time: package/feeds/packages/libffi/compile#0.11#0.15#0.23
+```
+
+Judging failure by "last line is not `time:`" misses this failure, so the diagnostics step falls back to scanning `build.log` and loses the package name and the real compiler/configure error.
+
+### Verified Root Cause
+
+`scripts/time.pl` wraps every make command and prints the timing line **regardless of the command's exit status** — it computes the elapsed time, prints `%s#%.2f#%.2f#%.2f\n` to STDOUT, and only then `exit $exitcode`. A failed build therefore also ends with a `time:` line.
+
+### Fix
+
+The authoritative failed-package source is `error.txt`:
+
+```text
+   ERROR: package/feeds/packages/libffi failed to build.
+```
+
+Written by make's `ERROR` macro (see `include/verbose.mk`). Extract the package path between `ERROR:` and `failed to build`, strip any ` [host]`-style suffix, and map it to `logs*/<pkg>/compile.txt` / `host-compile.txt` / `download.txt`. Keep the "last line is not `time:`" check only as a fallback for interrupted logs (e.g. OOM kills the wrapper before it prints).

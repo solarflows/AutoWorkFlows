@@ -326,6 +326,7 @@ jobs:
             SOURCE_VER="$ORIG_VER"
           fi
           echo "source_version=${SOURCE_VER}" >> $GITHUB_OUTPUT
+          echo "original_version=${ORIG_VER}" >> $GITHUB_OUTPUT
           echo "🏷️ source_version: ${SOURCE_VER}"
 
           VERSION="${{ inputs.version }}"
@@ -400,7 +401,8 @@ jobs:
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           START_TIME=$(date +%s)
           set +o pipefail
-          make -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
+          # BUILD_LOG=1: 显式声明每包详细日志 (logs/<pkg>/*.txt), 不依赖 .config 的 CONFIG_BUILD_LOG
+          make BUILD_LOG=1 -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
           MAKE_EXIT=${PIPESTATUS[0]}
           set -o pipefail
           END_TIME=$(date +%s)
@@ -489,7 +491,7 @@ jobs:
           START_TIME=$(date +%s)
           RETRY_EXIT=1
           set +o pipefail
-          make -j$(nproc) -k 2>&1 | tee build.log
+          make BUILD_LOG=1 -j$(nproc) -k 2>&1 | tee build.log
           RETRY_EXIT=${PIPESTATUS[0]}
           set -o pipefail
           if [ "$RETRY_EXIT" -ne 0 ]; then
@@ -497,7 +499,7 @@ jobs:
             set +o pipefail
             # 刻意设计: 单线程 + V=sc 输出完整编译命令与完整日志,
             # 确保失败包的真实错误(如 configure 具体报错)不会被并行模式截断
-            make -j1 V=sc -k 2>&1 | tee build.log
+            make BUILD_LOG=1 -j1 V=sc -k 2>&1 | tee build.log
             RETRY_EXIT=${PIPESTATUS[0]}
             set -o pipefail
           fi
@@ -612,8 +614,11 @@ jobs:
           fi
 
       # ───────── 编译/下载错误诊断（统一处理）─────────
-      # 刻意设计: 失败时自动查找失败软件包, 从 error.txt/compile.txt 末行(time: 标记)
-      # 判定哪个包失败, 避免人工翻 build.log 大海捞针。logs=重试轮, logs.1=初次轮。
+      # 刻意设计: 失败时自动查找失败软件包, 从 error.txt/compile.txt 判定哪个包失败,
+      # 避免人工翻 build.log 大海捞针。logs=重试轮, logs.1=初次轮。
+      # 权威失败源是 error.txt (make ERROR 宏写入 "ERROR: <pkg> failed to build."):
+      # time.pl 无论命令成败都会打印 "time:" 行, 失败日志同样以 "time:" 结尾,
+      # 故 compile.txt 末行是否 time: 不能判定失败; 仅保留该检测作为日志被中断(如 OOM)时的兜底。
       - name: 🔍 Build Error Diagnostics
         if: failure()
         run: |
@@ -622,147 +627,137 @@ jobs:
           FAILED_PKGS=""
           PKG_COUNT=0
 
-          # ── 判断失败阶段：优先检查 download.txt（下载阶段），再检查 compile.txt（编译阶段）──
-          HAS_DOWNLOAD_LOGS=false
-          HAS_COMPILE_LOGS=false
-
-          # 同时扫描 logs(重试) 与 logs.1(初次)
+          # ── 收集失败包: 先 error.txt 权威源, 再 compile.txt 末行兜底 ──
           for ROOT in logs logs.1; do
             [ -d "$ROOT" ] || continue
-            if [ -n "$(find $ROOT -name 'download.txt' -type f 2>/dev/null | head -1)" ]; then
-              HAS_DOWNLOAD_LOGS=true
-            fi
-            if [ -n "$(find $ROOT -name 'compile.txt' -type f 2>/dev/null | head -1)" ]; then
-              HAS_COMPILE_LOGS=true
-            fi
+            # 1) error.txt 权威源: "   ERROR: package/feeds/packages/libffi failed to build."
+            for errfile in $(find "$ROOT" -name 'error.txt' -type f 2>/dev/null | sort); do
+              while IFS= read -r line; do
+                pkg=$(echo "$line" | sed -n 's/.*ERROR: \(.*\) failed to build.*/\1/p' | sed 's/ \[[^]]*\]$//')
+                [ -n "$pkg" ] && FAILED_PKGS="$FAILED_PKGS $pkg"
+              done < "$errfile"
+            done
+            # 2) 兜底: 末行不含 time: 的 compile.txt (日志被中断, 无 error.txt)
+            for logfile in $(find "$ROOT" -name 'compile.txt' -type f 2>/dev/null | sort); do
+              LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+              if ! echo "$LAST_LINE" | grep -q '^time:'; then
+                PKG=$(echo "$logfile" | sed "s|$ROOT/||; s|/compile.txt||")
+                FAILED_PKGS="$FAILED_PKGS $PKG"
+              fi
+            done
           done
 
-          if [ "$HAS_COMPILE_LOGS" = "true" ]; then
-            # 有 compile.txt → 编译阶段失败
+          if [ -n "$FAILED_PKGS" ]; then
+            # ── 编译阶段失败: 完整输出失败包日志 (不截断/过滤, 仅超大文件保护) ──
+            FAILED_PKGS=$(echo "$FAILED_PKGS" | tr ' ' '\n' | sed '/^$/d' | sort -u)
+            PKG_COUNT=$(echo "$FAILED_PKGS" | wc -l)
             echo "## ❌ 编译错误详情" >> "$GITHUB_STEP_SUMMARY"
-
-            # 扫描 logs/ + logs.1/ 中所有未正常完成的编译日志（末行不含 time: 标记的为失败）
-            for ROOT in logs logs.1; do
-              [ -d "$ROOT" ] || continue
-              for logfile in $(find $ROOT -name 'compile.txt' -type f 2>/dev/null | sort); do
-                LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
-                if ! echo "$LAST_LINE" | grep -q '^time:'; then
-                  PKG=$(echo "$logfile" | sed "s|$ROOT/||; s|/compile.txt||")
-                  FAILED_PKGS="$FAILED_PKGS $PKG"
-                fi
-              done
-            done
-
-            if [ -n "$FAILED_PKGS" ]; then
-              PKG_COUNT=$(echo "$FAILED_PKGS" | wc -w)
-              echo "共 ${PKG_COUNT} 个软件包编译失败" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-
-              for pkg in $FAILED_PKGS; do
-                # 优先 error.txt(如存在), 否则用 compile.txt
-                LOGFILE=""
-                for ROOT in logs logs.1; do
-                  if [ -f "$ROOT/${pkg}/error.txt" ]; then
-                    LOGFILE="$ROOT/${pkg}/error.txt"; break
-                  elif [ -f "$ROOT/${pkg}/compile.txt" ]; then
-                    LOGFILE="$ROOT/${pkg}/compile.txt"; break
-                  fi
-                done
-                if [ -n "$LOGFILE" ]; then
-                  echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
-                  echo "" >> "$GITHUB_STEP_SUMMARY"
-                  echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                  # 过滤 make 目录切换噪音，取最后 60 行有效错误
-                  grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$LOGFILE" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
-                  echo '```' >> "$GITHUB_STEP_SUMMARY"
-                  echo "" >> "$GITHUB_STEP_SUMMARY"
-                fi
-              done
-            else
-              echo "未在 logs/ 中找到失败软件包（编译可能在其他阶段出错）" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo '```text' >> "$GITHUB_STEP_SUMMARY"
-              # 从 build.log 提取 make 错误摘要
-              grep -E 'make\[[0-9]+\].*(Error [0-9]+|Stop\.?)$' build.log 2>/dev/null | head -40 >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
-            fi
-          elif [ "$HAS_DOWNLOAD_LOGS" = "true" ]; then
-            # 有 download.txt 但无 compile.txt → 下载阶段失败
-            echo "## ❌ 下载失败详情" >> "$GITHUB_STEP_SUMMARY"
+            echo "共 ${PKG_COUNT} 个软件包编译失败" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
 
-            # 扫描 download.txt 找出失败的包（末行不含 time: 或包含错误信息）
-            FAILED_DOWNLOAD_PKGS=""
-            for ROOT in logs logs.1; do
-              [ -d "$ROOT" ] || continue
-              for logfile in $(find $ROOT -name 'download.txt' -type f 2>/dev/null | sort); do
-                LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
-                # 下载成功通常以 time: 结尾，失败则包含错误信息
-                if ! echo "$LAST_LINE" | grep -q '^time:'; then
-                  PKG=$(echo "$logfile" | sed "s|$ROOT/||; s|/download.txt||")
-                  FAILED_DOWNLOAD_PKGS="$FAILED_DOWNLOAD_PKGS $PKG"
-                fi
-              done
-            done
-
-            if [ -n "$FAILED_DOWNLOAD_PKGS" ]; then
-              PKG_COUNT=$(echo "$FAILED_DOWNLOAD_PKGS" | wc -w)
-              echo "共 ${PKG_COUNT} 个软件包下载失败" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-
-              for pkg in $FAILED_DOWNLOAD_PKGS; do
-                LOGFILE=""
-                for ROOT in logs logs.1; do
-                  if [ -f "$ROOT/${pkg}/download.txt" ]; then
-                    LOGFILE="$ROOT/${pkg}/download.txt"; break
+            for pkg in $FAILED_PKGS; do
+              echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
+              echo '```text' >> "$GITHUB_STEP_SUMMARY"
+              # 轮次优先级: logs.1(初次, 完整 configure 错误) > logs(重试轮)
+              for LOGROOT in logs.1 logs; do
+                [ -d "$LOGROOT" ] || continue
+                for LOGFILE in "$LOGROOT/$pkg/compile.txt" "$LOGROOT/$pkg/host-compile.txt" "$LOGROOT/$pkg/download.txt"; do
+                  [ -f "$LOGFILE" ] || continue
+                  echo "" >> "$GITHUB_STEP_SUMMARY"
+                  echo "▍$LOGFILE ($( [ "$LOGROOT" = "logs.1" ] && echo 初次构建 || echo 重试 )) ▍" >> "$GITHUB_STEP_SUMMARY"
+                  SIZE=$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)
+                  if [ "$SIZE" -gt 300000 ]; then
+                    echo "[日志 ${SIZE} 字节, 超过 300KB 仅显示末尾 1000 行; 完整内容见 artifact]" >> "$GITHUB_STEP_SUMMARY"
+                    tail -1000 "$LOGFILE" >> "$GITHUB_STEP_SUMMARY"
+                  else
+                    cat "$LOGFILE" >> "$GITHUB_STEP_SUMMARY"
                   fi
                 done
-                if [ -n "$LOGFILE" ]; then
+              done
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+            done
+          else
+            # ── 无 error.txt/中断日志 → 可能是下载阶段或极早期失败 ──
+            HAS_DOWNLOAD_LOGS=false
+            HAS_COMPILE_LOGS=false
+            for ROOT in logs logs.1; do
+              [ -d "$ROOT" ] || continue
+              if [ -n "$(find "$ROOT" -name 'download.txt' -type f 2>/dev/null | head -1)" ]; then
+                HAS_DOWNLOAD_LOGS=true
+              fi
+              if [ -n "$(find "$ROOT" -name 'compile.txt' -type f 2>/dev/null | head -1)" ]; then
+                HAS_COMPILE_LOGS=true
+              fi
+            done
+
+            if [ "$HAS_DOWNLOAD_LOGS" = "true" ] && [ "$HAS_COMPILE_LOGS" = "false" ]; then
+              # 有 download.txt 但无 compile.txt → 下载阶段失败
+              echo "## ❌ 下载失败详情" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+
+              FAILED_DOWNLOAD_PKGS=""
+              for ROOT in logs logs.1; do
+                [ -d "$ROOT" ] || continue
+                for logfile in $(find "$ROOT" -name 'download.txt' -type f 2>/dev/null | sort); do
+                  LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
+                  # 下载成功通常以 time: 结尾, 失败则包含错误信息
+                  if ! echo "$LAST_LINE" | grep -q '^time:'; then
+                    PKG=$(echo "$logfile" | sed "s|$ROOT/||; s|/download.txt||")
+                    FAILED_DOWNLOAD_PKGS="$FAILED_DOWNLOAD_PKGS $PKG"
+                  fi
+                done
+              done
+
+              if [ -n "$FAILED_DOWNLOAD_PKGS" ]; then
+                FAILED_DOWNLOAD_PKGS=$(echo "$FAILED_DOWNLOAD_PKGS" | tr ' ' '\n' | sed '/^$/d' | sort -u)
+                PKG_COUNT=$(echo "$FAILED_DOWNLOAD_PKGS" | wc -l)
+                echo "共 ${PKG_COUNT} 个软件包下载失败" >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+
+                for pkg in $FAILED_DOWNLOAD_PKGS; do
                   echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
                   echo "" >> "$GITHUB_STEP_SUMMARY"
                   echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                  # 过滤 make 目录切换噪音，取最后 60 行有效错误
-                  grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$LOGFILE" 2>/dev/null | tail -60 >> "$GITHUB_STEP_SUMMARY"
+                  for LOGROOT in logs.1 logs; do
+                    [ -d "$LOGROOT" ] || continue
+                    LOGFILE="$LOGROOT/$pkg/download.txt"
+                    [ -f "$LOGFILE" ] || continue
+                    SIZE=$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)
+                    if [ "$SIZE" -gt 300000 ]; then
+                      echo "[日志 ${SIZE} 字节, 超过 300KB 仅显示末尾 1000 行]" >> "$GITHUB_STEP_SUMMARY"
+                      tail -1000 "$LOGFILE" >> "$GITHUB_STEP_SUMMARY"
+                    else
+                      cat "$LOGFILE" >> "$GITHUB_STEP_SUMMARY"
+                    fi
+                  done
                   echo '```' >> "$GITHUB_STEP_SUMMARY"
                   echo "" >> "$GITHUB_STEP_SUMMARY"
-                fi
-              done
-            else
-              # 兜底：从 build.log 提取下载失败信息
-              FAILED_DOWNLOADS=$(grep -E '(Download failed|make\[[0-9]+\].*\[.*download\].*Error|No rule to make target.*download)' build.log 2>/dev/null | head -30 || true)
-
-              if [ -n "$FAILED_DOWNLOADS" ]; then
-                echo "以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
-                echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                echo "$FAILED_DOWNLOADS" >> "$GITHUB_STEP_SUMMARY"
-                echo '```' >> "$GITHUB_STEP_SUMMARY"
+                done
               else
-                # 尝试从 make 输出中提取失败的包目录
-                FAILED_PKGS2=$(grep -E 'make\[[0-9]+\].*Error [0-9]+' build.log 2>/dev/null | \
-                  sed -n 's/.*\[\(.*\)\].*/\1/p' | sort -u | head -20 || true)
-                if [ -n "$FAILED_PKGS2" ]; then
-                  echo "推测以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
+                # 兜底: 从 build.log 提取下载失败信息
+                FAILED_DOWNLOADS=$(grep -E '(Download failed|make\[[0-9]+\].*\[.*download\].*Error|No rule to make target.*download)' build.log 2>/dev/null | head -30 || true)
+
+                if [ -n "$FAILED_DOWNLOADS" ]; then
+                  echo "以下包下载失败：" >> "$GITHUB_STEP_SUMMARY"
                   echo "" >> "$GITHUB_STEP_SUMMARY"
                   echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                  echo "$FAILED_PKGS2" >> "$GITHUB_STEP_SUMMARY"
+                  echo "$FAILED_DOWNLOADS" >> "$GITHUB_STEP_SUMMARY"
                   echo '```' >> "$GITHUB_STEP_SUMMARY"
                 else
-                  echo "无法从日志自动提取失败包名，请查看完整 build.log" >> "$GITHUB_STEP_SUMMARY"
-                  echo "" >> "$GITHUB_STEP_SUMMARY"
                   echo '```text' >> "$GITHUB_STEP_SUMMARY"
                   tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
                   echo '```' >> "$GITHUB_STEP_SUMMARY"
                 fi
               fi
+            else
+              # 无任何日志 → 极早期失败或配置错误
+              echo "## ❌ 构建失败详情" >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo '```text' >> "$GITHUB_STEP_SUMMARY"
+              tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
             fi
-          else
-            # 无 logs/ 目录或无 download.txt/compile.txt → 极早期失败或配置错误
-            echo "## ❌ 构建失败详情" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo '```text' >> "$GITHUB_STEP_SUMMARY"
-            tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
           # ── 提示初始构建日志（retry 时保存的 build.1.log）──
@@ -1020,45 +1015,66 @@ jobs:
           mkdir -p release/sdk release/ib
 
           # SDK tarball + sha256
-          SDK_TARBALL=$(find bin/targets -type f -name 'sdk-*.tar.xz' | head -1)
+          # 上游产物名: <dist>-sdk-[<version>-]<board>[_gcc-<ver>]<suffix>.<host_os>-<host_arch>.tar.{xz,zst}
+          # (target/sdk/Makefile 的 SDK_NAME), 故 find 用 *-sdk-*.tar.* 匹配, 兼容两种压缩格式。
+          SDK_TARBALL=$(find bin/targets -type f \( -name '*-sdk-*.tar.xz' -o -name '*-sdk-*.tar.zst' \) | head -1)
           if [ -n "$SDK_TARBALL" ]; then
             cp "$SDK_TARBALL" release/sdk/
-            SDK_SHA256=$(find bin/targets -type f -name "$(basename "$SDK_TARBALL").sha256sum" | head -1)
+            # 兼容 .sha256sum (上游生成) 与 .sha256 (fallback 生成) 两种后缀
+            SDK_SHA256=$(find bin/targets -type f \( -name "$(basename "$SDK_TARBALL").sha256sum" -o -name "$(basename "$SDK_TARBALL").sha256" \) | head -1)
             if [ -n "$SDK_SHA256" ]; then cp "$SDK_SHA256" release/sdk/; else
               (cd release/sdk && sha256sum "$(basename "$SDK_TARBALL")" | awk '{print $1}' > "$(basename "$SDK_TARBALL").sha256")
             fi
-            ARCH=$(basename "$SDK_TARBALL" | sed -E 's/sdk-(.*)\.tar\.xz/\1/')
-            # v2 命名: sdk-<target>-<version>-<arch>.tar.xz (version 来自 version.mk)
+            # v2 命名: sdk-<target>-<version>-<arch>.tar.{xz,zst} (version 来自 version.mk)
             SDK_VERSION="${{ steps.apply_config.outputs.source_version }}"
-            SDK_NEW_NAME="sdk-${IMMWRT_TARGET}-${SDK_VERSION}-${ARCH}.tar.xz"
+            SDK_ORIG_VER="${{ steps.apply_config.outputs.original_version }}"
+            SDK_EXT=$(basename "$SDK_TARBALL" | sed -E 's/.*\.(tar\..*)$/\1/')
+            # 优先剥掉上游文件名里的版本前缀 (CONFIG_VERSION_FILENAMES=y 时含 <version>-, 用原始版本号匹配),
+            # 否则整体提取 (文件名无版本前缀)
+            SDK_ARCH=$(basename "$SDK_TARBALL" | sed -E "s/.*-sdk-${SDK_ORIG_VER}-(.*)\.tar\..*/\1/")
+            if [ "$SDK_ARCH" = "$(basename "$SDK_TARBALL")" ]; then
+              SDK_ARCH=$(basename "$SDK_TARBALL" | sed -E 's/.*-sdk-(.*)\.tar\..*/\1/')
+            fi
+            SDK_NEW_NAME="sdk-${IMMWRT_TARGET}-${SDK_VERSION}-${SDK_ARCH}.${SDK_EXT}"
             mv "release/sdk/$(basename "$SDK_TARBALL")" "release/sdk/${SDK_NEW_NAME}"
-            [ -f "release/sdk/$(basename "$SDK_TARBALL").sha256" ] && \
-              mv "release/sdk/$(basename "$SDK_TARBALL").sha256" "release/sdk/${SDK_NEW_NAME}.sha256"
+            for SHA_SUFFIX in sha256sum sha256; do
+              [ -f "release/sdk/$(basename "$SDK_TARBALL").$SHA_SUFFIX" ] && \
+                mv "release/sdk/$(basename "$SDK_TARBALL").$SHA_SUFFIX" "release/sdk/${SDK_NEW_NAME}.sha256"
+            done
             echo "sdk_new_name=${SDK_NEW_NAME}" >> $GITHUB_OUTPUT
             echo "sdk_version_key=${SDK_VERSION}" >> $GITHUB_OUTPUT
-            echo "sdk_arch=${ARCH}" >> $GITHUB_OUTPUT
+            echo "sdk_arch=${SDK_ARCH}" >> $GITHUB_OUTPUT
             echo "✅ SDK: ${SDK_NEW_NAME}"
           else
             echo "::warning::SDK tarball 未生成 (检查 01-base.seed 中 CONFIG_SDK=y)"
           fi
 
           # IB tarball + sha256
-          IB_TARBALL=$(find bin/targets -type f -name 'imagebuilder-*.tar.xz' | head -1)
+          # 上游产物名: <dist>-imagebuilder-[<version>-]<board>[_gcc-<ver>].<host_os>-<host_arch>.tar.{xz,zst}
+          # (target/imagebuilder/Makefile 的 IB_NAME), find 用 *-imagebuilder-*.tar.* 匹配。
+          IB_TARBALL=$(find bin/targets -type f \( -name '*-imagebuilder-*.tar.xz' -o -name '*-imagebuilder-*.tar.zst' \) | head -1)
           if [ -n "$IB_TARBALL" ]; then
             cp "$IB_TARBALL" release/ib/
-            IB_SHA256=$(find bin/targets -type f -name "$(basename "$IB_TARBALL").sha256sum" | head -1)
+            IB_SHA256=$(find bin/targets -type f \( -name "$(basename "$IB_TARBALL").sha256sum" -o -name "$(basename "$IB_TARBALL").sha256" \) | head -1)
             if [ -n "$IB_SHA256" ]; then cp "$IB_SHA256" release/ib/; else
               (cd release/ib && sha256sum "$(basename "$IB_TARBALL")" | awk '{print $1}' > "$(basename "$IB_TARBALL").sha256")
             fi
-            ARCH=$(basename "$IB_TARBALL" | sed -E 's/imagebuilder-(.*)\.tar\.xz/\1/')
             IB_VERSION="${{ steps.apply_config.outputs.source_version }}"
-            IB_NEW_NAME="ib-${IMMWRT_TARGET}-${IB_VERSION}-${ARCH}.tar.xz"
+            IB_ORIG_VER="${{ steps.apply_config.outputs.original_version }}"
+            IB_EXT=$(basename "$IB_TARBALL" | sed -E 's/.*\.(tar\..*)$/\1/')
+            IB_ARCH=$(basename "$IB_TARBALL" | sed -E "s/.*-imagebuilder-${IB_ORIG_VER}-(.*)\.tar\..*/\1/")
+            if [ "$IB_ARCH" = "$(basename "$IB_TARBALL")" ]; then
+              IB_ARCH=$(basename "$IB_TARBALL" | sed -E 's/.*-imagebuilder-(.*)\.tar\..*/\1/')
+            fi
+            IB_NEW_NAME="ib-${IMMWRT_TARGET}-${IB_VERSION}-${IB_ARCH}.${IB_EXT}"
             mv "release/ib/$(basename "$IB_TARBALL")" "release/ib/${IB_NEW_NAME}"
-            [ -f "release/ib/$(basename "$IB_TARBALL").sha256" ] && \
-              mv "release/ib/$(basename "$IB_TARBALL").sha256" "release/ib/${IB_NEW_NAME}.sha256"
+            for SHA_SUFFIX in sha256sum sha256; do
+              [ -f "release/ib/$(basename "$IB_TARBALL").$SHA_SUFFIX" ] && \
+                mv "release/ib/$(basename "$IB_TARBALL").$SHA_SUFFIX" "release/ib/${IB_NEW_NAME}.sha256"
+            done
             echo "ib_new_name=${IB_NEW_NAME}" >> $GITHUB_OUTPUT
             echo "ib_version_key=${IB_VERSION}" >> $GITHUB_OUTPUT
-            echo "ib_arch=${ARCH}" >> $GITHUB_OUTPUT
+            echo "ib_arch=${IB_ARCH}" >> $GITHUB_OUTPUT
             echo "✅ IB:  ${IB_NEW_NAME}"
           else
             echo "::warning::IB tarball 未生成 (检查 01-base.seed 中 CONFIG_IB=y)"

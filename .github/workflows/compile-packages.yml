@@ -291,16 +291,49 @@ jobs:
         run: |
           echo "> 👈 触发/目标/版本等整体计划见 **Plan job Summary**" >> "$GITHUB_STEP_SUMMARY"
           echo "## ❌ SDK 软件包构建失败" >> "$GITHUB_STEP_SUMMARY"
+          # 权威失败源: error.txt (make ERROR 宏写入 "ERROR: <pkg> failed to build.")
+          # time.pl 无论命令成败都打印 "time:" 行 (scripts/time.pl), 失败日志同样以
+          # "time:" 结尾, 故 compile.txt 末行是否 time: 不能判定失败; 仅保留为中断日志兜底。
+          FAILED_PKGS=""
           if [ -d sdk/logs ]; then
-            for logfile in $(find sdk/logs -name 'compile.txt' -type f | sort); do
+            # 1) error.txt 权威源
+            for errfile in $(find sdk/logs -name 'error.txt' -type f 2>/dev/null | sort); do
+              while IFS= read -r line; do
+                pkg=$(echo "$line" | sed -n 's/.*ERROR: \(.*\) failed to build.*/\1/p' | sed 's/ \[[^]]*\]$//')
+                [ -n "$pkg" ] && FAILED_PKGS="$FAILED_PKGS $pkg"
+              done < "$errfile"
+            done
+            # 2) 兜底: 末行不含 time: 的 compile.txt (日志被中断如 OOM, 无 error.txt)
+            for logfile in $(find sdk/logs -name 'compile.txt' -type f 2>/dev/null | sort); do
               LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
               if ! echo "$LAST_LINE" | grep -q '^time:'; then
                 PKG=$(echo "$logfile" | sed 's|.*logs/||; s|/compile.txt||')
-                echo "### ❌ ${PKG}" >> "$GITHUB_STEP_SUMMARY"
-                echo '```text' >> "$GITHUB_STEP_SUMMARY"
-                grep -vE '^(make\[[0-9]+\]|Entering directory|Leaving directory)' "$logfile" 2>/dev/null | tail -50 >> "$GITHUB_STEP_SUMMARY"
-                echo '```' >> "$GITHUB_STEP_SUMMARY"
+                FAILED_PKGS="$FAILED_PKGS $PKG"
               fi
+            done
+          fi
+
+          if [ -n "$FAILED_PKGS" ]; then
+            FAILED_PKGS=$(echo "$FAILED_PKGS" | tr ' ' '\n' | sed '/^$/d' | sort -u)
+            PKG_COUNT=$(echo "$FAILED_PKGS" | wc -l)
+            echo "共 ${PKG_COUNT} 个软件包编译失败" >> "$GITHUB_STEP_SUMMARY"
+            for pkg in $FAILED_PKGS; do
+              echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
+              echo '```text' >> "$GITHUB_STEP_SUMMARY"
+              # 完整输出日志, 不截断/过滤; 仅对超大文件 (>300KB) 保护显示尾部 1000 行
+              for LOGFILE in "sdk/logs/$pkg/compile.txt" "sdk/logs/$pkg/host-compile.txt" "sdk/logs/$pkg/download.txt"; do
+                [ -f "$LOGFILE" ] || continue
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo "▍$LOGFILE ▍" >> "$GITHUB_STEP_SUMMARY"
+                SIZE=$(wc -c < "$LOGFILE" 2>/dev/null || echo 0)
+                if [ "$SIZE" -gt 300000 ]; then
+                  echo "[日志 ${SIZE} 字节, 超过 300KB 仅显示末尾 1000 行; 完整内容见 artifact]" >> "$GITHUB_STEP_SUMMARY"
+                  tail -1000 "$LOGFILE" >> "$GITHUB_STEP_SUMMARY"
+                else
+                  cat "$LOGFILE" >> "$GITHUB_STEP_SUMMARY"
+                fi
+              done
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
             done
           else
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
