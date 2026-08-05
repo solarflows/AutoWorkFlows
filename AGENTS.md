@@ -48,6 +48,8 @@ When editing files under `.github/workflows/`:
 - **Never** export variables named `TARGET`, `HOST`, or `BUILD` (they leak into the build environment and break packages like libffi). Use `matrix_target` or `FIRMWARE_TARGET`
 - If job A's `needs` includes a job B that may be skipped, always use `always()` + explicit `needs.<job>.result` checks
 - Preserve diagnostic invariants: four-stage disk monitoring, `logs/` → `logs.1/` evidence retention, `make -j1 V=sc -k` single-thread retry
+- Keep the global concurrency group `firmware-build-v2` fixed; optional diagnostic pipelines inside `set -euo pipefail` steps must end with `|| true` (avoid SIGPIPE 141 from `find | head`)
+- Persist build state to the `IMMWRT_BUILD_STATE` repository variable via PAT; `GITHUB_TOKEN` cannot write repository variables
 - See [`.github/instructions/openwrt-build.instructions.md`](.github/instructions/openwrt-build.instructions.md) and [`docs/openwrt-build-pitfalls.md`](docs/openwrt-build-pitfalls.md)
 
 ## Artifact Naming
@@ -61,6 +63,8 @@ When editing files under `.github/workflows/`:
 ## Build Diagnostics
 
 On build failure, use the `openwrt-build-diagnostics` skill for read-only diagnosis. Do not modify workflows or configs directly. The skill analyzes `error.txt`, `compile.txt`, `logs.1/`, and produces an evidence-backed report.
+
+Before investigating, check `docs/openwrt-build-pitfalls.md` and the skill's `references/diagnostic-signatures.md` for a known signature (e.g. `TARGET` env leakage, libffi, stamp-skipped retry, ccache mismatch). Reuse the verified root cause instead of re-deriving it.
 
 ## General Conventions
 

@@ -17,8 +17,15 @@ applyTo: ".github/workflows/**"
 - Do not export generic workflow, job, or shell environment variables named `TARGET`, `HOST`, or `BUILD`. Use scoped inputs such as `matrix_target` inline or domain-specific names.
 - Keep cache strategies `smart`, `clean-toolchain`, `clean-ccache`, `clean-all`, and `no-cache` behaviorally distinct.
 - In `no-cache` mode, do not export ccache `CC` or `CXX` wrappers. Configure ccache unconditionally when ccache is enabled, but export wrappers only when the selected strategy permits them.
+- Keep the global concurrency group `firmware-build-v2` fixed. Do not scope it per-ref; two parallel runs would write the same `sdk-*`/`ib-*`/`packages` tags and pollute remote repos.
 - Store SDK and ImageBuilder versions under `sdk-<target>` and `ib-<target>` release tags. Replace same-version files and retain the configured number of distinct versions.
 - Keep version sorting numeric and aware of SNAPSHOT and `V<n>` tokens.
+- Persist build state to the `IMMWRT_BUILD_STATE` repository variable, one copy, via `secrets.ACCESS_TOKEN` (PAT). `GITHUB_TOKEN` cannot write repository variables. Do not revert to per-run cache keys; they accumulate and consume the 10 GB cache quota.
+
+## Diagnosis First
+
+- Before investigating a build failure, match the evidence against `docs/openwrt-build-pitfalls.md` and `openwrt-build-diagnostics`' `references/diagnostic-signatures.md`. Reuse the verified root cause instead of re-deriving it.
+- Use the `openwrt-build-diagnostics` skill for read-only diagnosis before changing workflows or configs.
 
 ## Diagnostic Invariants
 
@@ -29,6 +36,7 @@ applyTo: ".github/workflows/**"
 - Keep the `make -j1 V=sc -k` retry for complete configure and compiler diagnostics.
 - Preserve ccache statistics and cleanup, release-root listings, and diagnostic verification steps that intentionally use `continue-on-error`.
 - Keep feed updates fail-fast with `set -euo pipefail`.
+- Optional diagnostic pipelines (directory trees, listing probes) must end with `|| true` when placed inside `set -euo pipefail` steps: a `find | head -N` pipe returns SIGPIPE 141 when head truncates, and `set -e` would then fail the build step.
 - Preserve the established numbered step names and diagnostic heading format unless the workflow presentation is intentionally redesigned.
 
 See `docs/openwrt-build-pitfalls.md` for verified root causes and investigation evidence.
