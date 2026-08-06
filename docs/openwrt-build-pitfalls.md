@@ -91,6 +91,18 @@ Why v1 did not exhibit this — **save ordering, not hash stability**. Both v1 a
 - v1 uses the combined `actions/cache@v5`, whose save runs as a **post action after all main steps** — i.e. after the Purge step. Chain: miss → compile → Purge deletes old caches (the just-built result is not yet saved, so it is untouchable) → post-action save writes the fresh cache → next run's `restore-keys` prefix hits it → stamps are touched → `tools/*` is skipped. The cache accumulates one entry per run.
 - v2 splits restore and save; save becomes an explicit main step placed **before** the Purge step. Chain: miss → compile → save (now saved) → Purge's miss branch deletes every cache including the just-saved one → zero caches remain → next run misses again → full `tools/*` rebuild forever.
 
+## v2 Cache Lifecycle
+
+The v2 firmware executor keeps toolchain and ccache snapshots separate per target. Both snapshots are saved only after the build job remains successful. The current key is saved first, then older entries under the same v2 target prefix are deleted while the current key is explicitly excluded.
+
+This ordering means:
+
+- a compile or diagnostic failure skips both saves and purge, so an existing cache is not replaced;
+- a save failure skips purge, so an existing cache remains available;
+- a purge/API failure may temporarily leave more than one entry, but cannot delete the current result;
+- `ccache --max-size 10G` and compression manage the contents of one ccache snapshot, not the number of remote Actions cache entries;
+- the v2 workflow no longer performs a monthly full flush, and does not remove v1 or unrelated workflow caches.
+
 ## Make 表达式版本号注入 Shell (SDK/IB 打包崩溃)
 
 ### Symptom
@@ -156,38 +168,25 @@ IB_ORIG_VER="$(callqstrip,$(CONFIG_VERSION_NUMBER))"
 SDK/IB 打包步骤对注入的版本号加防御检查: 若含 `$(` 残留 make 表达式, 显式 `::error::` 报错并退出, 避免静默污染文件名与 index.json key。
 
 
-So the fix for v1/v2 is not to stabilise the checkout hash (impossible on rolling branches) but to prevent the purge from deleting the just-saved cache. The `test`-branch hash churn is only an aggravating factor: it makes exact-key misses frequent and the old delete-everything branch fire often. Even a stable hash would still self-delete in v2, because the first miss → save → purge would erase the save before the next run.
+### v2 ccache and cache lifecycle
 
-### Fix
+ccache remains a **cumulative** cache: every compile adds objects and its invalidation factors cannot be represented by one content hash. It therefore keeps a per-run `run_id` key and restores from the target prefix, so every successful build can publish a fresh snapshot.
 
-Implemented in `compile-firmware.yml` (commit: TBD — backfill after push):
+The v2 executor uses explicit `actions/cache/restore@v5` and `actions/cache/save@v5` for both toolchain and ccache. The save steps run only after the build and diagnostics have succeeded. The current snapshot is saved first; the purge then deletes older entries under the same target prefix while excluding the current key.
 
-- **Reorder: purge before save.** The `Purge stale GitHub Actions caches` step now runs **before** `Save toolchain cache`. At purge time the current run's cache does not yet exist, so it cannot be deleted by construction — the same ordering that made v1's post-action save and ccache's combined `actions/cache@v5` safe. No per-key exclusion is needed.
-- Delete **all** toolchain caches only when `cache_strategy ∈ {clean-all, clean-toolchain}` (explicit refresh). In those modes the subsequent save stores the freshly rebuilt toolchain instead of wasting it.
-- In `smart` mode, list `immwrt-v2-toolchain-<target>-*` caches, sort by `createdAt` ascending, and delete only the oldest, keeping the most recent 3.
-- Apply the same keep-most-recent-3 rule to ccache in `smart` mode (`immwrt-v2-ccache-<target>-*`).
-- In `clean-all`/`clean-ccache` modes, purge deletes all ccache entries, and the post-action save (ccache uses combined `actions/cache@v5`) stores the fresh one.
+This gives the following guarantees:
 
-Verification results (Task C): TBD — backfill after a smart-mode run.
-
-### ccache Key Design and Improvement Assessment
-
-ccache is a **cumulative** cache: every compile adds more objects, and its invalidation factors are not enumerable (any package Makefile, CFLAGS, or dependency change can alter compiler output). It therefore uses a per-run `run_id` key with `restore-keys` prefix fallback (v1 comment: "run_id ensures every successful build saves the latest cache; restore-keys falls back to the most recent snapshot").
-
-Why a fixed key is **not** viable for ccache: GitHub Actions caches are immutable, and `actions/cache` skips saving when the exact key already exists (`Cache already exists. Skipping save`). A fixed key would freeze ccache at its first snapshot forever — later accumulated objects would never be persisted, and hit rate would decay silently. The `run_id` design guarantees the freshest snapshot is saved every run.
-
-Why ccache is safe from the self-deletion bug: it still uses the combined `actions/cache@v5`, whose save is a post action **after** the Purge step — the same ordering that protected v1's toolchain. The old purge did delete all ccache entries on every run (exact hit is always false), but the post-save re-created one, keeping it functional.
-
-Assessment after the fix — current state is sound; optional refinements:
-
-- ccache is already bounded and optimised in the build step (inherited from v1): `ccache --max-size 10G`, `compiler_check=content`, `hash_dir=false`, `compression=true` + `compression_level=6`, and `sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros`. These are the v1 hit-rate optimisations, fully carried over to v2 (`compile-firmware.yml` build step).
-- The smart-mode purge now keeps the most recent 3 ccache entries instead of deleting all (old behaviour re-created just one per run).
+- a compile or diagnostic failure skips save and purge, so an existing cache is not replaced;
+- a save failure prevents purge, so an existing cache remains available;
+- a purge/API failure may temporarily leave older entries, but cannot delete the current result;
+- `ccache --max-size 10G` and compression bound the contents of one ccache snapshot, not the number of remote snapshots;
+- v2 no longer performs a monthly full flush and does not remove v1 or unrelated workflow caches.
 
 ### Diagnostic Notes
 
 - Tools recompilation is not an architecture bug. First check whether a toolchain cache exists at all.
 - Distinguish `Cache restored from key: ...` (hit) from `Cache not found for input keys: ...` (miss).
-- If even the restore-keys prefix misses, the cache never survived a run — check the self-deletion pattern.
+- If a cache API call fails, the workflow reports it and preserves the current and existing cache entries.
 
 ## SDK and ImageBuilder Retention
 

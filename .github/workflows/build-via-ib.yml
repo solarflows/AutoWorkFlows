@@ -305,3 +305,34 @@ jobs:
             build-info.json
             release-body.md
           retention-days: 7
+
+      - name: Publish firmware release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${{ inputs.version }}"
+          RELEASE_REPO="${{ inputs.matrix_release_repo }}"
+          FIRMWARE_DIR="release/firmware"
+          [ -d "$FIRMWARE_DIR" ] && [ -n "$(find "$FIRMWARE_DIR" -maxdepth 1 -type f -print -quit)" ] || {
+            echo "::error::IB 固件目录为空，拒绝创建空 Release"
+            exit 1
+          }
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" --repo "$RELEASE_REPO" "$FIRMWARE_DIR"/* --clobber
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" \
+              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md --draft=false
+          else
+            gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" \
+              --target "${{ steps.resolve.outputs.ib_source_sha }}" \
+              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md "$FIRMWARE_DIR"/*
+          fi
+
+      - name: Upload published state
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.IMMWRT_TARGET }}-published-state
+          path: build-info.json
+          retention-days: 7

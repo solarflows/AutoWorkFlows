@@ -47,6 +47,9 @@ jobs:
     name: Compile ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
     timeout-minutes: 480
+    concurrency:
+      group: packages-release-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
+      cancel-in-progress: false
     env:
       # 刻意不叫 TARGET/HOST/ARCH: 这些名字会被 autoconf AX_ENABLE_BUILDDIR 等宏读取,
       # 导致 configure 把 build 树建到 ./$TARGET/ 而非 ./$host/ (libffi 因此 InstallDev 失败)
@@ -174,7 +177,7 @@ jobs:
       - name: Restore ccache
         if: inputs.cache_strategy != 'no-cache'
         id: cache-cc
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           restore-keys: |
@@ -822,81 +825,71 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # ───────── 清理远端 GitHub Actions 缓存（仅构建成功时执行）─────────
-      # 顺序: Purge 必须先于 Save。早期版本 Save 在 Purge 之前同步执行,
-      # smart 模式因 exact key 未命中而全删, 把刚 Save 的缓存一并删除,
-      # 导致缓存永远无法累积 (见 docs/openwrt-build-pitfalls.md § Toolchain Cache Self-Deletion)。
-      # Purge 先于 Save 时, 清理执行时本次缓存尚不存在, 结构上不可能误删本轮成果,
-      # 与 v1 / ccache 一体化 action 的 post-action 保存时序一致。
-      # 规则: 仅显式 clean-all / clean-toolchain / clean-ccache 才删除全部;
-      # smart 模式保留最近 KEEP_N 个。
-      # 错误可见性: 不静默 gh 错误 (无 2>/dev/null / || true)。list 失败 -> stderr 警告并跳过删除
-      # (避免凭空猜测删除), delete 失败 -> 显式警告。无缓存是正常空结果 (rc=0), 与执行错误区分。
-      - name: Purge stale GitHub Actions caches
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
-          if [ "$CACHE_STRATEGY" = "no-cache" ]; then
-            echo "🔧 no-cache 模式: 跳过缓存清理"
-            exit 0
-          fi
-
-          KEEP_N=3
-          REPO="${{ github.repository }}"
-
-          # ── 工具链缓存 ──
-          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
-          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
-            echo "🧹 ${CACHE_STRATEGY}: 删除全部工具链缓存"
-            TC_FILTER='.[].id'
-          else
-            echo "🧹 smart: 工具链缓存保留最近 ${KEEP_N} 个, 仅删除更旧缓存"
-            TC_FILTER='sort_by(.createdAt) | .[0:-'"$KEEP_N"'] | .[].id'
-          fi
-          TC_IDS=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt --jq "$TC_FILTER")
-          TC_RC=$?
-          if [ "$TC_RC" -ne 0 ]; then
-            echo "⚠️ 获取工具链缓存列表失败 (rc=${TC_RC}), 跳过工具链缓存清理" >&2
-          elif [ -n "$TC_IDS" ]; then
-            echo "$TC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
-              || echo "⚠️ 部分工具链缓存删除失败, 见上方 gh cache delete 错误" >&2
-          else
-            echo "ℹ️ 无过期工具链缓存"
-          fi
-
-          # ── ccache 缓存 ──
-          CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
-          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ]; then
-            echo "🧹 ${CACHE_STRATEGY}: 删除全部 ccache 缓存"
-            CC_FILTER='.[].id'
-          else
-            echo "🧹 smart: ccache 缓存保留最近 ${KEEP_N} 个, 仅删除更旧缓存"
-            CC_FILTER='sort_by(.createdAt) | .[0:-'"$KEEP_N"'] | .[].id'
-          fi
-          CC_IDS=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt --jq "$CC_FILTER")
-          CC_RC=$?
-          if [ "$CC_RC" -ne 0 ]; then
-            echo "⚠️ 获取 ccache 缓存列表失败 (rc=${CC_RC}), 跳过 ccache 缓存清理" >&2
-          elif [ -n "$CC_IDS" ]; then
-            echo "$CC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
-              || echo "⚠️ 部分 ccache 缓存删除失败, 见上方 gh cache delete 错误" >&2
-          else
-            echo "ℹ️ 无过期 ccache 缓存"
-          fi
-
-      # ───────── 工具链缓存保存（独立 save, 仅成功时写入）─────────
-      # 顺序: Save 在 Purge 之后, 因此 Purge 清理的是历史缓存,
-      # 本次构建结果在 Purge 完成后才写入, 结构上不会被误删 (方案 B)。
+      # ───────── toolchain/ccache 缓存保存（仅编译成功）─────────
+      # 先保存本轮结果，再清理旧 key。编译失败时两个 save 都跳过,
+      # 因而不会替换已有缓存；save 失败时 purge 也不会执行。
       - name: Save toolchain cache
         if: success() && inputs.cache_strategy != 'no-cache'
+        id: cache-tc-save
         uses: actions/cache/save@v5
         with:
           key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
+
+      - name: Save ccache
+        if: success() && inputs.cache_strategy != 'no-cache'
+        id: cache-cc-save
+        uses: actions/cache/save@v5
+        with:
+          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          path: openwrt/.ccache
+
+      # ───────── 清理远端 GitHub Actions 缓存（仅两类 cache 都保存成功）─────────
+      # 当前 key 已先保存，清理时明确排除它；清理失败只会暂时多留旧 cache,
+      # 不会删除本轮成果或影响已有可用缓存。
+      - name: Purge stale GitHub Actions caches
+        id: cache-purge
+        if: success() && inputs.cache_strategy != 'no-cache' && steps.cache-tc-save.outcome == 'success' && steps.cache-cc-save.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+
+          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
+          TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
+          TC_LIST=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt)
+          TC_RC=$?
+          TC_IDS=""
+          if [ "$TC_RC" -eq 0 ]; then
+            TC_IDS=$(echo "$TC_LIST" | jq -r --arg current "$TC_CURRENT" '[.[] | select(.key != $current)] | .[].id')
+          fi
+          if [ "$TC_RC" -ne 0 ]; then
+            echo "⚠️ 获取工具链缓存列表失败 (rc=${TC_RC}), 保留旧缓存" >&2
+          elif [ -n "$TC_IDS" ]; then
+            echo "$TC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
+              || echo "⚠️ 部分工具链缓存删除失败, 本轮成果仍已保存" >&2
+          else
+            echo "ℹ️ 无旧工具链缓存"
+          fi
+
+          CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
+          CC_CURRENT="${CC_PREFIX}${{ github.run_id }}"
+          CC_LIST=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt)
+          CC_RC=$?
+          CC_IDS=""
+          if [ "$CC_RC" -eq 0 ]; then
+            CC_IDS=$(echo "$CC_LIST" | jq -r --arg current "$CC_CURRENT" '[.[] | select(.key != $current)] | .[].id')
+          fi
+          if [ "$CC_RC" -ne 0 ]; then
+            echo "⚠️ 获取 ccache 列表失败 (rc=${CC_RC}), 保留旧缓存" >&2
+          elif [ -n "$CC_IDS" ]; then
+            echo "$CC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
+              || echo "⚠️ 部分 ccache 删除失败, 本轮成果仍已保存" >&2
+          else
+            echo "ℹ️ 无旧 ccache 缓存"
+          fi
 
       # ════════════ 产物打包 ════════════
       # 刻意设计: 打包后输出 release/ 根目录结构(深度1), 便于人工快速核验产物完整性
@@ -1075,6 +1068,50 @@ jobs:
             build-info.json
             release-body.md
           retention-days: 7
+
+      - name: Publish firmware release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${{ inputs.version }}"
+          RELEASE_REPO="${{ inputs.matrix_release_repo }}"
+          FIRMWARE_DIR="openwrt/release/firmware"
+          [ -d "$FIRMWARE_DIR" ] && [ -n "$(find "$FIRMWARE_DIR" -maxdepth 1 -type f -print -quit)" ] || {
+            echo "::error::固件目录为空，拒绝创建空 Release"
+            exit 1
+          }
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" --repo "$RELEASE_REPO" "$FIRMWARE_DIR"/* --clobber
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" \
+              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md --draft=false
+          else
+            gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" \
+              --target "${{ steps.clone_packages.outputs.sha_full }}" \
+              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md "$FIRMWARE_DIR"/*
+          fi
+
+      - name: Publish Passwall packages
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          PACKAGE_DIR="openwrt/release/passwall"
+          mapfile -t PACKAGE_FILES < <(find "$PACKAGE_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) 2>/dev/null)
+          if [ "${#PACKAGE_FILES[@]}" -eq 0 ]; then
+            echo "::warning::无 Passwall 包可发布 (编译失败或未配置)"
+            exit 0
+          fi
+          PACKAGE_REPO="${{ inputs.matrix_passwall_repo }}"
+          PACKAGE_TAG="${{ inputs.matrix_passwall_tag }}"
+          if gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
+            gh release upload "$PACKAGE_TAG" --repo "$PACKAGE_REPO" "${PACKAGE_FILES[@]}" --clobber
+          else
+            gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
+              --notes "Multi-target passwall packages" --latest=false "${PACKAGE_FILES[@]}"
+          fi
 
       # ════════ SDK / IB 打包与发布 (v2 新增) ════════
       # 刻意设计: SDK/IB 以 release tag (sdk-<target> / ib-<target>) 存储多版本,
@@ -1288,12 +1325,10 @@ jobs:
             fi
           done < /tmp/ib_files.txt
 
-      - name: Cleanup draft release on failure
-        if: failure() || cancelled()
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          VERSION="${{ inputs.version }}"
-          if gh release view "$VERSION" --repo ${{ inputs.matrix_release_repo }} &>/dev/null; then
-            gh release delete "$VERSION" --repo ${{ inputs.matrix_release_repo }} --yes 2>/dev/null || true
-          fi
+      - name: Upload published state
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.IMMWRT_TARGET }}-published-state
+          path: build-info.json
+          retention-days: 7

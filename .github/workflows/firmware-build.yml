@@ -86,19 +86,23 @@ jobs:
     timeout-minutes: 30
     outputs:
       matrix_json:              ${{ steps.build-matrix.outputs.matrix_json }}
+      firmware_matrix_json:     ${{ steps.decision.outputs.firmware_matrix_json }}
+      ib_matrix_json:           ${{ steps.decision.outputs.ib_matrix_json }}
+      packages_matrix_json:     ${{ steps.decision.outputs.packages_matrix_json }}
       targets_to_build:         ${{ steps.build-matrix.outputs.targets_to_build }}
       version:                  ${{ steps.version.outputs.version }}
       sdk_version:              ${{ steps.version.outputs.sdk_version }}
       ib_version:               ${{ steps.version.outputs.ib_version }}
-      source_changed:           ${{ steps.load-targets.outputs.source_changed }}
-      packages_changed:         ${{ steps.load-targets.outputs.packages_changed }}
-      has_kernel_change:        ${{ steps.load-targets.outputs.has_kernel_change }}
+      target_changes_json:      ${{ steps.load-targets.outputs.target_changes_json }}
       build_mode:               ${{ steps.decision.outputs.build_mode }}
       should_build_firmware:    ${{ steps.decision.outputs.should_build_firmware }}
       should_build_ib:          ${{ steps.decision.outputs.should_build_ib }}
       should_build_sdk_pkgs:    ${{ steps.decision.outputs.should_build_sdk_pkgs }}
       should_publish_firmware:  ${{ steps.decision.outputs.should_publish_firmware }}
       should_publish_pkgs:      ${{ steps.decision.outputs.should_publish_pkgs }}
+      has_firmware:             ${{ steps.decision.outputs.has_firmware }}
+      has_ib:                   ${{ steps.decision.outputs.has_ib }}
+      has_packages:             ${{ steps.decision.outputs.has_packages }}
     steps:
       - name: Checkout AutoWorkflows (sparse)
         uses: actions/checkout@v6
@@ -106,50 +110,6 @@ jobs:
           repository: ${{ github.repository }}
           sparse-checkout: openwrt-configs/immortalwrt/targets.json
           path: AutoWorkFlows
-
-      # ── 每月缓存清理（schedule 触发 + 每月 1 号）─────────
-      # 刻意设计: 工具链/ccache 缓存随时间膨胀, 每月初自动全清一次。
-      # 仅 schedule 触发且当天为 1 号才执行, 避免 workflow_dispatch 误清。
-      # 清理后 restore 步骤因 key 不命中自然走新鲜构建, 无需额外通知。
-      - name: 🧹 Monthly cache flush
-        if: github.event_name == 'schedule'
-        id: monthly-flush
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          DAY=$(TZ=$TZ date +%d)
-          if [ "$DAY" != "01" ]; then
-            echo "📅 今天不是月初 ($(TZ=$TZ date +%Y-%m-%d)), 跳过缓存清理"
-            echo "flushed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "🧹 月初缓存清理 ($(TZ=$TZ date +%Y-%m-%d))..."
-          FLUSHED=0
-
-          for KEY_PREFIX in "immwrt-v2-toolchain-" "immwrt-v2-ccache-"; do
-            CACHE_IDS=$(gh cache list --repo "${{ github.repository }}" --key "$KEY_PREFIX" --limit 100 --json id --jq '.[].id' 2>/dev/null || true)
-            if [ -n "$CACHE_IDS" ]; then
-              COUNT=$(echo "$CACHE_IDS" | wc -l)
-              echo "  🗑️ ${KEY_PREFIX}* → ${COUNT} 个缓存"
-              for id in $CACHE_IDS; do
-                gh cache delete "$id" --repo "${{ github.repository }}" 2>/dev/null && FLUSHED=$((FLUSHED + 1)) || true
-              done
-            else
-              echo "  📭 ${KEY_PREFIX}* → 无缓存"
-            fi
-          done
-
-          echo "✅ 月初清理完成: ${FLUSHED} 个缓存已删除"
-          echo "flushed=true" >> $GITHUB_OUTPUT
-          echo "flushed_count=${FLUSHED}" >> $GITHUB_OUTPUT
-
-          # ── Summary ──
-          {
-            echo ""
-            echo "### 🧹 月初缓存清理"
-            echo "清理 \`immwrt-v2-toolchain-*\` + \`immwrt-v2-ccache-*\`: **${FLUSHED} 个** — 本次构建将全新编译工具链"
-          } >> "$GITHUB_STEP_SUMMARY"
 
       # ── 触发上游同步工作流 (可跳过) ──
       # 刻意设计: gh workflow run 不返回 run ID, 故记录触发前时间戳, 触发后轮询
@@ -346,33 +306,31 @@ jobs:
             echo '{}' > build-state.json
           fi
 
-          # ── SHA 检测 ──
-          SRC_CHANGED=false
-          PKG_CHANGED=false
-          ANY_KERNEL_CHANGE=false
+          # ── SHA 检测（per-target，不能由一个 target 短路其他 target）──
           : > /tmp/change_report.txt
+          echo '[]' > /tmp/target_changes.json
 
-          for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
+          for MATRIX_TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
             SRC_STATUS="—"; PKG_STATUS="—"; KERNEL_STATUS="—"
-            [ "$SRC_CHANGED" = "true" ] && [ "$PKG_CHANGED" = "true" ] && [ "$ANY_KERNEL_CHANGE" = "true" ] && break
+            SOURCE_CHANGED=false; PACKAGES_CHANGED=false; KERNEL_CHANGED=false
 
-            CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .repo')
-            CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
-            CURR_PKG_BRANCH=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .packages_branch')
+            CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .repo')
+            CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .ref')
+            CURR_PKG_BRANCH=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .packages_branch')
 
             CURR_SRC=$(git ls-remote "https://github.com/${CURR_REPO}" "${CURR_REF}" 2>/dev/null | cut -f1 | head -1)
-            LAST_SRC=$(jq -r ".\"${TARGET}\".source_sha // empty" build-state.json)
+            LAST_SRC=$(jq -r ".\"${MATRIX_TARGET}\".source_sha // empty" build-state.json)
             if [ -n "$LAST_SRC" ] && [ "$LAST_SRC" = "$CURR_SRC" ]; then
-              echo "  ✅ [${TARGET}] 源码未变更 (${CURR_SRC:0:7})"
+              echo "  ✅ [${MATRIX_TARGET}] 源码未变更 (${CURR_SRC:0:7})"
               SRC_STATUS="✅ 未变更"
             else
-              echo "  🔵 [${TARGET}] 源码变更: ${LAST_SRC:-无} → ${CURR_SRC:0:7}"
-              SRC_CHANGED=true
+              echo "  🔵 [${MATRIX_TARGET}] 源码变更: ${LAST_SRC:-无} → ${CURR_SRC:0:7}"
+              SOURCE_CHANGED=true
               SRC_STATUS="🔵 变更"
 
               # ── 上游变更范围检测 (compare API 优先,本地浅克隆兜底) ──
               if [ -n "$LAST_SRC" ]; then
-                echo "    🔍 检测变更范围..."
+                echo "    🔍 [${MATRIX_TARGET}] 检测变更范围..."
                 CHANGED_PATHS=""
 
                 # 方案 A: GitHub compare API (无需登录,公开仓库可用)
@@ -409,7 +367,7 @@ jobs:
                   KERNEL_COUNT=$(echo "$CHANGED_PATHS" | grep -E '^(target/linux|toolchain|config/|include/|rules\.mk|make\.mk|package/kernel/)' | wc -l)
                   if [ "$KERNEL_COUNT" -gt 0 ]; then
                     echo "    🔴 检测到 kernel/toolchain 范围变更 (${KERNEL_COUNT} 个文件)"
-                    ANY_KERNEL_CHANGE=true
+                    KERNEL_CHANGED=true
                     KERNEL_STATUS="🔴 变更"
                   else
                     echo "    🟢 仅 feed/package 范围变更"
@@ -418,45 +376,47 @@ jobs:
                 else
                   # API 和本地都失败 → 保守降级到全量
                   echo "    ⚪ 变更范围不可测,降级为 kernel 变更处理"
-                  ANY_KERNEL_CHANGE=true
+                  KERNEL_CHANGED=true
                   KERNEL_STATUS="🔴 不可测"
                 fi
               else
                 # 首次构建,无 last_src → 必然走全量
-                ANY_KERNEL_CHANGE=true
+                KERNEL_CHANGED=true
                 KERNEL_STATUS="🔴 首次构建"
               fi
             fi
 
             # 软件包 SHA 检测
             CURR_PKG=$(git ls-remote "https://github.com/${{ env.PACKAGES_FEED_REPO }}.git" "${CURR_PKG_BRANCH}" 2>/dev/null | cut -f1 | head -1)
-            LAST_PKG=$(jq -r ".\"${TARGET}\".packages_sha // empty" build-state.json)
+            LAST_PKG=$(jq -r ".\"${MATRIX_TARGET}\".packages_sha // empty" build-state.json)
             if [ -n "$LAST_PKG" ] && [ "$LAST_PKG" = "$CURR_PKG" ]; then
-              echo "  ✅ [${TARGET}] 软件包未变更 (${CURR_PKG:0:7})"
+              echo "  ✅ [${MATRIX_TARGET}] 软件包未变更 (${CURR_PKG:0:7})"
               PKG_STATUS="✅ 未变更"
             else
               echo "  🟡 [${TARGET}] 软件包变更: ${LAST_PKG:-无} → ${CURR_PKG:0:7}"
-              PKG_CHANGED=true
+              PACKAGES_CHANGED=true
               PKG_STATUS="🟡 变更"
             fi
-            echo "${TARGET}|${SRC_STATUS}|${PKG_STATUS}|${KERNEL_STATUS}" >> /tmp/change_report.txt
+            jq --arg t "$MATRIX_TARGET" --arg src "$CURR_SRC" --arg pkg "$CURR_PKG" \
+              --argjson src_changed "$SOURCE_CHANGED" --argjson pkg_changed "$PACKAGES_CHANGED" \
+              --argjson kernel_changed "$KERNEL_CHANGED" \
+              '. + [{target:$t, current_source_sha:$src, current_packages_sha:$pkg, source_changed:$src_changed, packages_changed:$pkg_changed, kernel_changed:$kernel_changed}]' \
+              /tmp/target_changes.json > /tmp/target_changes.new
+            mv /tmp/target_changes.new /tmp/target_changes.json
+            echo "${MATRIX_TARGET}|${SRC_STATUS}|${PKG_STATUS}|${KERNEL_STATUS}" >> /tmp/change_report.txt
           done
 
           {
-            echo "### 🔍 变更检测"
+            echo "### 🔍 变更检测（per-target）"
             echo ""
             echo "| 目标 | 源码 | 软件包 | 内核/Toolchain |"
             echo "|---|---|---|---|"
             while IFS='|' read -r t s p k; do
               echo "| \`${t}\` | ${s} | ${p} | ${k} |"
             done < /tmp/change_report.txt
-            echo ""
-            echo "**源码变更**: ${SRC_CHANGED} | **软件包变更**: ${PKG_CHANGED} | **内核/Toolchain 变更**: ${ANY_KERNEL_CHANGE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "source_changed=${SRC_CHANGED}" >> $GITHUB_OUTPUT
-          echo "packages_changed=${PKG_CHANGED}" >> $GITHUB_OUTPUT
-          echo "has_kernel_change=${ANY_KERNEL_CHANGE}" >> $GITHUB_OUTPUT
+          echo "target_changes_json=$(jq -c . /tmp/target_changes.json)" >> $GITHUB_OUTPUT
 
       # ── 形成 matrix ──
       - name: Build matrix
@@ -469,93 +429,142 @@ jobs:
       # ── 决策信号: 综合 trigger + 变更检测结果 ──
       - name: Decide build mode
         id: decision
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
-          SRC_CHANGED="${{ steps.load-targets.outputs.source_changed }}"
-          PKG_CHANGED="${{ steps.load-targets.outputs.packages_changed }}"
-          HAS_KERNEL="${{ steps.load-targets.outputs.has_kernel_change }}"
-
-          echo "📊 TRIGGER=$TRIGGER SRC=$SRC_CHANGED PKG=$PKG_CHANGED KERNEL=$HAS_KERNEL"
-
-          SHOULD_FW=false
-          SHOULD_IB=false
-          SHOULD_SDK_PKGS=false
-          SHOULD_PUB_FW=false
-          SHOULD_PUB_PKGS=false
-
-          # 探测自建 SDK/IB 是否已有发布 (首次运行时强制全量编译)
           FILTERED=$(cat /tmp/filtered_targets.json)
-          SDK_READY=true
-          IB_READY=true
-          for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
-            SDK_TAG=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target==$t) | .sdk_release_tag')
-            SDK_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target==$t) | .sdk_release_repo')
-            IB_TAG=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target==$t) | .ib_release_tag')
-            IB_REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target==$t) | .ib_release_repo')
-            gh release download "$SDK_TAG" --repo "$SDK_REPO" --pattern 'index.json' -D /tmp/sdk-probe-"$TARGET" 2>/dev/null || SDK_READY=false
-            gh release download "$IB_TAG" --repo "$IB_REPO" --pattern 'index.json' -D /tmp/ib-probe-"$TARGET" 2>/dev/null || IB_READY=false
-          done
-          echo "SDK_READY=$SDK_READY  IB_READY=$IB_READY"
+          CHANGES=$(cat /tmp/target_changes.json)
+          echo '[]' > /tmp/target_plan.json
 
-          if [ "$TRIGGER" = "full" ]; then
-            SHOULD_FW=true; SHOULD_PUB_FW=true
-          elif [ "$TRIGGER" = "sdk-packages" ]; then
-            if [ "$SDK_READY" = "false" ]; then
-              echo "⚠️ SDK 不存在,sdk-packages 模式升级为全量编译"
-              SHOULD_FW=true; SHOULD_PUB_FW=true
-            else
-              SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
+          probe_index() {
+            local KIND="$1" TAG="$2" REPO="$3" PROBE_DIR="/tmp/${KIND}-probe-${4}"
+            rm -rf "$PROBE_DIR"
+            mkdir -p "$PROBE_DIR"
+            if ! gh release download "$TAG" --repo "$REPO" --pattern 'index.json' -D "$PROBE_DIR" >/dev/null 2>&1; then
+              return 1
             fi
-          elif [ "$TRIGGER" = "imagebuilder" ]; then
-            if [ "$IB_READY" = "false" ]; then
-              echo "⚠️ IB 不存在,imagebuilder 模式升级为全量编译"
-              SHOULD_FW=true; SHOULD_PUB_FW=true
-            else
-              SHOULD_IB=true; SHOULD_PUB_FW=true
+            jq -e 'type == "object" and (to_entries | length > 0) and (to_entries | any(.value.file != null and .value.file != ""))' \
+              "$PROBE_DIR/index.json" >/dev/null 2>&1
+          }
+
+          for MATRIX_TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
+            TARGET_CONFIG=$(echo "$FILTERED" | jq -c --arg t "$MATRIX_TARGET" '.[] | select(.target==$t)')
+            CHANGE=$(echo "$CHANGES" | jq -c --arg t "$MATRIX_TARGET" '.[] | select(.target==$t)')
+            SRC_CHANGED=$(echo "$CHANGE" | jq -r '.source_changed')
+            PKG_CHANGED=$(echo "$CHANGE" | jq -r '.packages_changed')
+            HAS_KERNEL=$(echo "$CHANGE" | jq -r '.kernel_changed')
+            SDK_READY=true; IB_READY=true
+            SHOULD_FW=false; SHOULD_IB=false; SHOULD_SDK_PKGS=false
+            SHOULD_PUB_FW=false; SHOULD_PUB_PKGS=false
+            BUILD_MODE=skip
+
+            SDK_TAG=$(echo "$TARGET_CONFIG" | jq -r '.sdk_release_tag')
+            SDK_REPO=$(echo "$TARGET_CONFIG" | jq -r '.sdk_release_repo')
+            IB_TAG=$(echo "$TARGET_CONFIG" | jq -r '.ib_release_tag')
+            IB_REPO=$(echo "$TARGET_CONFIG" | jq -r '.ib_release_repo')
+
+            need_sdk=false
+            need_ib=false
+            if [ "$TRIGGER" = "sdk-packages" ]; then
+              need_sdk=true
+            elif [ "$TRIGGER" = "imagebuilder" ]; then
+              need_ib=true
+            elif [ "$TRIGGER" = "smart" ]; then
+              if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ]; then
+                need_sdk=true
+              elif [ "$SRC_CHANGED" = "true" ] && [ "$HAS_KERNEL" = "false" ]; then
+                need_ib=true
+              fi
             fi
-          else  # smart
-            if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "false" ]; then
-              echo "🌀 无变更,跳过所有构建"
-            elif [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ]; then
-              if [ "$SDK_READY" = "false" ]; then
-                echo "⚠️ SDK 不存在,升级为全量编译"
-                SHOULD_FW=true; SHOULD_PUB_FW=true
-              else
+
+            if [ "$need_sdk" = "true" ] && ! probe_index sdk "$SDK_TAG" "$SDK_REPO" "$MATRIX_TARGET"; then
+              SDK_READY=false
+            fi
+            if [ "$need_ib" = "true" ] && ! probe_index ib "$IB_TAG" "$IB_REPO" "$MATRIX_TARGET"; then
+              IB_READY=false
+            fi
+
+            # 源码非 kernel 且 package 也变更时，保持原有短路：
+            # IB 不可用会直接升级 full，不再额外访问 SDK release API。
+            if [ "$TRIGGER" = "smart" ] && [ "$SRC_CHANGED" = "true" ] \
+              && [ "$HAS_KERNEL" = "false" ] && [ "$PKG_CHANGED" = "true" ] \
+              && [ "$IB_READY" = "true" ]; then
+              if ! probe_index sdk "$SDK_TAG" "$SDK_REPO" "$MATRIX_TARGET"; then
+                SDK_READY=false
+              fi
+            fi
+
+            if [ "$TRIGGER" = "full" ]; then
+              SHOULD_FW=true; SHOULD_PUB_FW=true
+            elif [ "$TRIGGER" = "sdk-packages" ]; then
+              if [ "$SDK_READY" = "true" ]; then
                 SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
-              fi
-            elif [ "$SRC_CHANGED" = "true" ] && [ "$HAS_KERNEL" = "true" ]; then
-              # 全量编译已包含全部软件包 (compile-firmware 会收集 passwall 包),
-              # 不再并行 SDK 增量编译, 避免重复编译 + 双写 packages tag
-              SHOULD_FW=true; SHOULD_PUB_FW=true
-            elif [ "$SRC_CHANGED" = "true" ] && [ "$HAS_KERNEL" = "false" ]; then
-              if [ "$IB_READY" = "false" ]; then
-                echo "⚠️ IB 不存在,升级为全量编译"
-                SHOULD_FW=true; SHOULD_PUB_FW=true
-                # 全量编译已覆盖软件包, 同样不并行 SDK 增量编译
               else
+                echo "⚠️ [${MATRIX_TARGET}] SDK 不存在,升级为全量编译"
+                SHOULD_FW=true; SHOULD_PUB_FW=true
+              fi
+            elif [ "$TRIGGER" = "imagebuilder" ]; then
+              if [ "$IB_READY" = "true" ]; then
                 SHOULD_IB=true; SHOULD_PUB_FW=true
-                # IB 重打包与 SDK 增量编译互不依赖, 可并行; 但 SDK 必须先就绪
+              else
+                echo "⚠️ [${MATRIX_TARGET}] IB 不存在,升级为全量编译"
+                SHOULD_FW=true; SHOULD_PUB_FW=true
+              fi
+            else
+              if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "false" ]; then
+                :
+              elif [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ]; then
+                if [ "$SDK_READY" = "true" ]; then
+                  SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
+                else
+                  echo "⚠️ [${MATRIX_TARGET}] SDK 不存在,升级为全量编译"
+                  SHOULD_FW=true; SHOULD_PUB_FW=true
+                fi
+              elif [ "$HAS_KERNEL" = "true" ]; then
+                SHOULD_FW=true; SHOULD_PUB_FW=true
+              elif [ "$IB_READY" = "true" ]; then
+                SHOULD_IB=true; SHOULD_PUB_FW=true
                 [ "$PKG_CHANGED" = "true" ] && [ "$SDK_READY" = "true" ] && SHOULD_SDK_PKGS=true && SHOULD_PUB_PKGS=true
+              else
+                echo "⚠️ [${MATRIX_TARGET}] IB 不存在,升级为全量编译"
+                SHOULD_FW=true; SHOULD_PUB_FW=true
               fi
             fi
-          fi
 
-          if [ "$SHOULD_FW" = "true" ]; then
-            BUILD_MODE="firmware"
-          elif [ "$SHOULD_IB" = "true" ]; then
-            BUILD_MODE="ib"
-          elif [ "$SHOULD_SDK_PKGS" = "true" ]; then
-            BUILD_MODE="packages"
-          else
-            BUILD_MODE="skip"
-          fi
+            if [ "$SHOULD_FW" = "true" ]; then BUILD_MODE=firmware
+            elif [ "$SHOULD_IB" = "true" ]; then BUILD_MODE=ib
+            elif [ "$SHOULD_SDK_PKGS" = "true" ]; then BUILD_MODE=packages
+            fi
 
-          echo "build_mode=${BUILD_MODE}" >> $GITHUB_OUTPUT
-          echo "should_build_firmware=${SHOULD_FW}" >> $GITHUB_OUTPUT
-          echo "should_build_ib=${SHOULD_IB}" >> $GITHUB_OUTPUT
-          echo "should_build_sdk_pkgs=${SHOULD_SDK_PKGS}" >> $GITHUB_OUTPUT
-          echo "should_publish_firmware=${SHOULD_PUB_FW}" >> $GITHUB_OUTPUT
-          echo "should_publish_pkgs=${SHOULD_PUB_PKGS}" >> $GITHUB_OUTPUT
+            jq --argjson config "$TARGET_CONFIG" --arg mode "$BUILD_MODE" \
+              --argjson sdk_ready "$SDK_READY" --argjson ib_ready "$IB_READY" \
+              --argjson fw "$SHOULD_FW" --argjson ib "$SHOULD_IB" --argjson pkgs "$SHOULD_SDK_PKGS" \
+              --argjson pub_fw "$SHOULD_PUB_FW" --argjson pub_pkgs "$SHOULD_PUB_PKGS" \
+              --argjson change "$CHANGE" \
+              '. + [$config + $change + {sdk_ready:$sdk_ready, ib_ready:$ib_ready, build_mode:$mode, build_firmware:$fw, build_ib:$ib, build_sdk_pkgs:$pkgs, publish_firmware:$pub_fw, publish_pkgs:$pub_pkgs}]' \
+              /tmp/target_plan.json > /tmp/target_plan.new
+            mv /tmp/target_plan.new /tmp/target_plan.json
+          done
+
+          PLAN=$(jq -c . /tmp/target_plan.json)
+          HAS_FW=$(echo "$PLAN" | jq -r 'any(.[]; .build_firmware)')
+          HAS_IB=$(echo "$PLAN" | jq -r 'any(.[]; .build_ib)')
+          HAS_PKGS=$(echo "$PLAN" | jq -r 'any(.[]; .build_sdk_pkgs)')
+          PUB_FW=$(echo "$PLAN" | jq -r 'any(.[]; .publish_firmware)')
+          PUB_PKGS=$(echo "$PLAN" | jq -r 'any(.[]; .publish_pkgs)')
+          echo "firmware_matrix_json=$(echo "$PLAN" | jq -c '[.[] | select(.build_firmware)]')" >> $GITHUB_OUTPUT
+          echo "ib_matrix_json=$(echo "$PLAN" | jq -c '[.[] | select(.build_ib)]')" >> $GITHUB_OUTPUT
+          echo "packages_matrix_json=$(echo "$PLAN" | jq -c '[.[] | select(.build_sdk_pkgs)]')" >> $GITHUB_OUTPUT
+          echo "has_firmware=$(echo "$PLAN" | jq -r 'any(.[]; .build_firmware)')" >> $GITHUB_OUTPUT
+          echo "has_ib=$(echo "$PLAN" | jq -r 'any(.[]; .build_ib)')" >> $GITHUB_OUTPUT
+          echo "has_packages=$(echo "$PLAN" | jq -r 'any(.[]; .build_sdk_pkgs)')" >> $GITHUB_OUTPUT
+          echo "build_mode=$(echo "$PLAN" | jq -r '[.[].build_mode] | map(select(. != "skip")) | first // "skip"')" >> $GITHUB_OUTPUT
+          echo "should_build_firmware=$(echo "$PLAN" | jq -r 'any(.[]; .build_firmware)')" >> $GITHUB_OUTPUT
+          echo "should_build_ib=$(echo "$PLAN" | jq -r 'any(.[]; .build_ib)')" >> $GITHUB_OUTPUT
+          echo "should_build_sdk_pkgs=$(echo "$PLAN" | jq -r 'any(.[]; .build_sdk_pkgs)')" >> $GITHUB_OUTPUT
+          echo "should_publish_firmware=$(echo "$PLAN" | jq -r 'any(.[]; .publish_firmware)')" >> $GITHUB_OUTPUT
+          echo "should_publish_pkgs=$(echo "$PLAN" | jq -r 'any(.[]; .publish_pkgs)')" >> $GITHUB_OUTPUT
 
           TARGETS="${{ steps.build-matrix.outputs.targets_to_build }}"
           VER="${{ steps.version.outputs.version }}"
@@ -570,63 +579,31 @@ jobs:
             echo ""
             echo "**构建目标**: \`${TARGETS}\`"
             echo ""
-            echo "| 项 | 值 |"
-            echo "|---|---|"
-            echo "| **build_mode** | \`${BUILD_MODE}\` |"
-            echo "| **should_build_firmware** | ${SHOULD_FW} |"
-            echo "| **should_build_ib** | ${SHOULD_IB} |"
-            echo "| **should_build_sdk_pkgs** | ${SHOULD_SDK_PKGS} |"
-            echo "| **should_publish_firmware** | ${SHOULD_PUB_FW} |"
-            echo "| **should_publish_pkgs** | ${SHOULD_PUB_PKGS} |"
+            echo "| 目标 | 源码 | 软件包 | Kernel | SDK | IB | 模式 |"
+            echo "|---|---|---|---|---|---|---|"
+            echo "$PLAN" | jq -r '.[] | "| `\(.target)` | \(.source_changed) | \(.packages_changed) | \(.kernel_changed) | \(.sdk_ready) | \(.ib_ready) | `\(.build_mode)` |"'
             echo ""
             echo "### 📦 本次工作内容"
             echo ""
-            if [ "$SHOULD_FW" = "true" ]; then
+            if [ "$HAS_FW" = "true" ]; then
               echo "- 🔨 **compile-firmware**: 全量编译固件 + 生成 SDK/IB 上传 (sdk-*/ib-* tag, 同名替换 / 异名保留最近 ${{ env.SDK_KEEP_VERSIONS }} 组)"
             fi
-            if [ "$SHOULD_IB" = "true" ]; then
+            if [ "$HAS_IB" = "true" ]; then
               echo "- 📦 **build-via-ib**: 基于现有 IB 重打包固件"
             fi
-            if [ "$SHOULD_SDK_PKGS" = "true" ]; then
+            if [ "$HAS_PKGS" = "true" ]; then
               echo "- 📦 **compile-packages**: 基于 SDK 增量编译软件包 → packages tag"
             fi
-            if [ "$SHOULD_PUB_FW" = "true" ]; then
+            if [ "$PUB_FW" = "true" ]; then
               echo "- 🚀 **release**: 发布固件到 \`${VER}\` release"
             fi
-            if [ "$SHOULD_PUB_PKGS" = "true" ]; then
+            if [ "$PUB_PKGS" = "true" ]; then
               echo "- 🚀 **release**: 发布软件包到 packages tag"
             fi
-            if [ "$SHOULD_FW" != "true" ] && [ "$SHOULD_IB" != "true" ] && [ "$SHOULD_SDK_PKGS" != "true" ]; then
+            if [ "$HAS_FW" != "true" ] && [ "$HAS_IB" != "true" ] && [ "$HAS_PKGS" != "true" ]; then
               echo "- ⏭️ **无构建任务** (无变更或模式不匹配)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # ── 创建固件 Draft Release (按当前 commit SHA 复用) ──
-      - name: Create draft releases
-        if: steps.decision.outputs.should_publish_firmware == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          FILTERED=$(cat /tmp/filtered_targets.json)
-          VERSION="${{ steps.version.outputs.version }}"
-
-          for TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
-            REPO=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .release_repo')
-            REF=$(echo "$FILTERED" | jq -r --arg t "$TARGET" '.[] | select(.target == $t) | .ref')
-            RESOLVED_SHA=$(git ls-remote "https://github.com/${REPO}" "${REF}" 2>/dev/null | cut -f1 | head -1)
-            [ -z "$RESOLVED_SHA" ] && RESOLVED_SHA="$REF"
-
-            EXISTING=$(gh api "repos/${REPO}/releases?per_page=100" \
-              --jq --arg sha "$RESOLVED_SHA" --arg target "$TARGET" \
-              '[.[] | select(.target_commitish == $sha and (.name | contains($target)))] | first | .tag_name // empty' 2>/dev/null || true)
-
-            if [ -n "$EXISTING" ]; then
-              gh release edit "$EXISTING" --repo "$REPO" --title "${TARGET} Build ${VERSION}" --draft --notes "🔨 构建中..." 2>/dev/null || true
-            elif ! gh release view "$VERSION" --repo "$REPO" &>/dev/null; then
-              gh release create "$VERSION" --repo "$REPO" --target "$RESOLVED_SHA" \
-                --title "${TARGET} Build ${VERSION}" --draft --notes "🔨 构建中..." 2>/dev/null || true
-            fi
-          done
 
   # ════════════════════ run-firmware (全量编译) ════════════════════
   # 升级 full 仅由 plan 决策判断 (SDK/IB 不存在等前置条件), 不做任务失败回退:
@@ -634,11 +611,11 @@ jobs:
   run-firmware:
     name: Compile Firmware / ${{ matrix.target }}
     needs: plan
-    if: needs.plan.outputs.should_build_firmware == 'true'
+    if: needs.plan.outputs.has_firmware == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
+        include: ${{ fromJson(needs.plan.outputs.firmware_matrix_json) }}
     uses: ./.github/workflows/compile-firmware.yml
     with:
       matrix_target:             ${{ matrix.target }}
@@ -676,11 +653,11 @@ jobs:
   run-imagebuilder:
     name: Build via IB / ${{ matrix.target }}
     needs: plan
-    if: needs.plan.outputs.should_build_ib == 'true'
+    if: needs.plan.outputs.has_ib == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
+        include: ${{ fromJson(needs.plan.outputs.ib_matrix_json) }}
     uses: ./.github/workflows/build-via-ib.yml
     with:
       matrix_target:             ${{ matrix.target }}
@@ -710,11 +687,11 @@ jobs:
   run-packages:
     name: Compile Packages / ${{ matrix.target }}
     needs: plan
-    if: needs.plan.outputs.should_build_sdk_pkgs == 'true'
+    if: needs.plan.outputs.has_packages == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.plan.outputs.matrix_json) }}
+        include: ${{ fromJson(needs.plan.outputs.packages_matrix_json) }}
     uses: ./.github/workflows/compile-packages.yml
     with:
       matrix_target:             ${{ matrix.target }}
@@ -737,211 +714,58 @@ jobs:
       group: compile-pkgs-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
 
-  # ════════════════════ release: 固件 + 软件包发布 ════════════════════
-  # 刻意设计: 仅在"至少一个被计划的任务真正成功完成"时才执行发布。
-  # 若所有任务失败/被跳过(如 smart 无变更、编译失败), release 应整体跳过,
-  # 避免空转 30 分钟 + 误建空 release。
-  release:
-    name: Release
+  # ════════════════════ persist-state: 仅合并已发布构建状态 ════════════════════
+  # 发布在各 reusable executor 内完成；本 job 只持久化其中已成功发布的 target SHA。
+  persist-state:
+    name: Persist build state
     needs: [plan, run-firmware, run-imagebuilder, run-packages]
     if: |
       always() &&
       !cancelled() &&
       (
-        needs.plan.outputs.should_publish_firmware == 'true' ||
-        needs.plan.outputs.should_publish_pkgs == 'true'
-      ) &&
-      (
-        (needs.plan.outputs.should_build_firmware == 'true' && needs.run-firmware.result == 'success') ||
-        (needs.plan.outputs.should_build_ib == 'true' && needs.run-imagebuilder.result == 'success') ||
-        (needs.plan.outputs.should_build_sdk_pkgs == 'true' && needs.run-packages.result == 'success')
+        (needs.plan.outputs.has_firmware == 'true' && needs.run-firmware.result == 'success') ||
+        (needs.plan.outputs.has_ib == 'true' && needs.run-imagebuilder.result == 'success') ||
+        (needs.plan.outputs.has_packages == 'true' && needs.run-packages.result == 'success')
       )
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
-      - name: Download all artifacts
-        id: download
+      - name: Download published-state artifacts
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          path: artifacts
-          pattern: '*'
+          path: published-state
+          pattern: '*-published-state'
+          merge-multiple: true
 
-      - name: Retry download via gh CLI
-        if: steps.download.outcome == 'failure'
+      - name: Merge published build state
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          ARTIFACTS=$(gh run view ${{ github.run_id }} --repo ${{ github.repository }} --json artifacts --jq '.artifacts[].name' 2>/dev/null)
-          for artifact in $ARTIFACTS; do
-            for i in 1 2 3; do
-              gh run download ${{ github.run_id }} --repo ${{ github.repository }} --name "$artifact" --dir artifacts 2>&1 && break
-              [ "$i" -lt 3 ] && sleep 10 || exit 1
-            done
-          done
+          STATE=$(gh api "repos/${{ github.repository }}/actions/variables/IMMWRT_BUILD_STATE" \
+            --jq '.value // "{}"' 2>/dev/null || echo '{}')
+          echo "$STATE" | jq -e 'type == "object"' >/dev/null 2>&1 || STATE='{}'
+          printf '%s\n' "$STATE" > build-state.json
 
-      - name: Remove build logs
-        run: rm -rf artifacts/*-build-log 2>/dev/null || true
-
-      - name: Purge stale drafts
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          CURRENT_VERSION="${{ needs.plan.outputs.version }}"
-          STALE_IDS=$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
-            --jq --arg ver "$CURRENT_VERSION" \
-            '[.[] | select(.draft and (.name | test("Build V")) and (.tag_name != $ver))] | .[].id' 2>/dev/null || true)
-          for ID in $STALE_IDS; do
-            gh api -X DELETE "repos/${{ github.repository }}/releases/$ID" 2>/dev/null || true
-          done
-
-      - name: Publish firmware & packages
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          publish_firmware_target() {
-            local TARGET="$1"
-
-            local INFO_FILE=""
-            for path in "artifacts/${TARGET}-build-info/build-info.json" "artifacts/${TARGET}-ib-build-info/build-info.json"; do
-              if [ -f "$path" ]; then INFO_FILE="$path"; break; fi
-            done
-            [ -z "$INFO_FILE" ] && { echo "⏭️  [${TARGET}] 无 build-info,跳过"; return 0; }
-
-            local SOURCE_SHA RELEASE_REPO RELEASE_TAG BUILD_MODE
-            SOURCE_SHA=$(jq -r '.source_sha // empty' "$INFO_FILE")
-            RELEASE_REPO=$(jq -r '.release_repo // empty' "$INFO_FILE")
-            RELEASE_TAG=$(jq -r '.release_tag // empty' "$INFO_FILE")
-            BUILD_MODE=$(jq -r '.build_mode // "firmware"' "$INFO_FILE")
-
-            if [ -f "artifacts/${TARGET}-release/${TARGET}-release.tar.gz" ]; then
-              tar xzf "artifacts/${TARGET}-release/${TARGET}-release.tar.gz" -C "artifacts/${TARGET}-release/" 2>/dev/null || true
-            fi
-
-            local FW_DIR=""
-            for d in "artifacts/${TARGET}-release/firmware" "artifacts/${TARGET}-ib-firmware"; do
-              if [ -d "$d" ] && [ -n "$(find "$d" -maxdepth 1 -type f | head -1)" ]; then FW_DIR="$d"; break; fi
-            done
-
-            if [ -n "$FW_DIR" ]; then
-              local RELEASE_BODY="artifacts/${TARGET}-build-info/release-body.md"
-              [ ! -f "$RELEASE_BODY" ] && RELEASE_BODY="artifacts/${TARGET}-ib-build-info/release-body.md"
-              [ ! -f "$RELEASE_BODY" ] && echo "## ${TARGET} Build" > /tmp/release_body.md || cp "$RELEASE_BODY" /tmp/release_body.md
-
-              if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" &>/dev/null; then
-                echo "📤 [${TARGET}] 上传固件到现有 Release"
-                gh release upload "$RELEASE_TAG" --repo "$RELEASE_REPO" "$FW_DIR"/* --clobber || true
-              else
-                echo "🚀 [${TARGET}] 创建 Release"
-                gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" \
-                  --title "${TARGET} Build ${RELEASE_TAG}" --target "$SOURCE_SHA" \
-                  --notes-file /tmp/release_body.md "$FW_DIR"/* || true
-              fi
-              gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" \
-                --title "${TARGET} Build ${RELEASE_TAG}" \
-                --notes-file /tmp/release_body.md --draft=false 2>/dev/null || true
-              echo "✅ [${TARGET}] 固件 Release $RELEASE_TAG 已发布"
-            else
-              if [ "$BUILD_MODE" = "ib" ] && [ "${{ needs.run-imagebuilder.result }}" = "failure" ]; then
-                echo "⚠️  [${TARGET}] ImageBuilder 重打包失败,无固件产出,已跳过固件发布 (改错就错,不回退全量)"
-              else
-                echo "⚠️  [${TARGET}] 无固件文件 (mode=$BUILD_MODE)"
-              fi
-            fi
-
-            local PW_DIR=""
-            PW_DIR="artifacts/${TARGET}-release/passwall"
-            [ ! -d "$PW_DIR" ] && PW_DIR="artifacts/${TARGET}-passwall"
-
-            local PW_FILES
-            PW_FILES=$(find "$PW_DIR" -maxdepth 1 \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) -type f 2>/dev/null || true)
-            if [ -n "$PW_FILES" ]; then
-              local PW_REPO=$(jq -r '.passwall_repo // "solarflows/openwrt-packages"' "$INFO_FILE")
-              local PW_TAG=$(jq -r '.passwall_tag // "packages"' "$INFO_FILE")
-              echo "📤 [${TARGET}] Passwall → ${PW_REPO}@${PW_TAG}"
-              if gh release view "$PW_TAG" --repo "$PW_REPO" &>/dev/null; then
-                gh release upload "$PW_TAG" --repo "$PW_REPO" $(echo "$PW_FILES") --clobber || true
-              else
-                gh release create "$PW_TAG" --repo "$PW_REPO" \
-                  --title "Passwall Packages" --notes "Multi-target passwall packages" \
-                  --latest=false $(echo "$PW_FILES") || true
-              fi
-            fi
-          }
-
-          publish_sdk_pkgs_target() {
-            local TARGET="$1"
-            local INFO_FILE="artifacts/${TARGET}-sdk-build-info/build-info.json"
-            [ ! -f "$INFO_FILE" ] && { echo "⏭️  [${TARGET}] 无 SDK build-info,跳过"; return 0; }
-
-            local PW_REPO=$(jq -r '.passwall_repo // "solarflows/openwrt-packages"' "$INFO_FILE")
-            local PW_TAG=$(jq -r '.passwall_tag // "packages"' "$INFO_FILE")
-            local SDK_DIR="artifacts/${TARGET}-sdk-packages"
-            [ -d "$SDK_DIR" ] || { echo "⏭️  [${TARGET}] 无 SDK 产物目录"; return 0; }
-
-            local SDK_FILES
-            SDK_FILES=$(find "$SDK_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) 2>/dev/null || true)
-            [ -z "$SDK_FILES" ] && { echo "⏭️  [${TARGET}] 无 SDK 文件"; return 0; }
-
-            local PKG_COMMIT=$(jq -r '.packages_commit // "?"' "$INFO_FILE")
-            local PKG_COMMIT_FULL=$(jq -r '.packages_sha // ""' "$INFO_FILE")
-            local PKG_FORMAT=$(jq -r '.packages_format // "ipk"' "$INFO_FILE")
-
-            echo "📤 [${TARGET}] SDK 增量发布 → ${PW_REPO}@${PW_TAG} (.${PKG_FORMAT})"
-
-            if gh release view "$PW_TAG" --repo "$PW_REPO" &>/dev/null; then
-              gh release upload "$PW_TAG" --repo "$PW_REPO" $(echo "$SDK_FILES") --clobber || true
-              EXISTING=$(gh release view "$PW_TAG" --repo "$PW_REPO" --json body --jq '.body // ""' 2>/dev/null || echo "")
-              NOTE_TITLE="### ${TARGET} — SDK 构建 (.${PKG_FORMAT})"
-              printf '%b\n' "${EXISTING}\n\n---\n${NOTE_TITLE}\n- commit: [\`${PKG_COMMIT}\`](${PW_REPO}/commit/${PKG_COMMIT_FULL}) - $(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M')" > /tmp/rel_notes.md
-              gh release edit "$PW_TAG" --repo "$PW_REPO" --notes-file /tmp/rel_notes.md || true
-            else
-              printf '## Passwall Packages\n\n- **${TARGET}**: SDK 构建 (.${PKG_FORMAT}), commit [\`${PKG_COMMIT}\`](${PW_REPO}/commit/${PKG_COMMIT_FULL})' > /tmp/rel_notes.md
-              gh release create "$PW_TAG" --repo "$PW_REPO" --title "Passwall Packages" \
-                --notes-file /tmp/rel_notes.md --latest=false $(echo "$SDK_FILES") || true
-            fi
-          }
-
-          if [ "${{ needs.plan.outputs.should_publish_firmware }}" = "true" ]; then
-            for d in artifacts/*-build-info artifacts/*-ib-build-info; do
-              [ -d "$d" ] || continue
-              TARGET=$(jq -r '.target // empty' "$d/build-info.json" 2>/dev/null)
-              [ -n "$TARGET" ] && publish_firmware_target "$TARGET"
-            done
-          fi
-
-          if [ "${{ needs.plan.outputs.should_publish_pkgs }}" = "true" ]; then
-            for d in artifacts/*-sdk-build-info; do
-              [ -d "$d" ] || continue
-              TARGET=$(jq -r '.target // empty' "$d/build-info.json" 2>/dev/null)
-              [ -n "$TARGET" ] && publish_sdk_pkgs_target "$TARGET"
-            done
-          fi
-
-      - name: Save build state to cache
-        if: always()
-        run: |
-          cat > build-state.json <<JSONEOF
-          {
-          $(comma=""; for info in artifacts/*-build-info/build-info.json artifacts/*-ib-build-info/build-info.json; do
+          for info in published-state/*.json; do
             [ -f "$info" ] || continue
             TARGET=$(jq -r '.target // empty' "$info" 2>/dev/null)
             SRC_SHA=$(jq -r '.source_sha // empty' "$info" 2>/dev/null)
             PKG_SHA=$(jq -r '.packages_sha // empty' "$info" 2>/dev/null)
             [ -z "$TARGET" ] && continue
-            echo "${comma}\"${TARGET}\": {\"source_sha\": \"${SRC_SHA}\", \"packages_sha\": \"${PKG_SHA}\", \"last_build\": \"$(date +'%Y-%m-%d %H:%M:%S')\"}"
-            comma=","
-          done)
-          }
-          JSONEOF
+            jq --arg target "$TARGET" --arg src "$SRC_SHA" --arg pkg "$PKG_SHA" \
+              --arg mode "$(jq -r '.build_mode // "unknown"' "$info" 2>/dev/null)" \
+              --arg now "$(date +'%Y-%m-%d %H:%M:%S')" \
+              '.[$target] = ((.[$target] // {})
+                + (if $src != "" then {source_sha:$src} else {} end)
+                + (if $pkg != "" then {packages_sha:$pkg} else {} end)
+                + {last_build:$now, last_mode:$mode})' \
+              build-state.json > build-state.new
+            mv build-state.new build-state.json
+          done
           cat build-state.json
 
-      # ── 持久化构建状态到 Repository Variable (每次构建更新同一份) ──
-      # ⚠️ GITHUB_TOKEN 不能写 repository variables, 必须用 PAT (secrets.ACCESS_TOKEN)。
       - name: Persist state to Repository Variable
-        if: always()
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |

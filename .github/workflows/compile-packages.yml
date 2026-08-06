@@ -35,6 +35,9 @@ jobs:
     name: Compile ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    concurrency:
+      group: packages-release-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
+      cancel-in-progress: false
     env:
       # 刻意加前缀: 裸 TARGET/HOST 会被 autoconf 的 AX_ENABLE_BUILDDIR 当作 builddir 名
       IMMWRT_TARGET: ${{ inputs.matrix_target }}
@@ -283,6 +286,39 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-sdk-build-info
+          path: build-info.json
+          retention-days: 7
+
+      - name: Publish SDK packages
+        if: steps.artifacts.outputs.file_count > 0
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -t PACKAGE_FILES < <(find upload -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \))
+          [ "${#PACKAGE_FILES[@]}" -gt 0 ] || { echo "::error::SDK 产物目录为空"; exit 1; }
+          PACKAGE_REPO="${{ inputs.matrix_passwall_repo }}"
+          PACKAGE_TAG="${{ inputs.matrix_passwall_tag }}"
+          PACKAGE_COMMIT=$(jq -r '.packages_commit' build-info.json)
+          PACKAGE_SHA=$(jq -r '.packages_sha' build-info.json)
+          PACKAGE_FORMAT=$(jq -r '.packages_format' build-info.json)
+          if gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
+            gh release upload "$PACKAGE_TAG" --repo "$PACKAGE_REPO" "${PACKAGE_FILES[@]}" --clobber
+            EXISTING=$(gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json body --jq '.body // ""')
+            printf '%b\n' "${EXISTING}\n\n---\n### ${IMMWRT_TARGET} - SDK 构建 (.${PACKAGE_FORMAT})\n- commit: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')" > release-notes.md
+            gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md
+          else
+            printf '## Passwall Packages\n\n- **%s**: SDK 构建 (.%s), commit [`%s`](%s/commit/%s)\n' \
+              "$IMMWRT_TARGET" "$PACKAGE_FORMAT" "$PACKAGE_COMMIT" "$PACKAGE_REPO" "$PACKAGE_SHA" > release-notes.md
+            gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
+              --notes-file release-notes.md --latest=false "${PACKAGE_FILES[@]}"
+          fi
+
+      - name: Upload published state
+        if: success() && steps.artifacts.outputs.file_count > 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.IMMWRT_TARGET }}-published-state
           path: build-info.json
           retention-days: 7
 
