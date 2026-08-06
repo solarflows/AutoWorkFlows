@@ -196,13 +196,13 @@ jobs:
 
           echo "::group::📋 Configure feeds"
           ./scripts/feeds update -a 2>&1
+          ./scripts/feeds install -a 2>&1
           make defconfig 2>&1
           echo "::endgroup::"
 
           # 按列表逐包编译 (失败不阻断,最后由 artifacts 统计结果)
           for pkg in $PACKAGES; do
             echo "::group::📦 Compile $pkg"
-            ./scripts/feeds install -p ${{ inputs.packages_feed_name }} -f "$pkg" 2>&1
             make package/"$pkg"/download V=s 2>&1
             make package/"$pkg"/compile \
               BUILD_LOG=1 V=s -j$(nproc 2>/dev/null || echo 4) 2>&1 || \
