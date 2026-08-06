@@ -184,7 +184,10 @@ jobs:
           # 这也实现了「不再依赖 ghcr.io/openwrt/sdk:* 上游 Docker 容器」的目标
           cd sdk
 
-          # feeds.conf: 指向 checkout 出的 pkgs-feed (深度 1)
+          # feeds.conf: 保留 SDK 自带的 feeds (packages/luci/routing 等), 追加 solarflows feed
+          if [ ! -f feeds.conf ] && [ -f feeds.conf.default ]; then
+            cp feeds.conf.default feeds.conf
+          fi
           echo "src-link ${{ inputs.packages_feed_name }} ${{ github.workspace }}/pkgs-feed/" >> feeds.conf
 
           # apk 签名: 私钥放在 SDK 根目录 (OpenWrt 构建系统读取 ./private-key.pem)
