@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 480
     concurrency:
-      group: packages-release-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
+      group: packages-release-${{ inputs.matrix_target }}-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
       cancel-in-progress: false
     env:
       # 刻意不叫 TARGET/HOST/ARCH: 这些名字会被 autoconf AX_ENABLE_BUILDDIR 等宏读取,

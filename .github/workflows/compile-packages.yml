@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
-      group: packages-release-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
+      group: packages-release-${{ inputs.matrix_target }}-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
       cancel-in-progress: false
     env:
       # 刻意加前缀: 裸 TARGET/HOST 会被 autoconf 的 AX_ENABLE_BUILDDIR 当作 builddir 名
