@@ -45,6 +45,43 @@ If libffi `compile.txt` is very small, approximately 461 bytes and 0.2 seconds i
 
 A half-configured ccache environment was an earlier hypothesis: an empty cache combined with exported `CC="ccache gcc"` and seed-level `CONFIG_CCACHE=y` could double-wrap compilers. It was not the verified cause of this failure. The workflow still guarantees that `no-cache` mode does not export `CC` or `CXX`, and first-pass logs remain available under `logs.1`.
 
+## shadowsocksr-libev src/configure 无执行位 (静默跳过 configure)
+
+### Symptom
+
+mt798x 构建在 `package/solarflows/shadowsocksr-libev` 失败, 两次尝试 (首轮 + 重试) 同一错误:
+
+```text
+make[4]: *** No targets specified and no makefile found.  Stop.
+```
+
+全构建 796 个日志中该签名只出现在这一个包。`logs.1/package/solarflows/shadowsocksr-libev/compile.txt` 中 patch (9 个) + autoreconf 之后**没有任何 `checking for...` configure 输出**, 直接进入 `make[4]`。
+
+### Verified Root Cause
+
+1. feed (`solarflows/openwrt-packages`) 的 `shadowsocksr-libev` 来自 `Openwrt-Passwall/openwrt-passwall-packages` (整体 clone + mvdir), 包 Makefile 无 `PKG_SOURCE_URL`, 源码在 `src/` 目录。
+2. 上游 `src/configure` 在 git 树中 mode=100644 (无执行位), 经 `cp`/rsync 复制保留 644。
+3. `Build/Configure/Default` 用 `if [ -x ./configure ]` 判断, 为假时**静默跳过 configure** (无输出、退出 0, `.configured` stamp 照常生成)。
+4. `PKG_FIXUP:=autoreconf` 注册的 `Hooks/Configure/Pre` 中, 根目录 `autoconf`/`automake` 未执行 (0001 patch 已把 configure 文件改新 → autoreconf 跳过; 命令尾 `|| true` 吞错), 旧 configure 无法被重新生成。
+5. compile 阶段 `make -C $(PKG_BUILD_DIR)` 找不到 Makefile → 报错。
+
+仅 `chmod +x configure` 不够: 旧 configure 仍是 pcre v1 检测 (patch 105 已把 configure.ac 升级到 PCRE2), 运行时会以可见的 "Package requirements (libpcre) were not met" 失败。也不能在 feed 里直接删除 `src/configure`: 构建时 quilt 应用的 `0001-Add-ss-server-and-ss-check.patch` 会 patch configure 文件, 删除后 quilt 应用失败。
+
+### Fix
+
+在 `OpenWRT_Packages_Updater.yml` 的全局补丁目录 `.github/diy/openwrt-packages/patches/` 添加 `fix-shadowsocksr-libev-configure.patch`, 修改包 Makefile, 注册一个 `Hooks/Prepare/Post` hook:
+
+```makefile
+define ShadowsocksR/Fixup/Prepare
+	rm -f $(PKG_BUILD_DIR)/configure
+endef
+Hooks/Prepare/Post += ShadowsocksR/Fixup/Prepare
+```
+
+`Hooks/Prepare/Post` 在 `Build/Prepare` (quilt 应用全部 patch) 之后执行, 此时 configure 已被 0001 patch 修改过 (quilt 应用成功), 删除后 `PKG_FIXUP:=autoreconf` 看到 configure 缺失必然从 configure.ac 重新生成 (configure.ac 已被 0001 + 105 patch 更新为 pcre2, autoconf 生成的 configure 自带执行位且内容正确)。不要动 `src/libsodium/configure` (其 autoreconf 正常, 日志证明被完整重建)。
+
+验证证据 (run #31559354153, commit bfb4c8b) — GitHub trees API: `100644 blob shadowsocksr-libev/src/configure`; 上游 `Openwrt-Passwall/openwrt-passwall-packages` 同名文件同样 100644; feed `main`/`qt6`/`mt798x`/`qualcommax` 四分支均受影响且该包 Makefile SHA 一致 (a7c20c1), 故用全局补丁一次覆盖。
+
 ## Cache Strategy
 
 The supported strategies are `smart`, `clean-toolchain`, `clean-ccache`, `clean-all`, and `no-cache`. `no-cache` skips ccache wrapping, restore, statistics, and cleanup so it can answer whether cache state contributes to a failure. When ccache is enabled, configure its size and compiler checks unconditionally; only wrapper export is conditional.

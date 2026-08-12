@@ -1,0 +1,17 @@
+--- a/shadowsocksr-libev/Makefile
++++ b/shadowsocksr-libev/Makefile
+@@ -53,6 +53,14 @@
+ 
+ TARGET_LDFLAGS += -Wl,--as-needed
+ 
++# fix: 仓库内 src/configure 无执行位 (100644) 且内容过时 (pcre v1 检测),
++# 在 quilt patch 应用完成后删除它, 强制 PKG_FIXUP:=autoreconf 从 configure.ac
++# 重新生成 (configure.ac 已含 PCRE2 检测, autoconf 输出带执行位)
++define ShadowsocksR/Fixup/Prepare
++	rm -f $(PKG_BUILD_DIR)/configure
++endef
++Hooks/Prepare/Post += ShadowsocksR/Fixup/Prepare
++
+ $(foreach component,$(SHADOWSOCKSR_COMPONENTS), \
+   $(eval $(call BuildPackage,shadowsocksr-libev-ssr-$(component))) \
+ )
