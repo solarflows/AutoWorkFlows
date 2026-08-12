@@ -1,5 +1,5 @@
 {
-  "_comment": "字段说明见同目录 README.md。本文件仅保存每个 target 的差异化配置。默认值统一在 firmware_builder_v2.yml 及 reusable workflow 的 inputs.default 中定义（可审计可版本化）。jq 解析时通过 `//` 兜底所有缺失字段。",
+  "_comment": "字段说明见同目录 README.md。本文件仅保存每个 target 的差异化配置。SDK 与 IB 统一发布到 artifacts_release_tag；默认值由 unified workflow 和 reusable workflow inputs 提供。",
   "targets": [
     {
       "target": "mt798x",
@@ -10,8 +10,7 @@
       "release_repo": "solarflows/immortalwrt-mt798x",
       "apk_signing": false,
       "sdk_container": "aarch64_cortex-a53-21.02.7",
-      "sdk_release_tag": "sdk-mt798x",
-      "ib_release_tag": "ib-mt798x"
+      "artifacts_release_tag": "artifacts-mt798x"
     },
     {
       "target": "qualcommax",
@@ -22,8 +21,7 @@
       "release_repo": "solarflows/ImmortalWrt-QualcommAX",
       "apk_signing": true,
       "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
-      "sdk_release_tag": "sdk-qualcommax",
-      "ib_release_tag": "ib-qualcommax"
+      "artifacts_release_tag": "artifacts-qualcommax"
     }
   ]
 }

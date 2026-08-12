@@ -1,6 +1,6 @@
 # Reusable workflow: compile-packages
 # 使用自建 SDK 编译指定的软件包列表 (替代 v1 的 compile-passwall + compile-packages)
-# 由 firmware-build.yml 调用
+# 由 firmware-build-unified.yml 调用
 name: Compile Packages
 
 on:
@@ -8,13 +8,17 @@ on:
     inputs:
       # ── 矩阵 target 完整描述 ──
       matrix_target:             { required: true, type: string }
+      matrix_repo:               { required: false, type: string, default: '' }
+      matrix_ref:                { required: false, type: string, default: '' }
       matrix_config:             { required: true, type: string }
       matrix_packages_branch:    { required: true, type: string }
       matrix_passwall_repo:      { required: true, type: string }
       matrix_passwall_tag:        { required: true, type: string }
+      matrix_firmware_release_repo: { required: false, type: string, default: '' }
       matrix_apk_signing:        { required: true, type: boolean }
-      matrix_sdk_release_repo:   { required: true, type: string }
-      matrix_sdk_release_tag:    { required: true, type: string }
+      matrix_build_sdk_ib:       { required: false, type: boolean, default: false }
+      matrix_artifacts_release_repo: { required: true, type: string }
+      matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_sdk_packages:       { required: false, type: string, default: '*' }
       # ── 默认值（workflow 内置）──
       defaults_repo:             { required: false, type: string, default: 'solarflows/AutoWorkflows' }
@@ -61,29 +65,36 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          TAG="${{ inputs.matrix_sdk_release_tag }}"
-          REPO="${{ inputs.matrix_sdk_release_repo }}"
+          TAG="${{ inputs.matrix_artifacts_release_tag }}"
+          REPO="${{ inputs.matrix_artifacts_release_repo }}"
 
           mkdir -p /tmp/sdk_index
-          (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "index.json" 2>/dev/null) || {
-            echo "::error::SDK index.json 不存在,build-via-sdk 不可用 (需先跑 build-firmware 生成 SDK)"
+          (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "sdk-index.json" 2>/dev/null) || {
+            echo "::error::sdk-index.json 不存在，SDK 增量路径不可用（需先跑 full 生成 SDK）"
             exit 1
           }
 
           # index.json 的 key 是源码 VERSION_NUMBER (如 21.02.7 / SNAPSHOT-20260801),
           # 与本次 run 的 inputs.sdk_version (构建时间戳) 无关,故取 built_at 最新的一条.
-          VERSION=$(jq -r 'to_entries | sort_by(.value.built_at) | last | .key // empty' /tmp/sdk_index/index.json)
-          SDK_FILE=$(jq -r --arg v "$VERSION" '.[$v].file // empty' /tmp/sdk_index/index.json)
+          VERSION=$(jq -r 'to_entries | sort_by(.value.built_at) | last | .key // empty' /tmp/sdk_index/sdk-index.json)
+          SDK_FILE=$(jq -r --arg v "$VERSION" '.[$v].file // empty' /tmp/sdk_index/sdk-index.json)
           if [ -z "$SDK_FILE" ]; then
             echo "::error::SDK index.json 中无可用版本"
-            jq . /tmp/sdk_index/index.json
+            jq . /tmp/sdk_index/sdk-index.json
             exit 1
           fi
           echo "📌 选用最新 SDK 版本: ${VERSION}"
-          SDK_SHA256=$(jq -r --arg v "$VERSION" '.[$v].sha256 // empty' /tmp/sdk_index/index.json)
+          SDK_SHA256=$(jq -r --arg v "$VERSION" '.[$v].sha256 // empty' /tmp/sdk_index/sdk-index.json)
+          SDK_SOURCE_SHA=$(jq -r --arg v "$VERSION" '.[$v].source_sha // empty' /tmp/sdk_index/sdk-index.json)
+          if [ -z "$SDK_SHA256" ] || [ -z "$SDK_SOURCE_SHA" ]; then
+            echo "::error::SDK index.json 的 ${VERSION} 记录缺少 sha256 或 source_sha"
+            exit 1
+          fi
 
           echo "sdk_file=${SDK_FILE}" >> $GITHUB_OUTPUT
           echo "sdk_sha256=${SDK_SHA256}" >> $GITHUB_OUTPUT
+          echo "sdk_version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "sdk_source_sha=${SDK_SOURCE_SHA}" >> $GITHUB_OUTPUT
           echo "📋 SDK: ${SDK_FILE}"
 
       - name: Download SDK tarball
@@ -91,13 +102,13 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           mkdir -p sdk-dl
-          gh release download "${{ inputs.matrix_sdk_release_tag }}" \
-            --repo "${{ inputs.matrix_sdk_release_repo }}" \
+          gh release download "${{ inputs.matrix_artifacts_release_tag }}" \
+            --repo "${{ inputs.matrix_artifacts_release_repo }}" \
             --pattern "${{ steps.resolve.outputs.sdk_file }}" \
             --pattern "${{ steps.resolve.outputs.sdk_file }}.sha256" \
             --dir sdk-dl/ 2>/dev/null || {
-              gh release download "${{ inputs.matrix_sdk_release_tag }}" \
-                --repo "${{ inputs.matrix_sdk_release_repo }}" \
+              gh release download "${{ inputs.matrix_artifacts_release_tag }}" \
+                --repo "${{ inputs.matrix_artifacts_release_repo }}" \
                 --pattern "${{ steps.resolve.outputs.sdk_file }}" \
                 --dir sdk-dl/
               (cd sdk-dl && sha256sum "${{ steps.resolve.outputs.sdk_file }}" > "${{ steps.resolve.outputs.sdk_file }}.sha256")
@@ -184,11 +195,14 @@ jobs:
           # 这也实现了「不再依赖 ghcr.io/openwrt/sdk:* 上游 Docker 容器」的目标
           cd sdk
 
-          # feeds.conf: 保留 SDK 自带的 feeds (packages/luci/routing 等), 追加 solarflows feed
-          if [ ! -f feeds.conf ] && [ -f feeds.conf.default ]; then
-            cp feeds.conf.default feeds.conf
-          fi
-          echo "src-link ${{ inputs.packages_feed_name }} ${{ github.workspace }}/pkgs-feed/" >> feeds.conf
+          # Match docker/sdk-test: put the local feed in package/ as a core-level
+          # overlay. OpenWrt keeps core packages ahead of upstream feed copies.
+          rm -rf "package/${{ inputs.packages_feed_name }}"
+          cp -rlf "${{ github.workspace }}/pkgs-feed" "package/${{ inputs.packages_feed_name }}"
+          test -f "package/${{ inputs.packages_feed_name }}/Makefile" || {
+            echo "::error::本地 packages feed 未正确复制到 SDK"
+            exit 1
+          }
 
           # apk 签名: 私钥放在 SDK 根目录 (OpenWrt 构建系统读取 ./private-key.pem)
           if [ "${{ inputs.matrix_apk_signing }}" = "true" ] && [ -f ../private-key.pem ]; then
@@ -197,21 +211,29 @@ jobs:
             cp ../public-key.pem ./public-key.pem 2>/dev/null || true
           fi
 
-          echo "::group::📋 Configure feeds"
+          echo "::group::📋 Configure feeds (local overlay first)"
           ./scripts/feeds update -a 2>&1
           ./scripts/feeds install -a 2>&1
           make defconfig 2>&1
           echo "::endgroup::"
 
-          # 按列表逐包编译 (失败不阻断,最后由 artifacts 统计结果)
+          FAILED_PACKAGES=""
+          # Compile each requested package and fail after collecting diagnostics.
           for pkg in $PACKAGES; do
             echo "::group::📦 Compile $pkg"
             make package/"$pkg"/download V=s 2>&1
-            make package/"$pkg"/compile \
-              BUILD_LOG=1 V=s -j$(nproc 2>/dev/null || echo 4) 2>&1 || \
-              echo "::warning::⚠️ $pkg build failed, continuing"
+            if ! make package/"$pkg"/compile \
+              BUILD_LOG=1 V=s -j$(nproc 2>/dev/null || echo 4) 2>&1; then
+              echo "::error::⚠️ $pkg build failed"
+              FAILED_PACKAGES="$FAILED_PACKAGES $pkg"
+            fi
             echo "::endgroup::"
           done
+
+          if [ -n "$FAILED_PACKAGES" ]; then
+            echo "::error::SDK packages failed:$FAILED_PACKAGES"
+            exit 1
+          fi
 
           # ── 目录树: SDK 编译产物 (排除中间目录) ──
           # 可选诊断展示: 管道失败(如 head 截断触发 SIGPIPE)不阻断构建
@@ -243,13 +265,15 @@ jobs:
           if [ -f public-key.pem ]; then
             cp public-key.pem upload/solarflows-apk-public.pem
           fi
+          PACKAGE_COUNT=$(find upload/ -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' \) 2>/dev/null | wc -l)
           FILE_COUNT=$(find upload/ -type f 2>/dev/null | wc -l)
+          echo "package_count=${PACKAGE_COUNT}" >> $GITHUB_OUTPUT
           echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
-          echo "📦 收集到 ${FILE_COUNT} 个文件"
+          echo "📦 收集到 ${PACKAGE_COUNT} 个软件包, ${FILE_COUNT} 个文件"
           ls -la upload/ 2>/dev/null || echo "  (空)"
 
       - name: Generate build info
-        if: steps.artifacts.outputs.file_count > 0
+        if: steps.artifacts.outputs.package_count > 0
         run: |
           PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
           PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
@@ -277,7 +301,7 @@ jobs:
           JSONEOF
 
       - name: Upload packages artifact
-        if: steps.artifacts.outputs.file_count > 0
+        if: steps.artifacts.outputs.package_count > 0
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-sdk-packages
@@ -285,15 +309,107 @@ jobs:
           retention-days: 7
 
       - name: Upload build info
-        if: steps.artifacts.outputs.file_count > 0
+        if: steps.artifacts.outputs.package_count > 0
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-sdk-build-info
           path: build-info.json
           retention-days: 7
 
+      - name: Resolve IB file for combined build
+        if: inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
+        id: resolve-ib
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ib_index
+          gh release download "${{ inputs.matrix_artifacts_release_tag }}" \
+            --repo "${{ inputs.matrix_artifacts_release_repo }}" \
+            --pattern ib-index.json --dir /tmp/ib_index
+          VERSION="${{ steps.resolve.outputs.sdk_version }}"
+          SDK_SOURCE_SHA="${{ steps.resolve.outputs.sdk_source_sha }}"
+          IB_FILE=$(jq -r --arg v "$VERSION" --arg src "$SDK_SOURCE_SHA" \
+            '.[$v] | select(.source_sha == $src) | .file // empty' /tmp/ib_index/ib-index.json)
+          [ -n "$IB_FILE" ] || {
+            echo "::error::没有与 SDK ${VERSION} (${SDK_SOURCE_SHA}) 同源的 IB"
+            exit 1
+          }
+          echo "ib_file=$IB_FILE" >> "$GITHUB_OUTPUT"
+          echo "ib_version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download and extract IB for combined build
+        if: inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p ib-dl ib
+          gh release download "${{ inputs.matrix_artifacts_release_tag }}" \
+            --repo "${{ inputs.matrix_artifacts_release_repo }}" \
+            --pattern "${{ steps.resolve-ib.outputs.ib_file }}" \
+            --pattern "${{ steps.resolve-ib.outputs.ib_file }}.sha256" \
+            --dir ib-dl
+          (cd ib-dl && sha256sum -c "${{ steps.resolve-ib.outputs.ib_file }}.sha256")
+          tar xf "ib-dl/${{ steps.resolve-ib.outputs.ib_file }}" -C ib --strip-components=1
+          mkdir -p ib/packages
+          find upload -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' \) -exec cp {} ib/packages/ \;
+
+      - name: Build firmware via IB from SDK packages
+        if: inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
+        id: build-ib
+        run: |
+          set -euo pipefail
+          SEED_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}"
+          PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
+            grep -E '^CONFIG_PACKAGE_[a-zA-Z0-9_-]+=y$' | \
+            sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | sort -u | tr '\n' ' ')
+          if [ "${{ inputs.matrix_apk_signing }}" = "true" ] && [ -f private-key.pem ]; then
+            export BUILD_KEY_APK_SEC="${GITHUB_WORKSPACE}/private-key.pem"
+            export BUILD_KEY_APK_PUB="${GITHUB_WORKSPACE}/public-key.pem"
+          fi
+          mkdir -p ib/release/firmware
+          cd ib
+          make image PACKAGES="$PACKAGES" 2>&1 | tee ib-build.log
+          find bin/targets -type f -not -path '*/packages/*' -exec cp {} release/firmware/ \;
+          test -n "$(find release/firmware -type f -print -quit)" || {
+            echo "::error::IB 未生成固件"
+            exit 1
+          }
+
+      - name: Upload combined firmware artifact
+        if: success() && inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.matrix_target }}-sdk-ib-firmware
+          path: ib/release/firmware
+          retention-days: 7
+
+      - name: Publish combined firmware
+        if: success() && inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0 && inputs.matrix_firmware_release_repo != ''
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          cat > combined-release.md <<EOF
+          ## ${{ inputs.matrix_target }} SDK + IB
+
+          - 软件版本: ${{ inputs.version }}
+          - IB 基线版本: ${{ steps.resolve-ib.outputs.ib_version }}
+          - packages: ${{ inputs.matrix_packages_branch }} @ $(git -C pkgs-feed rev-parse --short HEAD)
+          EOF
+          TAG="${{ inputs.version }}"
+          REPO="${{ inputs.matrix_firmware_release_repo }}"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPO" ib/release/firmware/* --clobber
+            gh release edit "$TAG" --repo "$REPO" --notes-file combined-release.md --draft=false
+          else
+            gh release create "$TAG" --repo "$REPO" --title "${{ inputs.matrix_target }} Build $TAG" \
+              --notes-file combined-release.md ib/release/firmware/*
+          fi
+
       - name: Publish SDK packages
-        if: steps.artifacts.outputs.file_count > 0
+        if: steps.artifacts.outputs.package_count > 0
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -318,7 +434,7 @@ jobs:
           fi
 
       - name: Upload published state
-        if: success() && steps.artifacts.outputs.file_count > 0
+        if: success() && steps.artifacts.outputs.package_count > 0
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-published-state

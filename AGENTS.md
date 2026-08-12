@@ -17,7 +17,7 @@ Automated CI/CD workflows for [solarflows/openwrt-packages](https://github.com/s
 
 ### Decision vs. Execution
 
-The `plan` job in `firmware-build.yml` owns all decisions: trigger mode, change detection, versioning, cache strategy. The three reusable workflows (`compile-firmware.yml`, `compile-packages.yml`, `build-via-ib.yml`) only execute. **Never add fallback or escalation logic to reusable workflows.**
+The `plan` job in `firmware-build-unified.yml` owns all decisions: trigger mode, change detection, versioning, cache strategy, and route selection. The active reusable workflows (`compile-firmware.yml`, `compile-packages.yml`) only execute. The SDK-only and SDK+IB package paths share `compile-packages.yml`; the standalone ImageBuilder workflow is archived. **Never add fallback or escalation logic to reusable workflows.**
 
 ### Workflow ↔ Target Separation
 
@@ -44,7 +44,7 @@ See [`.github/instructions/openwrt-build.instructions.md`](.github/instructions/
 
 ## Artifact Naming
 
-See [`.github/instructions/build-artifacts.instructions.md`](.github/instructions/build-artifacts.instructions.md) for SDK, ImageBuilder, and firmware naming conventions, checksum format, and release management.
+See [`.github/instructions/build-artifacts.instructions.md`](.github/instructions/build-artifacts.instructions.md) for SDK, ImageBuilder, and firmware naming conventions, shared artifact tags, checksum format, and release management.
 
 ## Build Diagnostics
 

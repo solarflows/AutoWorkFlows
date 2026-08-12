@@ -1,6 +1,8 @@
+# DEPRECATED: standalone ImageBuilder workflow archived after SDK/IB unification.
 # Reusable workflow: build-via-ib
 # 使用自建 ImageBuilder 重新打包固件 (远快于全量编译)
-# 由 firmware-build.yml 调用, 仅执行 IB 重打包; 是否构建由 plan 决策控制, 无失败回退
+# Formerly called by firmware-build.yml for standalone IB repacks. Use the unified
+# SDK firmware workflow for package changes; this file is retained for history only.
 name: Build Firmware via IB
 
 on:
@@ -19,6 +21,7 @@ on:
       matrix_ib_release_tag:     { required: true, type: string }
       matrix_ib_profile:         { required: false, type: string, default: '' }
       matrix_apk_signing:        { required: true, type: boolean }
+      matrix_build_sdk_pkgs:     { required: false, type: boolean, default: false }
       # ── 默认值（workflow 内置）──
       defaults_repo:             { required: false, type: string, default: 'solarflows/AutoWorkflows' }
       packages_feed_repo:        { required: false, type: string, default: 'solarflows/openwrt-packages' }
@@ -79,6 +82,7 @@ jobs:
           IB_SOURCE_SHA=$(jq -r --arg v "$VERSION" '.[$v].source_sha // empty' /tmp/ib_index/index.json)
 
           echo "ib_file=${IB_FILE}" >> $GITHUB_OUTPUT
+          echo "ib_source_version=${VERSION}" >> $GITHUB_OUTPUT
           echo "ib_sha256=${IB_SHA256}" >> $GITHUB_OUTPUT
           echo "ib_arch=${IB_ARCH}" >> $GITHUB_OUTPUT
           echo "ib_source_sha=${IB_SOURCE_SHA}" >> $GITHUB_OUTPUT
@@ -131,12 +135,23 @@ jobs:
           echo "packages_sha_full=${PKG_SHA_FULL}" >> $GITHUB_OUTPUT
 
       - name: Download pre-built ipks/apks (from build-via-sdk artifact)
+        if: inputs.matrix_build_sdk_pkgs == true
         id: dl_pkgs
         uses: actions/download-artifact@v8
         with:
           name: ${{ env.IMMWRT_TARGET }}-sdk-packages
           path: custom-packages/
-        continue-on-error: true
+
+      - name: Validate SDK packages artifact
+        if: inputs.matrix_build_sdk_pkgs == true
+        run: |
+          set -euo pipefail
+          PACKAGE_COUNT=$(find custom-packages -type f \( -name '*.ipk' -o -name '*.apk' \) | wc -l)
+          if [ "$PACKAGE_COUNT" -eq 0 ]; then
+            echo "::error::${IMMWRT_TARGET}-sdk-packages artifact 不包含可注入的 ipk/apk"
+            exit 1
+          fi
+          echo "📦 已下载 ${PACKAGE_COUNT} 个 SDK 软件包"
 
       - name: Inject custom packages into IB
         run: |
@@ -268,7 +283,9 @@ jobs:
             "toolchain_exact": "n/a",
             "ccache_hit": "n/a",
             "build_mode": "ib",
+            "software_version": "${{ inputs.version }}",
             "ib_version": "${{ inputs.ib_version }}",
+            "ib_source_version": "${{ steps.resolve.outputs.ib_source_version }}",
             "ib_file": "${{ steps.resolve.outputs.ib_file }}",
             "release_repo": "${{ inputs.matrix_release_repo }}",
             "release_tag": "${{ inputs.version }}",
@@ -282,6 +299,8 @@ jobs:
           {
             echo "## ${IMMWRT_TARGET} Build (via ImageBuilder)"
             echo ""
+            echo "**软件版本**: ${{ inputs.version }} (本次 SDK 软件包 + IB 增量重打包)"
+            echo "**复用 IB 基线**: ${{ steps.resolve.outputs.ib_source_version }} (仅更新软件包和固件输出)"
             echo "**源码**: [${{ inputs.matrix_ref }}](https://github.com/${{ inputs.matrix_repo }}) @ \`${{ steps.resolve.outputs.ib_source_sha }}\`"
             echo "**IB 版本**: ${{ inputs.ib_version }} (\`${{ steps.resolve.outputs.ib_file }}\`)"
             echo "**软件包**: [${{ inputs.matrix_packages_branch }}](https://github.com/${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) @ [${{ steps.pkgs_sha.outputs.packages_sha }}](https://github.com/${{ inputs.packages_feed_repo }}/commit/${{ steps.pkgs_sha.outputs.packages_sha_full }})"

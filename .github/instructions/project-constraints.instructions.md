@@ -51,7 +51,7 @@ Store last build commit SHA and artifact versions in the `IMMWRT_BUILD_STATE` re
 
 ### Concurrency control
 
-Use the fixed global concurrency group `firmware-build-v2`. Never scope by branch or PR (`firmware-build-${{ github.ref }}`). Parallel runs would write the same `sdk-<target>` / `ib-<target>` release tags simultaneously, causing artifact corruption and race conditions.
+Use the fixed global concurrency group `firmware-build-v2` for compatibility with the existing concurrency namespace. Never scope by branch or PR (`firmware-build-${{ github.ref }}`). Parallel runs would write the same `artifacts-<target>` release tag simultaneously, causing artifact corruption and race conditions.
 
 ### Authentication
 

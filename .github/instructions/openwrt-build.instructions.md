@@ -1,15 +1,15 @@
 ---
 description: "修改 OpenWrt/ImmortalWrt GitHub Actions 构建、缓存、SDK、ImageBuilder、固件发布或错误诊断时使用。"
-applyTo: [".github/workflows/compile-*.yml", ".github/workflows/repack-*.yml", ".github/workflows/firmware-build.yml"]
+applyTo: [".github/workflows/compile-*.yml", ".github/workflows/firmware-build-unified.yml"]
 ---
 
 # OpenWrt Build Workflows
 
 ## Architecture
 
-- `firmware-build.yml` is the orchestrator. Its `plan` job owns trigger, version, change-detection, cache, build, and publish decisions.
-- `compile-firmware.yml`, `compile-packages.yml`, and `build-via-ib.yml` are reusable executors; do not add fallback or escalation decisions to them.
-- Keep `run-firmware`, `run-imagebuilder`, and `run-packages` controlled by explicit `plan` outputs; `release` publishes only after a planned task succeeds.
+- `firmware-build-unified.yml` is the only active orchestrator. Its `plan` job owns trigger, version, change-detection, cache, build, and publish decisions.
+- `compile-firmware.yml` and `compile-packages.yml` are the active reusable executors; do not add fallback or escalation decisions to them.
+- Keep `run-firmware`, `run-sdk-ib`, and `run-packages` controlled by explicit `plan` outputs. `run-sdk-ib` uses `compile-packages.yml` with `matrix_build_sdk_ib=true`.
 
 ## Required Behavior
 
@@ -20,7 +20,7 @@ applyTo: [".github/workflows/compile-*.yml", ".github/workflows/repack-*.yml", "
 - After a successful save, purge all older entries for the current target under `immwrt-v2-toolchain-<target>-*` and `immwrt-v2-ccache-<target>-*`. The v2 policy is latest-only per target; it does not clean v1 or unrelated workflow caches.
 - In `no-cache` mode, do not export ccache `CC` or `CXX` wrappers. Configure ccache unconditionally when ccache is enabled, but export wrappers only when the selected strategy permits them.
 - Keep the global concurrency group `firmware-build-v2` fixed. Do not scope it per-ref; two parallel runs would write the same `sdk-*`/`ib-*`/`packages` tags and pollute remote repos.
-- Store SDK and ImageBuilder versions under `sdk-<target>` and `ib-<target>` release tags. Replace same-version files and retain the configured number of distinct versions.
+- Store SDK and ImageBuilder versions under the shared `artifacts-<target>` release tag. Keep `sdk-index.json` and `ib-index.json` separate, replace same-version files, and retain the configured number of distinct versions for each artifact type.
 - Keep version sorting numeric and aware of SNAPSHOT and `V<n>` tokens.
 - Match SDK/ImageBuilder artifacts with `*-sdk-*.tar.*` / `*-imagebuilder-*.tar.*` (upstream names are `<dist>-sdk-*` / `<dist>-imagebuilder-*`); strip the embedded version prefix with the non-dated `patched_version` (post-SNAPSHOT-substitution, the version the tarball was actually built with), never the dated `source_version`, when extracting the arch.
 - Resolve the source version to a plain string before using it in shell scripts or `index.json` keys. `include/version.mk` may define `VERSION_NUMBER` as a make expression (`$(call qstrip,$(CONFIG_VERSION_NUMBER))` + a `$(if ...)` fallback); do not `grep`/`cut` that line directly — the expression would be injected into shell steps and fail with `command not found` (exit 127). Resolve in order: `.config`'s `CONFIG_VERSION_NUMBER`, then literal `VERSION_NUMBER:=`, then the `$(if ...)` fallback literal, then `SNAPSHOT`.

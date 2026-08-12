@@ -14,5 +14,5 @@ CONFIG_DEVEL=y                     # 开发者模式（保留源码树）
 CONFIG_CCACHE=y                    # 编译缓存加速
 CONFIG_BUILD_LOG=y                 # 输出编译日志
 CONFIG_SIGNED_PACKAGES=y           # APK 包签名
-CONFIG_SDK=y                       # 生成 SDK tarball (v2: build-via-sdk 使用,apk 格式)
-CONFIG_IB=y                        # 生成 ImageBuilder tarball (v2: build-via-ib 使用)
+CONFIG_SDK=y                       # 生成 SDK tarball，供 packages-only 路径复用（APK 格式）
+CONFIG_IB=y                        # 生成 IB tarball，供 SDK+IB 快速重打包路径复用

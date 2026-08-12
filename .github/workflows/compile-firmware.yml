@@ -1,6 +1,6 @@
 # Reusable workflow: compile-firmware
 # 全量编译 ImmortalWrt 固件 + 产出 SDK / ImageBuilder tarball 上传到 Release
-# 由 firmware-build.yml (plan job) 调用，workflow_call 触发
+# 由 firmware-build-unified.yml (plan job) 调用，workflow_call 触发
 name: Compile Firmware
 
 on:
@@ -16,14 +16,10 @@ on:
       matrix_passwall_repo: { required: true, type: string }
       matrix_passwall_tag:  { required: true, type: string }
       matrix_apk_signing:   { required: true, type: boolean }
-      matrix_sdk_release_repo: { required: true, type: string }
-      matrix_sdk_release_tag:  { required: true, type: string }
-      matrix_ib_release_repo:  { required: true, type: string }
-      matrix_ib_release_tag:   { required: true, type: string }
-      matrix_ib_keep_versions: { required: true, type: number  }
-      matrix_sdk_keep_versions: { required: false, type: number, default: 7 }
-      matrix_ib_profile:       { required: false, type: string, default: '' }
-      # ── 默认值（workflow 内置;调用方不传则用这里,见 firmware_builder_v2 env）──
+      matrix_artifacts_release_repo: { required: true, type: string }
+      matrix_artifacts_release_tag:  { required: true, type: string }
+      matrix_artifacts_keep_versions: { required: false, type: number, default: 7 }
+      # ── 默认值（workflow 内置;调用方不传则用这里,见 firmware-build-unified env）──
       defaults_repo:        { required: false, type: string, default: 'solarflows/AutoWorkflows' }
       packages_feed_repo:   { required: false, type: string, default: 'solarflows/openwrt-packages' }
       packages_feed_name:   { required: false, type: string, default: 'solarflows' }
@@ -84,7 +80,7 @@ jobs:
           echo "packages_sha=${PKG_SHA}" >> $GITHUB_OUTPUT
           echo "packages_sha_full=${PKG_SHA_FULL}" >> $GITHUB_OUTPUT
 
-      # ───────── 磁盘空间监控（第 1 阶段：初始状态）─────────
+          # ───────── 磁盘空间监控（第 1 阶段：初始状态）─────────
       # 刻意设计: 4 阶段磁盘监控用于诊断空间不足/缓存膨胀, 数据写入 outputs 供最后汇总表
       - name: 💽 Disk space · Initial
         id: disk-1
@@ -1113,9 +1109,9 @@ jobs:
               --notes "Multi-target passwall packages" --latest=false "${PACKAGE_FILES[@]}"
           fi
 
-      # ════════ SDK / IB 打包与发布 (v2 新增) ════════
-      # 刻意设计: SDK/IB 以 release tag (sdk-<target> / ib-<target>) 存储多版本,
-      # 同名版本 --clobber 替换, 异名版本按版本号保留最近 KEEP 组 (index.json 追踪)。
+      # ════════ SDK / IB 打包与发布 ════════
+      # SDK and IB share one per-target release tag. Their indexes stay separate
+      # because the two asset types have different consumers.
       - name: 📦 Package SDK & IB tarballs
         if: success() && inputs.publish_sdk_ib == true
         id: sdk_ib
@@ -1132,7 +1128,7 @@ jobs:
           SDK_TARBALL=$(find bin/targets -type f \( -name '*-sdk-*.tar.xz' -o -name '*-sdk-*.tar.zst' \) | head -1)
           if [ -n "$SDK_TARBALL" ]; then
             cp "$SDK_TARBALL" release/sdk/
-            # v2 命名: sdk-<target>-<version>-<arch>.tar.{xz,zst} (version 来自 version.mk)
+            # 统一命名: sdk-<target>-<version>-<arch>.tar.{xz,zst} (version 来自 version.mk)
             SDK_VERSION="${{ steps.apply_config.outputs.source_version }}"
             # 防御: 版本号必须是纯字符串, 残留 make 表达式则显式报错 (曾发生 exit 127)
             case "$SDK_VERSION" in
@@ -1204,20 +1200,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          TAG="${{ inputs.matrix_sdk_release_tag }}"
-          REPO="${{ inputs.matrix_sdk_release_repo }}"
+          TAG="${{ inputs.matrix_artifacts_release_tag }}"
+          REPO="${{ inputs.matrix_artifacts_release_repo }}"
           # 确保 release 存在 (非 draft, 多版本共存)
           gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
             gh release create "$TAG" --repo "$REPO" \
-              --title "${TAG} Builds" --notes "Multi-version SDK builds (${IMMWRT_TARGET})" --latest=false
+              --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false
           SDK_FILE="openwrt/release/sdk/${{ steps.sdk_ib.outputs.sdk_new_name }}"
           SDK_SHA="${SDK_FILE}.sha256"
           gh release upload "$TAG" --repo "$REPO" "$SDK_FILE" "$SDK_SHA" --clobber
           echo "📤 SDK 已上传到 ${REPO}@${TAG}"
 
-          # ── 更新 index.json ──
+          # ── 更新 sdk-index.json ──
           mkdir -p /tmp/sdk_index
-          (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "index.json" 2>/dev/null) || echo '{}' > /tmp/sdk_index/index.json
+          (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "sdk-index.json" 2>/dev/null) || echo '{}' > /tmp/sdk_index/sdk-index.json
           SHA256=$(cat "$SDK_SHA" | awk '{print $1}')
           jq --arg v "${{ steps.sdk_ib.outputs.sdk_version_key }}" \
              --arg f "${{ steps.sdk_ib.outputs.sdk_new_name }}" \
@@ -1226,16 +1222,16 @@ jobs:
              --arg arch "${{ steps.sdk_ib.outputs.sdk_arch }}" \
              --arg ts "$(TZ=$TZ date -Iseconds)" \
              '.[$v] = {file:$f, sha256:$s, source_sha:$src, arch:$arch, built_at:$ts}' \
-             /tmp/sdk_index/index.json > /tmp/sdk_index/index_new.json
+             /tmp/sdk_index/sdk-index.json > /tmp/sdk_index/sdk-index_new.json
           # 按 version 号排序 + 保留最近 N 个版本 (健壮比较: 数字段按数值, SNAPSHOT=-1, V<数字> 解析数字)
-          KEEP=${{ inputs.matrix_sdk_keep_versions }}
+          KEEP=${{ inputs.matrix_artifacts_keep_versions }}
           jq --argjson n "$KEEP" '
             def vtok: if test("^[0-9]+$") then tonumber
                       elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
                       elif . == "SNAPSHOT" then -1 else 0 end;
             to_entries | sort_by([.key | splits("[.-]") | vtok]) | .[-$n:] | from_entries
-          ' /tmp/sdk_index/index_new.json > /tmp/sdk_index/index.json
-          gh release upload "$TAG" --repo "$REPO" /tmp/sdk_index/index.json --clobber
+          ' /tmp/sdk_index/sdk-index_new.json > /tmp/sdk_index/sdk-index.json
+          gh release upload "$TAG" --repo "$REPO" /tmp/sdk_index/sdk-index.json --clobber
 
           # ── 清理旧版本 tarball (同名由 --clobber 替换; 异名按版本号保留最近 KEEP 组) ──
           NEW_FILE="${{ steps.sdk_ib.outputs.sdk_new_name }}"
@@ -1268,19 +1264,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          TAG="${{ inputs.matrix_ib_release_tag }}"
-          REPO="${{ inputs.matrix_ib_release_repo }}"
+          TAG="${{ inputs.matrix_artifacts_release_tag }}"
+          REPO="${{ inputs.matrix_artifacts_release_repo }}"
           gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
             gh release create "$TAG" --repo "$REPO" \
-              --title "${TAG} Builds" --notes "Multi-version ImageBuilder builds (${IMMWRT_TARGET})" --latest=false
+              --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false
           IB_FILE="openwrt/release/ib/${{ steps.sdk_ib.outputs.ib_new_name }}"
           IB_SHA="${IB_FILE}.sha256"
           gh release upload "$TAG" --repo "$REPO" "$IB_FILE" "$IB_SHA" --clobber
           echo "📤 IB 已上传到 ${REPO}@${TAG}"
 
-          # 更新 index.json (同 SDK 逻辑)
+          # ── 更新 ib-index.json ──
           mkdir -p /tmp/ib_index
-          (cd /tmp/ib_index && gh release download "$TAG" --repo "$REPO" --pattern "index.json" 2>/dev/null) || echo '{}' > /tmp/ib_index/index.json
+          (cd /tmp/ib_index && gh release download "$TAG" --repo "$REPO" --pattern "ib-index.json" 2>/dev/null) || echo '{}' > /tmp/ib_index/ib-index.json
           SHA256=$(cat "$IB_SHA" | awk '{print $1}')
           jq --arg v "${{ steps.sdk_ib.outputs.ib_version_key }}" \
              --arg f "${{ steps.sdk_ib.outputs.ib_new_name }}" \
@@ -1289,15 +1285,15 @@ jobs:
              --arg arch "${{ steps.sdk_ib.outputs.ib_arch }}" \
              --arg ts "$(TZ=$TZ date -Iseconds)" \
              '.[$v] = {file:$f, sha256:$s, source_sha:$src, arch:$arch, built_at:$ts}' \
-             /tmp/ib_index/index.json > /tmp/ib_index/index_new.json
-          KEEP=${{ inputs.matrix_ib_keep_versions }}
+             /tmp/ib_index/ib-index.json > /tmp/ib_index/ib-index_new.json
+           KEEP=${{ inputs.matrix_artifacts_keep_versions }}
           jq --argjson n "$KEEP" '
             def vtok: if test("^[0-9]+$") then tonumber
                       elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
                       elif . == "SNAPSHOT" then -1 else 0 end;
             to_entries | sort_by([.key | splits("[.-]") | vtok]) | .[-$n:] | from_entries
-          ' /tmp/ib_index/index_new.json > /tmp/ib_index/index.json
-          gh release upload "$TAG" --repo "$REPO" /tmp/ib_index/index.json --clobber
+          ' /tmp/ib_index/ib-index_new.json > /tmp/ib_index/ib-index.json
+          gh release upload "$TAG" --repo "$REPO" /tmp/ib_index/ib-index.json --clobber
 
           # ── 清理旧版本 tarball (同名由 --clobber 替换; 异名按版本号保留最近 KEEP 组) ──
           NEW_FILE="${{ steps.sdk_ib.outputs.ib_new_name }}"

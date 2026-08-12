@@ -1,4 +1,6 @@
-﻿name: ImmortalWrt Builder
+﻿# DEPRECATED: v1 workflow archived after unified SDK firmware workflow adoption.
+# It is retained for historical builds and is no longer maintained.
+name: ImmortalWrt Builder
 
 on:
   workflow_dispatch:
