@@ -436,11 +436,11 @@ jobs:
             fi
             if ! jq -e '
               type == "object" and
-              ([to_entries[] | select(.value.file != null and .value.file != "")]
-                | sort_by(.value.built_at) | last) as $entry and
-              $entry != null and
-              ($entry.value.sha256 // "") != "" and
-              ($entry.value.source_sha // "") != ""
+              (([to_entries[] | select(.value.file != null and .value.file != "")]
+                | sort_by(.value.built_at) | last) as $entry
+               | ($entry != null
+                  and ($entry.value.sha256 // "") != ""
+                  and ($entry.value.source_sha // "") != ""))
             ' "$PROBE_DIR/$INDEX_NAME" > "$PROBE_DIR/selected.json"; then
               echo "::warning::[${MATRIX_TARGET}] ${INDEX_NAME} 没有完整的 file/sha256/source_sha 记录"
               return 1

@@ -439,61 +439,6 @@ jobs:
           echo "duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
           echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $(((END_TIME-START_TIME)/3600)) $((((END_TIME-START_TIME)%3600)/60)) $(((END_TIME-START_TIME)%60)))"
 
-          # ── 目录树: 编译核心产物 bin/targets + bin/packages ──
-          # 可选诊断展示: 管道失败(如 head 截断触发 SIGPIPE)不阻断构建
-          echo ""
-          echo "📂 bin/ 产物目录树 (编译后):"
-          echo '```text'
-          find bin -maxdepth 5 \
-            -not -path '*/staging_dir*' -not -path '*/build_dir*' -not -path '*/tmp*' -not -path '*/.git/*' \
-            -print 2>/dev/null | sort | sed 's|^bin|.|' | head -120 || true
-          echo '```'
-
-      # ───────── 磁盘空间监控（第 4 阶段：编译后 + 4 阶段汇总表）─────────
-      - name: 💽 Disk space · After build
-        if: always()
-        id: disk-4
-        run: |
-          echo "📊 编译后磁盘空间"
-          df -h / | awk 'NR==1{print} NR==2{print}'
-          TOTAL_KB=$(df --output=size / | tail -1)
-          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
-          AVAIL_KB=$(df --output=avail / | tail -1)
-          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
-          USED_GB=$((TOTAL_GB - AVAIL_GB))
-          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
-          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
-          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
-          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
-          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
-          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
-          echo "  📂 openwrt/        : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
-          echo "    ├─ staging_dir/  : $(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
-          echo "    ├─ .ccache/      : $(du -sh openwrt/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
-          echo "    ├─ dl/           : $(du -sh openwrt/dl 2>/dev/null | cut -f1 || echo 'N/A')"
-          echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
-
-          # ── 计算各阶段空间消耗差值 ──
-          D1_USED=${{ steps.disk-1.outputs.used_gb || 0 }}
-          D2_USED=${{ steps.disk-2.outputs.used_gb || 0 }}
-          D3_USED=${{ steps.disk-3.outputs.used_gb || 0 }}
-          D4_USED=${USED_GB}
-          DELTA_1_2=$((D2_USED - D1_USED))
-          DELTA_2_3=$((D3_USED - D2_USED))
-          DELTA_3_4=$((D4_USED - D3_USED))
-          fmt_delta() { local d=$1; if [ "$d" -ge 0 ]; then echo "+${d}G"; else echo "${d}G"; fi; }
-
-          {
-            echo ""
-            echo "### 💽 磁盘空间变化"
-            echo "| 阶段 | 总容量 | 已用 | 已用% | 阶段消耗 |"
-            echo "|------|--------|------|-------|----------|"
-            echo "| ① 初始 | ${TOTAL_GB}G | ${D1_USED}G | ${{ steps.disk-1.outputs.used_pct || 'N/A' }}% | — |"
-            echo "| ② 环境准备后 | ${TOTAL_GB}G | ${D2_USED}G | ${{ steps.disk-2.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_1_2) |"
-            echo "| ③ 编译前 | ${TOTAL_GB}G | ${D3_USED}G | ${{ steps.disk-3.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_2_3) |"
-            echo "| ④ 编译后 | ${TOTAL_GB}G | ${D4_USED}G | ${USED_PCT}% | $(fmt_delta $DELTA_3_4) |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
       # ───────── 重试编译（并行失败后更新仓库再试, 保留初次日志 logs.1）─────────
       # 刻意设计: 失败后先 git pull 最新源码再重试(上游可能已修),
       # logs/ → logs.1/ 保留初次轮日志用于对比诊断; 单线程轮用 V=sc 输出完整日志
@@ -539,6 +484,51 @@ jobs:
             exit 1
           fi
           echo "✅ 重试完成"
+
+      # ───────── 磁盘空间监控（第 4 阶段：编译后 + 4 阶段汇总表）─────────
+      - name: 💽 Disk space · After build
+        if: always()
+        id: disk-4
+        run: |
+          echo "📊 编译后磁盘空间"
+          df -h / | awk 'NR==1{print} NR==2{print}'
+          TOTAL_KB=$(df --output=size / | tail -1)
+          TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
+          AVAIL_KB=$(df --output=avail / | tail -1)
+          AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+          USED_GB=$((TOTAL_GB - AVAIL_GB))
+          USED_PCT=$(df --output=pcent / | tail -1 | tr -d ' %')
+          echo "total_gb=${TOTAL_GB}" >> $GITHUB_OUTPUT
+          echo "used_gb=${USED_GB}" >> $GITHUB_OUTPUT
+          echo "avail_gb=${AVAIL_GB}" >> $GITHUB_OUTPUT
+          echo "used_pct=${USED_PCT}" >> $GITHUB_OUTPUT
+          echo "📊 总容量: ${TOTAL_GB}G | 已用: ${USED_GB}G (${USED_PCT}%) | 可用: ${AVAIL_GB}G"
+          echo "  📂 openwrt/        : $(du -sh openwrt 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ staging_dir/  : $(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ .ccache/      : $(du -sh openwrt/.ccache 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    ├─ dl/           : $(du -sh openwrt/dl 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
+
+          # ── 计算各阶段空间消耗差值 ──
+          D1_USED=${{ steps.disk-1.outputs.used_gb || 0 }}
+          D2_USED=${{ steps.disk-2.outputs.used_gb || 0 }}
+          D3_USED=${{ steps.disk-3.outputs.used_gb || 0 }}
+          D4_USED=${USED_GB}
+          DELTA_1_2=$((D2_USED - D1_USED))
+          DELTA_2_3=$((D3_USED - D2_USED))
+          DELTA_3_4=$((D4_USED - D3_USED))
+          fmt_delta() { local d=$1; if [ "$d" -ge 0 ]; then echo "+${d}G"; else echo "${d}G"; fi; }
+
+          {
+            echo ""
+            echo "### 💽 磁盘空间变化"
+            echo "| 阶段 | 总容量 | 已用 | 已用% | 阶段消耗 |"
+            echo "|------|--------|------|-------|----------|"
+            echo "| ① 初始 | ${TOTAL_GB}G | ${D1_USED}G | ${{ steps.disk-1.outputs.used_pct || 'N/A' }}% | — |"
+            echo "| ② 环境准备后 | ${TOTAL_GB}G | ${D2_USED}G | ${{ steps.disk-2.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_1_2) |"
+            echo "| ③ 编译前 | ${TOTAL_GB}G | ${D3_USED}G | ${{ steps.disk-3.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_2_3) |"
+            echo "| ④ 编译后 | ${TOTAL_GB}G | ${D4_USED}G | ${USED_PCT}% | $(fmt_delta $DELTA_3_4) |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # ───────── 总耗时汇总 ─────────
       - name: ⏱️ Total Build Duration

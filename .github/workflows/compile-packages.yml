@@ -235,16 +235,6 @@ jobs:
             exit 1
           fi
 
-          # ── 目录树: SDK 编译产物 (排除中间目录) ──
-          # 可选诊断展示: 管道失败(如 head 截断触发 SIGPIPE)不阻断构建
-          echo ""
-          echo "📂 sdk/bin/packages/ 目录树 (编译后):"
-          echo '```text'
-          find bin/packages -maxdepth 4 \
-            -not -path '*/staging_dir*' -not -path '*/build_dir*' -not -path '*/.git/*' \
-            -print 2>/dev/null | sort | sed 's|^bin/packages|.|' | head -100 || true
-          echo '```'
-
       - name: Collect artifacts
         id: artifacts
         run: |
@@ -270,7 +260,14 @@ jobs:
           echo "package_count=${PACKAGE_COUNT}" >> $GITHUB_OUTPUT
           echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
           echo "📦 收集到 ${PACKAGE_COUNT} 个软件包, ${FILE_COUNT} 个文件"
-          ls -la upload/ 2>/dev/null || echo "  (空)"
+
+          # ── 目录树: 整理好的 upload/ 交付物 (编译后 bin/ 已被过滤, 只展示最终整理结果) ──
+          # 可选诊断展示: 管道失败(如 head 截断触发 SIGPIPE)不阻断构建
+          echo ""
+          echo "📂 upload/ 完整目录结构 (整理后):"
+          echo '```text'
+          find upload -print 2>/dev/null | sort | sed 's|^upload|.|' | head -200 || true
+          echo '```'
 
       - name: Generate build info
         if: steps.artifacts.outputs.package_count > 0
