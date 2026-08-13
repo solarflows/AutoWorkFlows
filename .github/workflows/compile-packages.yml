@@ -266,9 +266,11 @@ jobs:
           # Match scripts/docker/sdk-test (本地复现脚本): put the local feed in
           # package/ as a core-level overlay. OpenWrt keeps core packages ahead of
           # upstream feed copies.
+          # openwrt-packages 是「软件包集合」仓库: 根目录无 Makefile, 每个包子
+          # 目录才有 Makefile。故校验「递归存在至少一个 Makefile」而非根目录 Makefile。
           rm -rf "package/${{ inputs.packages_feed_name }}"
           cp -rlf "${{ github.workspace }}/pkgs-feed" "package/${{ inputs.packages_feed_name }}"
-          test -f "package/${{ inputs.packages_feed_name }}/Makefile" || {
+          [ -n "$(find "package/${{ inputs.packages_feed_name }}" -name Makefile -print -quit 2>/dev/null)" ] || {
             echo "::error::本地 packages feed 未正确复制到 SDK"
             exit 1
           }
