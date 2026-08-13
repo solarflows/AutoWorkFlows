@@ -2,12 +2,12 @@ diff --git a/luci-app-passwall/luasrc/controller/passwall.lua b/luci-app-passwal
 index 7f373a9..3c672ce 100644
 --- a/luci-app-passwall/luasrc/controller/passwall.lua
 +++ b/luci-app-passwall/luasrc/controller/passwall.lua
-@@ -102,1 +102,3 @@ function index()
--	entry({"admin", "services", appname, "save_shunt_rule_order"}, call("save_shunt_rule_order")).leaf = true
-+	entry({"admin", "services", appname, "save_shunt_rule_order"}, call("save_shunt_rule_order")).leaf = true
+@@ -102,2 +102,4 @@ function index()
+ 	entry({"admin", "services", appname, "ping_node"}, call("ping_node")).leaf = true
+ 	entry({"admin", "services", appname, "urltest_node"}, call("urltest_node")).leaf = true
 +	-- 新增IP信息查询路由
 +	entry({"admin", "services", appname, "ip_info"}, call("ip_info")).leaf = true
-@@ -439,1 +439,33 @@ function connect_status()
+@@ -439,1 +439,32 @@ function connect_status()
 -function ping_node()
 +-- IP信息查询接口
 +function ip_info()
@@ -41,38 +41,6 @@ index 7f373a9..3c672ce 100644
 +end
 +
 +function ping_node()
-+-- IP信息查询接口
-+function ip_info()
-+	local e = {}
-+	local args = {
-+		"-skfL",
-+		"--connect-timeout 3",
-+		"--max-time 10",
-+		"-H 'Accept: application/json'",
-+		"-A 'passwall-ip-check'"
-+	}
-+	local return_code, result = api.curl_auto("https://ip.api.skk.moe/cf-geoip", nil, args)
-+
-+	if return_code ~= 0 or not result or result == "" then
-+		e.error = "Network request failed"
-+	else
-+		local ok, data = pcall(jsonParse, result)
-+		if not ok or type(data) ~= "table" or not data.ip or not data.country then
-+			e.error = "Invalid API response"
-+		else
-+			e.ip = data.ip
-+			e.country = data.country
-+			e.city = data.city or ""
-+			e.region = data.region or ""
-+			e.asn = data.asn
-+			e.asOrg = data.asOrg
-+		end
-+	end
-+
-+	http_write_json(e)
-+end
-+
- function ping_node()
  	local index = http.formvalue("index")
  	local address = http.formvalue("address")
 diff --git a/luci-app-passwall/luasrc/view/passwall/global/status.htm b/luci-app-passwall/luasrc/view/passwall/global/status.htm
