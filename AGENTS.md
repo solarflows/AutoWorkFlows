@@ -34,6 +34,18 @@ The `plan` job in `firmware-build-unified.yml` owns all decisions: trigger mode,
 
 Platform differences are encoded in the respective seed directories.
 
+### Package Signing (IPK vs APK)
+
+Signing is auto-detected from the build config, never statically configured. Detection reads `CONFIG_USE_APK=y` in `.config` (full build) or `config USE_APK` in SDK `Config-build.in` (SDK/IB path).
+
+| | mt798x | qualcommax |
+|:--|:--|:--|
+| Format | IPK (opkg) | APK (apk) |
+| Signing | usign Ed25519 — `USIGN_KEY` → `key-build` | openssl ECDSA prime256v1 — `APK_BUILD_KEY` → `private-key.pem` |
+| Public key | derived from private (104-byte seckey structure) | derived via `openssl ec -pubout` |
+
+A single `Setup Signing Key` step runs after `make defconfig` and outputs `sign_mode` (`apk` / `usign` / `random` / `none`). See [docs/signing-ipk-apk-plan.md](docs/signing-ipk-apk-plan.md).
+
 ## Modifying Build Configs
 
 See [`.github/instructions/openwrt-config.instructions.md`](.github/instructions/openwrt-config.instructions.md) for seed file format, sdk.config usage, and target configuration rules.

@@ -14,5 +14,8 @@ Thumbs.db
 .reasonix/
 .diagnostics/
 
+# 本地工具状态（GitHub CLI 等，不入库）
+.local/
+
 # 临时对比/工具脚本（不入库）
 /scripts/
