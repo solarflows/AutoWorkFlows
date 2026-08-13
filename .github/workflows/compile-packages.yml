@@ -15,7 +15,6 @@ on:
       matrix_passwall_repo:      { required: true, type: string }
       matrix_passwall_tag:        { required: true, type: string }
       matrix_firmware_release_repo: { required: false, type: string, default: '' }
-      matrix_apk_signing:        { required: true, type: boolean }
       matrix_build_sdk_ib:       { required: false, type: boolean, default: false }
       matrix_artifacts_release_repo: { required: true, type: string }
       matrix_artifacts_release_tag:  { required: true, type: string }
@@ -30,6 +29,7 @@ on:
     secrets:
       ACCESS_TOKEN:              { required: true }
       APK_BUILD_KEY:             { required: false }
+      USIGN_KEY:                 { required: false }
 
 env:
   TZ: Asia/Shanghai
@@ -126,38 +126,106 @@ jobs:
           echo "SDK 解包完成"
           ls sdk/
 
-      - name: Setup APK Signing Key
-        if: inputs.matrix_apk_signing == true
+      - name: Setup Signing Key
+        id: signing_key
         env:
           APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
+          USIGN_KEY:     ${{ secrets.USIGN_KEY }}
         run: |
-          if [ -z "$APK_BUILD_KEY" ]; then
-            echo "ℹ️ APK_BUILD_KEY 未设置,跳过"
-            exit 0
-          fi
-          printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > private-key.pem
-          chmod 600 private-key.pem
-          sed -i 's/\r$//' private-key.pem
-
-          # ── 私钥格式校验 (对齐 compile-firmware): 无效密钥明确报错但继续构建 ──
-          echo "🔍 验证密钥格式..."
-          if openssl ec -in private-key.pem -check -noout 2>/dev/null; then
-            echo "✅ ECDSA 私钥格式验证通过"
-          elif openssl rsa -in private-key.pem -check -noout 2>/dev/null; then
-            echo "::warning::APK_BUILD_KEY 是 RSA 密钥, ImmortalWrt APK 构建系统默认使用 ECDSA prime256v1"
-            echo "::notice::建议重新生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
+          set -euo pipefail
+          # 包管理器从 SDK 的 Config-build.in 探测 (convert-config.pl 把 .config 转成
+          # Kconfig 格式: CONFIG_USE_APK=y → "config USE_APK ... default y"; 21.02 无此
+          # 选项), 而非 targets.json 的静态字段 (分支升级到 snapshot 会失效)。
+          if grep -q '^config USE_APK' sdk/Config-build.in 2>/dev/null; then
+            USE_APK=true
           else
-            KEY_HEADER=$(head -c 50 private-key.pem 2>/dev/null)
-            echo "::error::APK_BUILD_KEY 不是有效的 PEM 格式私钥 (需要 ECDSA prime256v1 或 RSA)"
-            echo "::notice::密钥头部: ${KEY_HEADER}"
-            echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续以完成 SDK 编译"
-            rm -f private-key.pem
-            exit 0
+            USE_APK=false
+          fi
+          echo "use_apk=${USE_APK}" >> $GITHUB_OUTPUT
+
+          if [ "$USE_APK" = "true" ]; then
+            # ════════════ APK 签名 (ECDSA/RSA PEM) ════════════
+            SIGN_MODE="apk"
+            if [ -z "$APK_BUILD_KEY" ]; then
+              echo "::warning::APK_BUILD_KEY secret 未设置 — 产物未签名, 设备 apk add 需 --allow-untrusted"
+              echo "sign_mode=random" >> $GITHUB_OUTPUT
+              echo "fingerprint=none" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            # 防泄漏: printf 而非 echo, chmod 600, 只输出字节数/指纹不输出内容。
+            printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > private-key.pem
+            chmod 600 private-key.pem
+            sed -i 's/\r$//' private-key.pem
+
+            echo "🔍 验证密钥格式..."
+            if openssl ec -in private-key.pem -check -noout 2>/dev/null; then
+              echo "✅ ECDSA 私钥格式验证通过"
+            elif openssl rsa -in private-key.pem -check -noout 2>/dev/null; then
+              echo "::warning::APK_BUILD_KEY 是 RSA 密钥, ImmortalWrt APK 构建系统默认使用 ECDSA prime256v1"
+              echo "::notice::建议重新生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
+            else
+              KEY_HEADER=$(head -c 50 private-key.pem 2>/dev/null)
+              echo "::error::APK_BUILD_KEY 不是有效的 PEM 格式私钥 (需要 ECDSA prime256v1 或 RSA)"
+              echo "::notice::密钥头部(仅 PEM header, 不含密钥): ${KEY_HEADER}"
+              echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续以完成 SDK 编译"
+              rm -f private-key.pem
+              echo "sign_mode=random" >> $GITHUB_OUTPUT
+              echo "fingerprint=none" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            openssl ec -in private-key.pem -pubout -out public-key.pem 2>/dev/null || \
+              openssl rsa -in private-key.pem -pubout -out public-key.pem
+            chmod 644 public-key.pem
+            echo "✅ 公钥已派生 → public-key.pem"
+            FP=$(openssl sha256 < public-key.pem | awk '{print $NF}')
+          else
+            # ════════════ IPK 签名 (usign Ed25519) ════════════
+            SIGN_MODE="usign"
+            # usign 私钥文件 = "untrusted comment: ..." 头 + base64(104 字节 seckey 结构)。
+            # seckey 结构: pkalg[2]+kdfalg[2]+kdfrounds[4]+salt[16]+checksum[8]+fingerprint[8]+seckey[64]。
+            # USIGN_KEY 存完整 key-build 文件内容, 由本地直接导入 (gh secret set USIGN_KEY < key-build)。
+            if [ -z "$USIGN_KEY" ]; then
+              echo "::warning::USIGN_KEY secret 未设置 — 构建系统将生成随机 usign 密钥, 设备 opkg install 需 --force-checksum"
+              echo "sign_mode=random" >> $GITHUB_OUTPUT
+              echo "fingerprint=none" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            # 防泄漏: printf 而非 echo, chmod 600, 只输出指纹不输出内容。
+            printf '%s\n' "$USIGN_KEY" > key-build
+            chmod 600 key-build
+            sed -i 's/\r$//' key-build
+
+            # 校验 seckey 结构(104 字节)并派生公钥(42 字节)+指纹。
+            # 二进制经文件管道处理, 不经 bash 变量 (bash 变量无法存 NUL 字节)。
+            KEY_B64=$(grep -v '^untrusted comment:' key-build | tr -d '\n')
+            printf '%s' "$KEY_B64" | base64 -d > .seckey.bin 2>/dev/null
+            KEY_BYTES=$(wc -c < .seckey.bin)
+            if [ "$KEY_BYTES" != "104" ]; then
+              echo "::error::USIGN_KEY 不是有效的 usign 私钥 (seckey 结构 ${KEY_BYTES} 字节, 期望 104)"
+              echo "::notice::请导入本地 key-build 文件: gh secret set USIGN_KEY --repo <repo> < key-build"
+              echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续"
+              rm -f key-build .seckey.bin
+              echo "sign_mode=random" >> $GITHUB_OUTPUT
+              echo "fingerprint=none" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            # 指纹 = seckey 结构 offset 32..40 (8 字节), 与 usign -F 输出一致。
+            FP=$(dd if=.seckey.bin bs=1 skip=32 count=8 2>/dev/null | od -An -tx1 | tr -d ' \n')
+            # 公钥 = "Ed" + fingerprint[8] + pubkey[32] (pubkey 在 offset 72..104), 与 usign -G 输出一致。
+            {
+              printf 'untrusted comment: public key %s\n' "$FP"
+              { printf 'Ed'; dd if=.seckey.bin bs=1 skip=32 count=8 2>/dev/null; dd if=.seckey.bin bs=1 skip=72 count=32 2>/dev/null; } | base64 -w 0
+              printf '\n'
+            } > key-build.pub
+            chmod 644 key-build.pub
+            rm -f .seckey.bin
+            echo "📏 usign 私钥已注入 (104 字节结构, 不输出内容), 指纹 ${FP}"
           fi
 
-          openssl ec -in private-key.pem -pubout -out public-key.pem 2>/dev/null || \
-            openssl rsa -in private-key.pem -pubout -out public-key.pem
-          chmod 644 public-key.pem
+          echo "sign_mode=${SIGN_MODE}" >> $GITHUB_OUTPUT
+          echo "fingerprint=${FP}" >> $GITHUB_OUTPUT
+          echo "🔑 ${SIGN_MODE} 签名密钥已注入 (指纹: ${FP:0:16}...)"
 
       - name: Resolve SDK packages
         id: resolve-pkgs
@@ -195,8 +263,9 @@ jobs:
           # 这也实现了「不再依赖 ghcr.io/openwrt/sdk:* 上游 Docker 容器」的目标
           cd sdk
 
-          # Match docker/sdk-test: put the local feed in package/ as a core-level
-          # overlay. OpenWrt keeps core packages ahead of upstream feed copies.
+          # Match scripts/docker/sdk-test (本地复现脚本): put the local feed in
+          # package/ as a core-level overlay. OpenWrt keeps core packages ahead of
+          # upstream feed copies.
           rm -rf "package/${{ inputs.packages_feed_name }}"
           cp -rlf "${{ github.workspace }}/pkgs-feed" "package/${{ inputs.packages_feed_name }}"
           test -f "package/${{ inputs.packages_feed_name }}/Makefile" || {
@@ -204,11 +273,24 @@ jobs:
             exit 1
           }
 
-          # apk 签名: 私钥放在 SDK 根目录 (OpenWrt 构建系统读取 ./private-key.pem)
-          if [ "${{ inputs.matrix_apk_signing }}" = "true" ] && [ -f ../private-key.pem ]; then
+          # 签名: 密钥放在 SDK 根目录 (构建系统读取 ./private-key.pem 或 ./key-build)
+          if [ "${{ steps.signing_key.outputs.use_apk }}" = "true" ] && [ -f ../private-key.pem ]; then
             cp ../private-key.pem ./private-key.pem
             chmod 600 ./private-key.pem
             cp ../public-key.pem ./public-key.pem 2>/dev/null || true
+            echo "🔑 SDK 软件包签名启用 (APK 密钥已注入 SDK 根目录)"
+          elif [ "${{ steps.signing_key.outputs.use_apk }}" = "true" ]; then
+            echo "::warning::SDK 软件包未签名 (密钥缺失或无效), 设备 apk add 需 --allow-untrusted"
+          else
+            # IPK usign 路径: key-build 文件放 SDK 根目录 (构建系统读取 ./key-build)
+            if [ -f ../key-build ]; then
+              cp ../key-build ./key-build
+              chmod 600 ./key-build
+              cp ../key-build.pub ./key-build.pub 2>/dev/null || true
+              echo "🔑 SDK 软件包 IPK 签名启用 (usign 密钥已注入 SDK 根目录)"
+            else
+              echo "::warning::SDK 软件包未签名 (usign 密钥缺失), 设备 opkg install 需 --force-checksum"
+            fi
           fi
 
           echo "::group::📋 Configure feeds (local overlay first)"
@@ -254,6 +336,8 @@ jobs:
           fi
           if [ -f public-key.pem ]; then
             cp public-key.pem upload/solarflows-apk-public.pem
+          elif [ -f key-build.pub ]; then
+            cp key-build.pub upload/solarflows-usign-public.pub
           fi
           PACKAGE_COUNT=$(find upload/ -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' \) 2>/dev/null | wc -l)
           FILE_COUNT=$(find upload/ -type f 2>/dev/null | wc -l)
@@ -274,7 +358,7 @@ jobs:
         run: |
           PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
           PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
-          PKG_FORMAT="${{ inputs.matrix_apk_signing == true && 'apk' || 'ipk' }}"
+          PKG_FORMAT="${{ steps.signing_key.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
           cat > build-info.json <<JSONEOF
           {
             "target": "${IMMWRT_TARGET}",
@@ -291,7 +375,9 @@ jobs:
             "passwall_repo": "${{ inputs.matrix_passwall_repo }}",
             "passwall_tag": "${{ inputs.matrix_passwall_tag }}",
             "release_repo": "${{ inputs.matrix_passwall_repo }}",
-            "apk_signing": ${{ inputs.matrix_apk_signing }},
+            "use_apk": ${{ steps.signing_key.outputs.use_apk }},
+            "signing_key_fingerprint": "${{ steps.signing_key.outputs.fingerprint || 'none' }}",
+            "signing_mode": "${{ steps.signing_key.outputs.sign_mode || 'none' }}",
             "file_count": "${{ steps.artifacts.outputs.file_count }}",
             "timestamp": "$(TZ=$TZ date +'%Y-%m-%d %H:%M:%S')"
           }
@@ -361,9 +447,25 @@ jobs:
           PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
             grep -E '^CONFIG_PACKAGE_[a-zA-Z0-9_-]+=y$' | \
             sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | sort -u | tr '\n' ' ')
-          if [ "${{ inputs.matrix_apk_signing }}" = "true" ] && [ -f private-key.pem ]; then
+          # IB 固件签名: 与 SDK 共用同一对密钥 (通过 BUILD_KEY_APK_* 注入 make image)
+          # fingerprint=none 表示密钥缺失/无效, IB 固件同样跳过签名
+          SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
+          if [ "${{ steps.signing_key.outputs.use_apk }}" = "true" ] && [ "$SIGN_FP" != "none" ] && [ -n "$SIGN_FP" ] && [ -f private-key.pem ]; then
             export BUILD_KEY_APK_SEC="${GITHUB_WORKSPACE}/private-key.pem"
             export BUILD_KEY_APK_PUB="${GITHUB_WORKSPACE}/public-key.pem"
+            echo "🔑 IB 固件签名启用 (公钥指纹 ${SIGN_FP:0:16}...)"
+          elif [ "${{ steps.signing_key.outputs.use_apk }}" = "true" ]; then
+            echo "::warning::IB 固件未签名 (密钥缺失或无效), 设备 apk add 需 --allow-untrusted"
+          else
+            # IPK usign 路径: IB 读取根目录 key-build 文件签名 (make image 内同源码树)
+            if [ "$SIGN_FP" != "none" ] && [ -n "$SIGN_FP" ] && [ -f key-build ]; then
+              cp key-build ib/key-build
+              chmod 600 ib/key-build
+              cp key-build.pub ib/key-build.pub 2>/dev/null || true
+              echo "🔑 IB 固件 IPK 签名启用 (usign 公钥指纹 ${SIGN_FP:0:16}...)"
+            else
+              echo "::warning::IB 固件未签名 (usign 密钥缺失), 设备 opkg install 需 --force-checksum"
+            fi
           fi
           mkdir -p ib/release/firmware
           cd ib
@@ -388,12 +490,24 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
+          SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
+          SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
+          if [ "$SIGN_MODE" = "apk" ]; then
+            SIGN_LINE="- 签名: ✅ APK 已签名 (公钥指纹 ${SIGN_FP:0:16}...)"
+          elif [ "$SIGN_MODE" = "usign" ]; then
+            SIGN_LINE="- 签名: ✅ usign 已签名 (公钥指纹 ${SIGN_FP:0:16}...)"
+          elif [ "$SIGN_MODE" = "random" ]; then
+            SIGN_LINE="- 签名: ⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
+          else
+            SIGN_LINE="- 签名: ❌ 未签名"
+          fi
           cat > combined-release.md <<EOF
           ## ${{ inputs.matrix_target }} SDK + IB
 
           - 软件版本: ${{ inputs.version }}
           - IB 基线版本: ${{ steps.resolve-ib.outputs.ib_version }}
           - packages: ${{ inputs.matrix_packages_branch }} @ $(git -C pkgs-feed rev-parse --short HEAD)
+          ${SIGN_LINE}
           EOF
           TAG="${{ inputs.version }}"
           REPO="${{ inputs.matrix_firmware_release_repo }}"
@@ -421,11 +535,33 @@ jobs:
           if gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
             gh release upload "$PACKAGE_TAG" --repo "$PACKAGE_REPO" "${PACKAGE_FILES[@]}" --clobber
             EXISTING=$(gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json body --jq '.body // ""')
-            printf '%b\n' "${EXISTING}\n\n---\n### ${IMMWRT_TARGET} - SDK 构建 (.${PACKAGE_FORMAT})\n- commit: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')" > release-notes.md
+            SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
+            SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
+            if [ "$SIGN_MODE" = "apk" ]; then
+              SIGN_TEXT="✅ APK 已签名 (指纹 ${SIGN_FP:0:16}...)"
+            elif [ "$SIGN_MODE" = "usign" ]; then
+              SIGN_TEXT="✅ usign 已签名 (指纹 ${SIGN_FP:0:16}...)"
+            elif [ "$SIGN_MODE" = "random" ]; then
+              SIGN_TEXT="⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
+            else
+              SIGN_TEXT="❌ 未签名"
+            fi
+            printf '%b\n' "${EXISTING}\n\n---\n### ${IMMWRT_TARGET} - SDK 构建 (.${PACKAGE_FORMAT})\n- commit: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')\n- 签名: ${SIGN_TEXT}" > release-notes.md
             gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md
           else
-            printf '## Passwall Packages\n\n- **%s**: SDK 构建 (.%s), commit [`%s`](%s/commit/%s)\n' \
-              "$IMMWRT_TARGET" "$PACKAGE_FORMAT" "$PACKAGE_COMMIT" "$PACKAGE_REPO" "$PACKAGE_SHA" > release-notes.md
+            SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
+            SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
+            if [ "$SIGN_MODE" = "apk" ]; then
+              SIGN_TEXT="✅ APK 已签名 (指纹 ${SIGN_FP:0:16}...)"
+            elif [ "$SIGN_MODE" = "usign" ]; then
+              SIGN_TEXT="✅ usign 已签名 (指纹 ${SIGN_FP:0:16}...)"
+            elif [ "$SIGN_MODE" = "random" ]; then
+              SIGN_TEXT="⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
+            else
+              SIGN_TEXT="❌ 未签名"
+            fi
+            printf '## Passwall Packages\n\n- **%s**: SDK 构建 (.%s), commit [`%s`](%s/commit/%s)\n- 签名: %s\n' \
+              "$IMMWRT_TARGET" "$PACKAGE_FORMAT" "$PACKAGE_COMMIT" "$PACKAGE_REPO" "$PACKAGE_SHA" "$SIGN_TEXT" > release-notes.md
             gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
               --notes-file release-notes.md --latest=false "${PACKAGE_FILES[@]}"
           fi

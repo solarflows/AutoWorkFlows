@@ -41,7 +41,7 @@ map(. + {
 | `ARTIFACTS_RELEASE_REPO` | `solarflows/AutoWorkflows` | SDK/IB 统一 tarball 发布仓库 |
 | `ARTIFACTS_KEEP_VERSIONS` | `7` | 统一 tag 保留最近 N 个版本 |
 
-target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `artifacts_release_tag`、`apk_signing` 等）。
+target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `artifacts_release_tag` 等）。包格式（APK/IPK）与签名机制由构建时自动探测，无需在此配置。
 
 ## 必填字段（每个 target）
 
@@ -62,7 +62,8 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 | `release_repo` | `repo` 的值 | 固件 GitHub Release 发布到的仓库 |
 | `passwall_repo` | `${{ env.PACKAGES_FEED_REPO }}` | Passwall 包发布到的仓库（默认复用软件包仓库） |
 | `passwall_tag` | `"packages"` | Passwall 固定 Release 的 Tag 名。同名文件替换，不同名文件保留 |
-| `apk_signing` | `false` | 是否需要 APK 签名密钥（OpenWrt ≥ 25.12 改用 APK 时需要设为 `true`，影响 mt798x ipk ↔ qualcommax apk 分流） |
+
+> **签名机制自动探测**：包格式（APK vs IPK）与签名方式不再由 target 静态配置，而是从实际构建配置自动判断——全量构建读 `.config` 的 `CONFIG_USE_APK`，SDK 增量读 SDK 的 `Config-build.in`。APK 用 `APK_BUILD_KEY`（PEM），IPK 用 `USIGN_KEY`（usign 私钥）。即使分支后续升级到 snapshot/APK，也无需改配置。
 
 ---
 

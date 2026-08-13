@@ -275,7 +275,6 @@ jobs:
               release_repo:      (.release_repo      // .repo),
               passwall_repo:     (.passwall_repo     // $pkg_repo),
               passwall_tag:      (.passwall_tag      // "packages"),
-              apk_signing:       (.apk_signing       // false),
               sdk_packages:      (.sdk_packages      // "*"),
               artifacts_release_repo: (.artifacts_release_repo // $artifacts_repo),
               artifacts_release_tag:  (.artifacts_release_tag  // ("artifacts-" + .target)),
@@ -617,7 +616,6 @@ jobs:
       matrix_release_repo:       ${{ matrix.release_repo }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
       matrix_passwall_tag:        ${{ matrix.passwall_tag }}
-      matrix_apk_signing:        ${{ matrix.apk_signing }}
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_artifacts_keep_versions: ${{ matrix.artifacts_keep_versions }}
@@ -632,6 +630,7 @@ jobs:
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
+      USIGN_KEY:            ${{ secrets.USIGN_KEY }}
     concurrency:
       group: compile-fw-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
@@ -657,7 +656,6 @@ jobs:
       matrix_passwall_tag:       ${{ matrix.passwall_tag }}
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
-      matrix_apk_signing:        ${{ matrix.apk_signing }}
       matrix_build_sdk_ib:       true
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
@@ -666,6 +664,7 @@ jobs:
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
+      USIGN_KEY:            ${{ secrets.USIGN_KEY }}
     concurrency:
       group: repack-ib-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
@@ -688,7 +687,6 @@ jobs:
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
       matrix_passwall_tag:       ${{ matrix.passwall_tag }}
-      matrix_apk_signing:        ${{ matrix.apk_signing }}
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_sdk_packages:       ${{ matrix.sdk_packages }}
@@ -699,6 +697,7 @@ jobs:
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
+      USIGN_KEY:            ${{ secrets.USIGN_KEY }}
     concurrency:
       group: compile-pkgs-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false

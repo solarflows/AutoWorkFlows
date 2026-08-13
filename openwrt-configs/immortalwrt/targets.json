@@ -8,7 +8,6 @@
       "config": "mt798x",
       "packages_branch": "mt798x",
       "release_repo": "solarflows/immortalwrt-mt798x",
-      "apk_signing": false,
       "sdk_container": "aarch64_cortex-a53-21.02.7",
       "artifacts_release_tag": "artifacts-mt798x"
     },
@@ -19,7 +18,6 @@
       "config": "qualcommax",
       "packages_branch": "qualcommax",
       "release_repo": "solarflows/ImmortalWrt-QualcommAX",
-      "apk_signing": true,
       "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
       "artifacts_release_tag": "artifacts-qualcommax"
     }

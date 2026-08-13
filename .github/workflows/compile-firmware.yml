@@ -15,7 +15,6 @@ on:
       matrix_release_repo:  { required: true, type: string }
       matrix_passwall_repo: { required: true, type: string }
       matrix_passwall_tag:  { required: true, type: string }
-      matrix_apk_signing:   { required: true, type: boolean }
       matrix_artifacts_release_repo: { required: true, type: string }
       matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_artifacts_keep_versions: { required: false, type: number, default: 7 }
@@ -33,6 +32,7 @@ on:
     secrets:
       ACCESS_TOKEN:         { required: true }
       APK_BUILD_KEY:        { required: false }
+      USIGN_KEY:            { required: false }
 
 env:
   TZ: Asia/Shanghai
@@ -221,53 +221,6 @@ jobs:
           fi
           echo "ccache_restored=${CCACHE_RESTORED}" >> $GITHUB_OUTPUT
 
-      - name: Setup APK Signing Key
-        if: inputs.matrix_apk_signing == true
-        id: signing_key
-        env:
-          APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "$APK_BUILD_KEY" ]; then
-            echo "::warning::APK_BUILD_KEY secret 未设置 — 构建系统将生成随机密钥, 设备 apk add 需 --allow-untrusted"
-            echo "fingerprint=none" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > openwrt/private-key.pem
-          chmod 600 openwrt/private-key.pem
-          sed -i 's/\r$//' openwrt/private-key.pem
-          echo "📏 密钥文件: $(wc -c < openwrt/private-key.pem) 字节"
-
-          # ── 私钥格式校验 (恢复 v1): 无效密钥在专门步骤明确报错 ──
-          # 刻意设计: 校验失败时输出 ::error:: 但**不退出构建** (通过 if 分支规避 set -e)。
-          # 跳过签名让工具链/ccache 缓存正常生成, 修复密钥后下次直接增量构建; 产物标记未签名。
-          echo "🔍 验证密钥格式..."
-          if openssl ec -in openwrt/private-key.pem -check -noout 2>/dev/null; then
-            echo "✅ ECDSA 私钥格式验证通过"
-          elif openssl rsa -in openwrt/private-key.pem -check -noout 2>/dev/null; then
-            echo "::warning::APK_BUILD_KEY 是 RSA 密钥, ImmortalWrt APK 构建系统默认使用 ECDSA prime256v1"
-            echo "::warning::APK 本身支持 RSA, 但若构建系统依赖 ecparam 自动派生公钥则会失败"
-            echo "::notice::建议重新生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
-          else
-            KEY_HEADER=$(head -c 50 openwrt/private-key.pem 2>/dev/null)
-            echo "::error::APK_BUILD_KEY 不是有效的 PEM 格式私钥 (需要 ECDSA prime256v1 或 RSA)"
-            echo "::notice::密钥头部: ${KEY_HEADER}"
-            echo "::notice::生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
-            echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续以生成工具链/ccache 缓存"
-            rm -f openwrt/private-key.pem
-            echo "fingerprint=none" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # 派生公钥 (构建系统通过 package/base-files 安装到 /etc/apk/keys/)
-          openssl ec -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem 2>/dev/null || \
-            openssl rsa -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem
-          chmod 644 openwrt/public-key.pem
-          echo "✅ 公钥已派生 → openwrt/public-key.pem"
-          FP=$(openssl sha256 < openwrt/public-key.pem | awk '{print $NF}')
-          echo "fingerprint=${FP}" >> $GITHUB_OUTPUT
-          echo "🔑 APK 签名密钥已注入 (公钥 SHA256: ${FP:0:16}...)"
-
       # ───────── 更新 feeds（源码 + 软件包索引）─────────
       - name: Update Feeds & Packages
         run: |
@@ -365,6 +318,117 @@ jobs:
           sed -i 's/^IMG_PREFIX_VERNUM:=.*/IMG_PREFIX_VERNUM:=$(call sanitize,$(VERSION_NUMBER))-/' include/image.mk
           echo "📋 image.mk IMG_PREFIX_VERNUM:"
           grep 'IMG_PREFIX_VERNUM' include/image.mk || true
+
+          # ── 包管理器探测 (决定签名机制) ──
+          # APK (main/SNAPSHOT) 与 IPK (21.02) 的签名机制不同: APK 用 openssl PEM,
+          # IPK 用 usign Ed25519。不能依赖 targets.json 的静态 apk_signing 字段,
+          # 因为分支升级到 snapshot 后该字段会失效。以 .config 实际值为准动态判断。
+          if grep -q '^CONFIG_USE_APK=y' .config; then
+            USE_APK=true
+          else
+            USE_APK=false
+          fi
+          echo "use_apk=${USE_APK}" >> $GITHUB_OUTPUT
+          echo "📦 包管理器: $([ "$USE_APK" = "true" ] && echo APK || echo IPK/opkg)"
+
+      # ════════════ 签名密钥注入（在 make defconfig 之后、编译之前）════════════
+      # 密钥生成时机: OpenWrt 的 APK private-key.pem / usign key-build 均在 package/index
+      # 签名阶段才生成, 而非 make defconfig 时。故注入只需在编译前, 放在 Apply
+      # Configuration (含 defconfig) 之后即可, 且能读到 .config 的 CONFIG_USE_APK。
+      # 单个步骤按 use_apk 按需使用对应密钥; 输出 sign_mode(apk/usign/random) 供发布说明。
+      - name: Setup Signing Key
+        id: signing_key
+        env:
+          APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
+          USIGN_KEY:     ${{ secrets.USIGN_KEY }}
+        run: |
+          set -euo pipefail
+          USE_APK="${{ steps.apply_config.outputs.use_apk }}"
+
+          if [ "$USE_APK" = "true" ]; then
+            # ════════════ APK 签名 (ECDSA/RSA PEM) ════════════
+            SIGN_MODE="apk"
+            if [ -z "$APK_BUILD_KEY" ]; then
+              echo "::warning::APK_BUILD_KEY secret 未设置 — 构建系统将生成随机密钥, 设备 apk add 需 --allow-untrusted"
+              echo "sign_mode=random" >> $GITHUB_OUTPUT
+              echo "fingerprint=none" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            # 防泄漏: printf 而非 echo, chmod 600, 只输出字节数/指纹不输出内容。
+            printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > openwrt/private-key.pem
+            chmod 600 openwrt/private-key.pem
+            sed -i 's/\r$//' openwrt/private-key.pem
+            echo "📏 密钥文件: $(wc -c < openwrt/private-key.pem) 字节 (不输出内容)"
+
+            echo "🔍 验证密钥格式..."
+            if openssl ec -in openwrt/private-key.pem -check -noout 2>/dev/null; then
+              echo "✅ ECDSA 私钥格式验证通过"
+            elif openssl rsa -in openwrt/private-key.pem -check -noout 2>/dev/null; then
+              echo "::warning::APK_BUILD_KEY 是 RSA 密钥, ImmortalWrt APK 构建系统默认使用 ECDSA prime256v1"
+              echo "::notice::建议重新生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
+            else
+              KEY_HEADER=$(head -c 50 openwrt/private-key.pem 2>/dev/null)
+              echo "::error::APK_BUILD_KEY 不是有效的 PEM 格式私钥 (需要 ECDSA prime256v1 或 RSA)"
+              echo "::notice::密钥头部(仅 PEM header, 不含密钥): ${KEY_HEADER}"
+              echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续"
+              rm -f openwrt/private-key.pem
+              echo "sign_mode=random" >> $GITHUB_OUTPUT
+              echo "fingerprint=none" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            openssl ec -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem 2>/dev/null || \
+              openssl rsa -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem
+            chmod 644 openwrt/public-key.pem
+            echo "✅ 公钥已派生 → openwrt/public-key.pem"
+            FP=$(openssl sha256 < openwrt/public-key.pem | awk '{print $NF}')
+          else
+            # ════════════ IPK 签名 (usign Ed25519) ════════════
+            SIGN_MODE="usign"
+            # usign 私钥文件 = "untrusted comment: ..." 头 + base64(104 字节 seckey 结构)。
+            # seckey 结构: pkalg[2]+kdfalg[2]+kdfrounds[4]+salt[16]+checksum[8]+fingerprint[8]+seckey[64]。
+            # USIGN_KEY 存完整 key-build 文件内容, 由本地直接导入 (gh secret set USIGN_KEY < key-build)。
+            if [ -z "$USIGN_KEY" ]; then
+              echo "::warning::USIGN_KEY secret 未设置 — 构建系统将生成随机 usign 密钥, 设备 opkg install 需 --force-checksum"
+              echo "sign_mode=random" >> $GITHUB_OUTPUT
+              echo "fingerprint=none" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            # 防泄漏: printf 而非 echo, chmod 600, 只输出指纹不输出内容。
+            printf '%s\n' "$USIGN_KEY" > openwrt/key-build
+            chmod 600 openwrt/key-build
+            sed -i 's/\r$//' openwrt/key-build
+
+            # 校验 seckey 结构(104 字节)并派生公钥(42 字节)+指纹。
+            # 二进制经文件管道处理, 不经 bash 变量 (bash 变量无法存 NUL 字节)。
+            KEY_B64=$(grep -v '^untrusted comment:' openwrt/key-build | tr -d '\n')
+            printf '%s' "$KEY_B64" | base64 -d > openwrt/.seckey.bin 2>/dev/null
+            KEY_BYTES=$(wc -c < openwrt/.seckey.bin)
+            if [ "$KEY_BYTES" != "104" ]; then
+              echo "::error::USIGN_KEY 不是有效的 usign 私钥 (seckey 结构 ${KEY_BYTES} 字节, 期望 104)"
+              echo "::notice::请导入本地 key-build 文件: gh secret set USIGN_KEY --repo <repo> < key-build"
+              echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续"
+              rm -f openwrt/key-build openwrt/.seckey.bin
+              echo "sign_mode=random" >> $GITHUB_OUTPUT
+              echo "fingerprint=none" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            # 指纹 = seckey 结构 offset 32..40 (8 字节), 与 usign -F 输出一致。
+            FP=$(dd if=openwrt/.seckey.bin bs=1 skip=32 count=8 2>/dev/null | od -An -tx1 | tr -d ' \n')
+            # 公钥 = "Ed" + fingerprint[8] + pubkey[32] (pubkey 在 offset 72..104), 与 usign -G 输出一致。
+            {
+              printf 'untrusted comment: public key %s\n' "$FP"
+              { printf 'Ed'; dd if=openwrt/.seckey.bin bs=1 skip=32 count=8 2>/dev/null; dd if=openwrt/.seckey.bin bs=1 skip=72 count=32 2>/dev/null; } | base64 -w 0
+              printf '\n'
+            } > openwrt/key-build.pub
+            chmod 644 openwrt/key-build.pub
+            rm -f openwrt/.seckey.bin
+            echo "📏 usign 私钥已注入 (104 字节结构, 不输出内容), 指纹 ${FP}"
+          fi
+
+          echo "sign_mode=${SIGN_MODE}" >> $GITHUB_OUTPUT
+          echo "fingerprint=${FP}" >> $GITHUB_OUTPUT
+          echo "🔑 ${SIGN_MODE} 签名密钥已注入 (指纹: ${FP:0:16}...)"
 
       # ───────── 下载源码包（dl/ 目录）─────────
       # 刻意设计: 并行下载失败时降级单线程重试; 清理 <1KB 的残缺文件(下载失败残留)
@@ -898,6 +962,8 @@ jobs:
           done
           if [ -f public-key.pem ]; then
             cp public-key.pem release/passwall/solarflows-apk-public.pem
+          elif [ -f key-build.pub ]; then
+            cp key-build.pub release/passwall/solarflows-usign-public.pub
           fi
           (cd release && tar czf ../${IMMWRT_TARGET}-release.tar.gz .)
 
@@ -919,7 +985,7 @@ jobs:
         if: success()
         id: build-info-step
         run: |
-          PKG_FORMAT="${{ inputs.matrix_apk_signing == true && 'apk' || 'ipk' }}"
+          PKG_FORMAT="${{ steps.apply_config.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
 
           # ── 从编译产物 feeds.buildinfo 提取各 feed 版本 (恢复 v1 功能) ──
           # solarflows 软件包是直接 clone 到 package/solarflows/ (非 src-git feed),
@@ -983,6 +1049,7 @@ jobs:
             "toolchain_exact": "${{ steps.cache-refresh.outputs.toolchain_exact || 'false' }}",
             "ccache_hit": "${{ steps.cache-refresh.outputs.ccache_restored || 'false' }}",
             "signing_key_fingerprint": "${{ steps.signing_key.outputs.fingerprint || 'none' }}",
+            "signing_mode": "${{ steps.signing_key.outputs.sign_mode || 'none' }}",
             "release_repo": "${{ inputs.matrix_release_repo }}",
             "passwall_repo": "${{ inputs.matrix_passwall_repo }}",
             "passwall_tag": "${{ inputs.matrix_passwall_tag }}",
@@ -1010,11 +1077,24 @@ jobs:
           # 从 build-info.json 读取 Feed 表格 (含 solarflows 行), 软件包版本不再单列, 避免重复
           # jq -r 已解码 JSON 字符串, 空值输出空串由 -n 过滤
           FEEDS_MD_JSON=$(jq -r '.feeds_md // empty' build-info.json)
+          # 签名状态: 按 sign_mode 写明是否签名 + 签名模式
+          SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
+          SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
+          if [ "$SIGN_MODE" = "apk" ]; then
+            SIGN_LINE="**签名**: ✅ APK 已签名 (公钥指纹 ${SIGN_FP:0:16}...)"
+          elif [ "$SIGN_MODE" = "usign" ]; then
+            SIGN_LINE="**签名**: ✅ usign 已签名 (公钥指纹 ${SIGN_FP:0:16}...)"
+          elif [ "$SIGN_MODE" = "random" ]; then
+            SIGN_LINE="**签名**: ⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
+          else
+            SIGN_LINE="**签名**: ❌ 未签名"
+          fi
           {
             echo "## ${IMMWRT_TARGET} Build"
             echo ""
             echo "**源码**: [${{ inputs.matrix_ref }}](https://github.com/${{ inputs.matrix_repo }}) @ [${SHA_SHORT}](https://github.com/${{ inputs.matrix_repo }}/commit/${{ steps.clone_packages.outputs.sha_full }})"
             echo "**编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}"
+            echo "${SIGN_LINE}"
             if [ -n "$FEEDS_MD_JSON" ]; then
               echo ""
               echo "### 📌 Feed 版本"
