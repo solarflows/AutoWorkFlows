@@ -481,6 +481,8 @@ jobs:
           ccache --max-size 10G
           ccache --set-config=compiler_check=content
           ccache --set-config=hash_dir=false
+          # 路径归一化由 rules.mk 原生机制处理 (export CCACHE_BASEDIR=$(TOPDIR)),
+          # 与 compile-packages (SDK TOPDIR=sdk/) 天然一致, 无需额外 base_dir。
           ccache --set-config=compression=true
           ccache --set-config=compression_level=6
           ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
