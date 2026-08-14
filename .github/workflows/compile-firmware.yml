@@ -479,18 +479,28 @@ jobs:
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
           ccache --max-size 10G
-          ccache --set-config=compiler_check=content
+          # compiler_check 不设: rules.mk 会 export CCACHE_COMPILERCHECK
+          # (环境变量 > 配置文件), 此处 --set-config 会被静默覆盖, 属死配置。
+          # CC/CXX 包装也不 export: CONFIG_CCACHE=y 时 rules.mk 自动
+          # TARGET_CC:=ccache_cc / HOSTCC:=ccache $(HOSTCC), 官方机制已覆盖
+          # 目标侧(MAKE_FLAGS 传 TARGET_CONFIGURE_OPTS)与 host 侧(HOSTCC)。
           ccache --set-config=hash_dir=false
           # 路径归一化由 rules.mk 原生机制处理 (export CCACHE_BASEDIR=$(TOPDIR)),
           # 与 compile-packages (SDK TOPDIR=sdk/) 天然一致, 无需额外 base_dir。
           ccache --set-config=compression=true
           ccache --set-config=compression_level=6
           ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
-          if [ "${{ inputs.cache_strategy }}" != "no-cache" ]; then
-            export CC="ccache gcc"
-            export CXX="ccache g++"
-          else
-            echo "🔧 no-cache 模式: 不使用 ccache 包装编译 (CONFIG_CCACHE 仍由 seed 控制)"
+          # ── ccache 包装器变量级验证 (rules.mk val.% 目标, 秒级零成本) ──
+          # 期望: TARGET_CC='ccache_cc' / HOSTCC='ccache gcc' / TARGET_CC_NOCACHE='aarch64-...-gcc'
+          # 若 TARGET_CC 是 ccache gcc 或裸 gcc → 环境泄漏, 官方包装器未接管。
+          echo "🔍 ccache 包装器变量验证 (make val):"
+          make val.TARGET_CC V=s 2>/dev/null || true
+          make val.TARGET_CXX V=s 2>/dev/null || true
+          make val.HOSTCC V=s 2>/dev/null || true
+          make val.TARGET_CC_NOCACHE V=s 2>/dev/null || true
+          ls -la staging_dir/host/bin/ccache_cc staging_dir/host/bin/ccache_cxx 2>/dev/null || true
+          if [ "${{ inputs.cache_strategy }}" = "no-cache" ]; then
+            echo "🔧 no-cache 模式: 构建内 ccache 仍由 seed CONFIG_CCACHE 控制, 仅跳过 actions/cache 持久化"
           fi
           MAKE_EXIT=1
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
@@ -505,6 +515,25 @@ jobs:
           echo "duration=$((END_TIME - START_TIME))" >> $GITHUB_OUTPUT
           echo "⏱️ 本步骤耗时: $(printf '%dh %dm %ds' $(((END_TIME-START_TIME)/3600)) $((((END_TIME-START_TIME)%3600)/60)) $(((END_TIME-START_TIME)%60)))"
 
+      # ───────── ccache 行为级验证（抓取真实编译命令前缀）─────────
+      # 刻意设计: 首轮 make 无 V=s (SUBMAKE -s 抑制命令回显), 日志看不到编译命令;
+      # 此诊断步骤强制 clean+重编一个轻量 C 包 (jansson) 并 V=sc 抓取前缀。
+      # ccache 命中使重编仅需数秒; continue-on-error 纯诊断不阻塞构建。
+      - name: 🔍 Verify ccache wrapping
+        if: always() && !cancelled()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd openwrt
+          echo "🔍 实编译抓取 ccache 命令前缀 (jansson, V=sc):"
+          make package/libs/jansson/clean 2>/dev/null || true
+          make package/libs/jansson/compile V=sc BUILD_LOG=1 2>&1 | tee /tmp/ccache-prefix.log || true
+          echo ""
+          echo "── 捕获的 ccache 相关命令 (前 8 行) ──"
+          grep -E "ccache(_cc|_cxx| gcc| g\+\+)" /tmp/ccache-prefix.log | head -8 || echo "(未捕获到 ccache 命令)"
+          echo ""
+          echo "判定: 目标包应见 ccache_cc (包装交叉 gcc); 若见 ccache gcc 或裸 gcc 则为环境泄漏。"
+
       # ───────── 重试编译（并行失败后更新仓库再试, 保留初次日志 logs.1）─────────
       # 刻意设计: 失败后先 git pull 最新源码再重试(上游可能已修),
       # logs/ → logs.1/ 保留初次轮日志用于对比诊断; 单线程轮用 V=sc 输出完整日志
@@ -517,10 +546,7 @@ jobs:
           echo "║  🔁 Retry build (更新仓库后重试)      ║"
           echo "╚══════════════════════════════════════╝"
           cd openwrt
-          if [ "${{ inputs.cache_strategy }}" != "no-cache" ]; then
-            export CC="ccache gcc"
-            export CXX="ccache g++"
-          fi
+          # CC/CXX 包装由官方 CONFIG_CCACHE 机制处理 (rules.mk), 无需环境 export
           cp build.log build.1.log || echo "⚠️ 备份 build.log 失败: $?"
           rm -rf logs.1
           [ -d logs ] && mv logs logs.1 || echo "ℹ️ 无初次 logs 目录可保留"
