@@ -38,7 +38,7 @@ jobs:
   compile-packages:
     name: Compile ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     concurrency:
       group: packages-release-${{ inputs.matrix_target }}-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
       cancel-in-progress: false
