@@ -247,8 +247,9 @@ jobs:
           if [ "$SDK_PKGS" = "*" ]; then
             CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}/sdk.config"
             if [ -f "$CONFIG_FILE" ]; then
-              # 提取 CONFIG_PACKAGE_*=y 的包名,处理多子包目录折叠
-              SDK_PKGS=$(grep '^CONFIG_PACKAGE_.*=[ym]' "$CONFIG_FILE" | sed 's/CONFIG_PACKAGE_\(.*\)=[ym]/\1/' | tr '\n' ' ')
+              # 只提取小写包名; CONFIG_PACKAGE_ 前缀也覆盖 INCLUDE/Basic_Core
+              # 等大写 Kconfig 选择项, 这些选项不是可直接 make 的包目录。
+              SDK_PKGS=$(grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]*=[ym]$' "$CONFIG_FILE" | sed -E 's/CONFIG_PACKAGE_(.*)=[ym]/\1/' | tr '\n' ' ')
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/shadowsocksr-libev-ssr-[^ ]*/shadowsocksr-libev/g')
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/simple-obfs-client/simple-obfs/g')
               SDK_PKGS=$(echo "$SDK_PKGS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
@@ -335,6 +336,7 @@ jobs:
           fi
 
           make defconfig 2>&1
+
           # ── ccache 包装器变量级验证 (rules.mk val.% 目标) ──
           # 期望: TARGET_CC='ccache_cc' / HOSTCC='ccache gcc';
           # 若 TARGET_CC 是 ccache gcc 或裸 gcc → 环境泄漏, 官方包装器未接管。
@@ -522,7 +524,7 @@ jobs:
           set -euo pipefail
           SEED_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}"
           PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
-            grep -E '^CONFIG_PACKAGE_[a-zA-Z0-9_-]+=y$' | \
+            grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
             sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | sort -u | tr '\n' ' ')
           # IB 固件签名: 与 SDK 共用同一对密钥 (通过 BUILD_KEY_APK_* 注入 make image)
           # fingerprint=none 表示密钥缺失/无效, IB 固件同样跳过签名

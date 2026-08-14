@@ -2,6 +2,46 @@
 
 This document preserves detailed evidence behind the short rules in `.github/instructions/openwrt-build.instructions.md`.
 
+## CONFIG_PACKAGE 选择项误识别为软件包
+
+### Symptom
+
+v2 工作流会尝试编译不存在的目标，例如：
+
+```text
+make: *** No rule to make target 'package/luci-app-passwall2_INCLUDE_Hysteria/compile'.  Stop.
+```
+
+或者 IB 的 `PACKAGES` 参数中出现 `luci-app-passwall2_Basic_Core_SingBox`、`luci-app-smartdns_INCLUDE_smartdns_ui` 等字符串。
+
+### Verified Root Cause
+
+SDK 和 IB 路径原先都用宽匹配读取 `CONFIG_PACKAGE_`：
+
+```text
+CONFIG_PACKAGE_.*=[ym]
+```
+
+但这个前缀同时用于真正的软件包和 Kconfig 选择项。选择项通常包含大写的 `INCLUDE_*`、`Basic_Core_*` 或 `Enable_*` 后缀，不对应 `package/<name>` 目录，因此会被错误传给 `make package/...`。
+
+### Fix
+
+两个提取点现在只接受大小写敏感的小写包名字符集，同时保留合法的小写下划线包名：
+
+```text
+^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]*=[ym]$
+```
+
+因此 `msd_lite`、`libopenssl-afalg_sync` 等真实包仍会保留，而 `INCLUDE_*`、`Basic_Core_*` 和 `Enable_*` 选择项会被排除。
+
+### Verification
+
+```text
+rg --pcre2 '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]*=[ym]$' openwrt-configs/immortalwrt
+```
+
+重新触发 v2 后，`待编译` 和 IB `PACKAGES` 列表不应再出现含大写选择后缀的条目。
+
 ## GitHub Actions `needs` Implicit Skip
 
 If job A includes job B in `needs` and B is skipped, GitHub implicitly skips A even when A's own condition is true. A job that only needs a plan decision should depend on `plan` and test the corresponding output. When another job's result is genuinely required, use an `always()` condition and check `needs.<job>.result` explicitly.
