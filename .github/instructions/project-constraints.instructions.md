@@ -78,6 +78,16 @@ On build failure, follow this investigation sequence:
 
 `03-mtk.seed` contains closed-source MTK Wi-Fi drivers and must remain stable.
 
+### Fork vs upstream (mandatory evidence source)
+
+When citing OpenWrt/ImmortalWrt source code for behavior claims, always verify against the **actual build repository** from `targets.json` (`repo`/`ref`), not the upstream project:
+
+- mt798x builds from `solarflows/immortalwrt-mt798x` (`ref: test`), not upstream `immortalwrt/immortalwrt`.
+- qualcommax builds from `solarflows/ImmortalWrt-QualcommAX` (`ref: VIKINGYFY-main`).
+- The packages feed is `solarflows/packages` (branches `mt798x`/`qualcommax`), patched via `Sync_Push.yml` — not upstream `openwrt/packages`.
+
+Upstream and fork frequently diverge (e.g. `CONFIG_IB_STANDALONE` defaults, rust package version, IB tarball compression). A claim based on upstream source without fork verification has caused wrong conclusions (IB preset package scope, PROFILE behavior, rust version).
+
 ## Related Documentation
 
 - [.github/instructions/openwrt-build.instructions.md](openwrt-build.instructions.md) — Workflow architecture and diagnostic requirements
