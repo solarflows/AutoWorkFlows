@@ -24,7 +24,7 @@ new file mode 100644
 index 000000000..15f79a08e
 --- /dev/null
 +++ b/lang/rust/Makefile
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,110 @@
 +# SPDX-License-Identifier: GPL-2.0-only
 +#
 +# Copyright (C) 2023 Luca Barbato and Donald Hoskins
@@ -32,17 +32,18 @@ index 000000000..15f79a08e
 +include $(TOPDIR)/rules.mk
 +
 +PKG_NAME:=rust
-+PKG_VERSION:=1.85.0
++PKG_VERSION:=1.96.0
 +PKG_RELEASE:=1
 +
-+PKG_SOURCE:=rustc-$(PKG_VERSION)-src.tar.gz
++PKG_SOURCE:=rustc-$(PKG_VERSION)-src.tar.xz
 +PKG_SOURCE_URL:=https://static.rust-lang.org/dist/
-+PKG_HASH:=2f4f3142ffb7c8402139cfa0796e24baaac8b9fd3f96b2deec3b94b4045c6a8a
++PKG_HASH:=b99ce16cdf0ecfc761b585ac84d131b46733465a02f8ecd0ff2de9713c62ee09
 +HOST_BUILD_DIR:=$(BUILD_DIR)/host/rustc-$(PKG_VERSION)-src
 +
 +PKG_MAINTAINER:=Luca Barbato <lu_zero@luminem.org>
 +PKG_LICENSE:=Apache-2.0 MIT
 +PKG_LICENSE_FILES:=LICENSE-APACHE LICENSE-MIT
++PKG_CPE_ID:=cpe:/a:rust-lang:rust
 +
 +PKG_HOST_ONLY:=1
 +PKG_BUILD_FLAGS:=no-mips16
@@ -102,7 +103,7 @@ index 000000000..15f79a08e
 +	--release-channel=stable \
 +	--enable-cargo-native-static \
 +	--bootstrap-cache-path=$(DL_DIR)/rustc \
-+	--set=llvm.download-ci-llvm=true \
++	--set=llvm.download-ci-llvm=false \
 +	$(TARGET_CONFIGURE_ARGS)
 +
 +define Host/Uninstall
@@ -118,7 +119,7 @@ index 000000000..15f79a08e
 +	$(PYTHON) $(HOST_BUILD_DIR)/x.py \
 +		--build-dir $(HOST_BUILD_DIR)/build \
 +		--config $(HOST_BUILD_DIR)/config.toml \
-+		dist build-manifest cargo llvm-tools rustc rust-std rust-src
++		dist build-manifest rustc rust-std cargo llvm-tools rust-src
 +endef
 +
 +define Host/Install
@@ -151,7 +152,7 @@ index 000000000..c9bc0fddd
 +
 +--- a/src/bootstrap/Cargo.toml
 ++++ b/src/bootstrap/Cargo.toml
-+@@ -60,7 +60,7 @@ tar = "0.4"
++@@ -54,7 +54,7 @@ tar = { version = "0.4.45", default-features = false, features = ["xattr"] }
 + termcolor = "1.4"
 + toml = "0.5"
 + walkdir = "2.4"
@@ -159,49 +160,13 @@ index 000000000..c9bc0fddd
 ++xz2 = { version = "0.1", features = ["static"] }
 + 
 + # Dependencies needed by the build-metrics feature
-+ sysinfo = { version = "0.30", default-features = false, optional = true }
-diff --git a/lang/rust/patches/0003-bump-libc-deps-to-0.2.146.patch b/lang/rust/patches/0003-bump-libc-deps-to-0.2.146.patch
-new file mode 100644
-index 000000000..06ffb70a3
---- /dev/null
-+++ b/lang/rust/patches/0003-bump-libc-deps-to-0.2.146.patch
-@@ -0,0 +1,30 @@
-+This patch bumps all libc dependencies and checksums to 0.2.147, which includes the fix for musl 1.2.4.
-+
-+--- a/vendor/elasticlunr-rs-3.0.2/Cargo.lock
-++++ b/vendor/elasticlunr-rs-3.0.2/Cargo.lock
-+@@ -555,9 +555,9 @@ checksum = "e2abad23fbc42b3700f2f279844d
-+ 
-+ [[package]]
-+ name = "libc"
-+-version = "0.2.140"
-++version = "0.2.147"
-+ source = "registry+https://github.com/rust-lang/crates.io-index"
-+-checksum = "99227334921fae1a979cf0bfdfcc6b3e5ce376ef57e16fb6fb3ea2ed6095f80c"
-++checksum = "b4668fb0ea861c1df094127ac5f1da3409a82116a4ba74fca2e58ef927159bb3"
-+ 
-+ [[package]]
-+ name = "lindera"
-+--- a/vendor/libffi-3.2.0/Cargo.lock
-++++ b/vendor/libffi-3.2.0/Cargo.lock
-+@@ -10,9 +10,9 @@ checksum = "50d30906286121d95be3d479533b
-+ 
-+ [[package]]
-+ name = "libc"
-+-version = "0.2.140"
-++version = "0.2.147"
-+ source = "registry+https://github.com/rust-lang/crates.io-index"
-+-checksum = "99227334921fae1a979cf0bfdfcc6b3e5ce376ef57e16fb6fb3ea2ed6095f80c"
-++checksum = "b4668fb0ea861c1df094127ac5f1da3409a82116a4ba74fca2e58ef927159bb3"
-+ 
-+ [[package]]
-+ name = "libffi"
++ sysinfo = { version = "0.38.4", default-features = false, optional = true, features = ["system"] }
 diff --git a/lang/rust/rust-host-build.mk b/lang/rust/rust-host-build.mk
 new file mode 100644
 index 000000000..e56292937
 --- /dev/null
 +++ b/lang/rust/rust-host-build.mk
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,63 @@
 +# SPDX-License-Identifier: GPL-2.0-only
 +#
 +# Copyright (C) 2023 Luca Barbato and Donald Hoskins
@@ -213,16 +178,32 @@ index 000000000..e56292937
 +#   Space or comma separated list of features to activate
 +#
 +#   e.g. RUST_HOST_FEATURES:=enable-foo,with-bar
++#
++#
++# RUST_HOST_LOCKED - Assert that `Cargo.lock` will remain unchanged
++#                     (Enabled by default)
++#
++#   Disable it if you want to have up-to-date dependencies
++#
++#   e.g. RUST_HOST_LOCKED:=0
 +
 +ifeq ($(origin RUST_INCLUDE_DIR),undefined)
 +  RUST_INCLUDE_DIR:=$(dir $(lastword $(MAKEFILE_LIST)))
 +endif
 +include $(RUST_INCLUDE_DIR)/rust-values.mk
 +
++RUST_HOST_LOCKED ?= 1
++
 +CARGO_HOST_VARS= \
 +	$(CARGO_HOST_CONFIG_VARS) \
 +	CC=$(HOSTCC_NOCACHE) \
 +	MAKEFLAGS="$(HOST_JOBS)"
++
++CARGO_HOST_ARGS=
++
++ifeq ($(strip $(RUST_HOST_LOCKED)),1)
++  CARGO_HOST_ARGS+= --locked
++endif
 +
 +# $(1) path to the package (optional)
 +# $(2) additional arguments to cargo (optional)
@@ -232,8 +213,9 @@ index 000000000..e56292937
 +		--profile $(CARGO_HOST_PROFILE) \
 +		$(if $(RUST_HOST_FEATURES),--features "$(RUST_HOST_FEATURES)") \
 +		--root $(HOST_INSTALL_DIR) \
-+		--path "$(HOST_BUILD_DIR)/$(if $(strip $(1)),$(strip $(1)))" \
++		--path "$(HOST_BUILD_DIR)/$(if $(strip $(1)),$(strip $(1)),$(strip $(HOST_MAKE_PATH)))" \
 +		$(if $(filter --jobserver%,$(HOST_JOBS)),,-j1) \
++		$(CARGO_HOST_ARGS) \
 +		$(2)
 +endef
 +
@@ -258,7 +240,7 @@ new file mode 100644
 index 000000000..24341d706
 --- /dev/null
 +++ b/lang/rust/rust-package.mk
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,57 @@
 +# SPDX-License-Identifier: GPL-2.0-only
 +#
 +# Copyright (C) 2023 Luca Barbato and Donald Hoskins
@@ -270,16 +252,32 @@ index 000000000..24341d706
 +#   Space or comma separated list of features to activate
 +#
 +#   e.g. RUST_PKG_FEATURES:=enable-foo,with-bar
++#
++#
++# RUST_PKG_LOCKED - Assert that `Cargo.lock` will remain unchanged
++#                    (Enabled by default)
++#
++#   Disable it if you want to have up-to-date dependencies
++#
++#   e.g. RUST_PKG_LOCKED:=0
 +
 +ifeq ($(origin RUST_INCLUDE_DIR),undefined)
 +  RUST_INCLUDE_DIR:=$(dir $(lastword $(MAKEFILE_LIST)))
 +endif
 +include $(RUST_INCLUDE_DIR)/rust-values.mk
 +
++RUST_PKG_LOCKED ?= 1
++
 +CARGO_PKG_VARS= \
 +	$(CARGO_PKG_CONFIG_VARS) \
 +	CC=$(HOSTCC_NOCACHE) \
 +	MAKEFLAGS="$(PKG_JOBS)"
++
++CARGO_PKG_ARGS=
++
++ifeq ($(strip $(RUST_PKG_LOCKED)),1)
++  CARGO_PKG_ARGS+= --locked
++endif
 +
 +# $(1) path to the package (optional)
 +# $(2) additional arguments to cargo (optional)
@@ -289,8 +287,9 @@ index 000000000..24341d706
 +		--profile $(CARGO_PKG_PROFILE) \
 +		$(if $(strip $(RUST_PKG_FEATURES)),--features "$(strip $(RUST_PKG_FEATURES))") \
 +		--root $(PKG_INSTALL_DIR) \
-+		--path "$(PKG_BUILD_DIR)/$(if $(strip $(1)),$(strip $(1)))" \
++		--path "$(PKG_BUILD_DIR)/$(if $(strip $(1)),$(strip $(1)),$(strip $(MAKE_PATH)))" \
 +		$(if $(filter --jobserver%,$(PKG_JOBS)),,-j1) \
++		$(CARGO_PKG_ARGS) \
 +		$(2)
 +endef
 +
@@ -344,6 +343,8 @@ index 000000000..035a4e077
 +ifeq ($(HOST_OS),Darwin)
 +  ifeq ($(HOST_ARCH),arm64)
 +    RUSTC_HOST_ARCH:=aarch64-apple-darwin
++  else ifeq ($(HOST_ARCH),x86_64)
++    RUSTC_HOST_ARCH:=x86_64-apple-darwin
 +  endif
 +endif
 +
@@ -381,7 +382,7 @@ index 000000000..035a4e077
 +endif
 +
 +# Support only a subset for now.
-+RUST_ARCH_DEPENDS:=@(aarch64||arm||i386||i686||mips||mipsel||mips64||mips64el||mipsel||powerpc64||riscv64||x86_64)
+RUST_ARCH_DEPENDS:=@(aarch64||arm||i386||loongarch64||mips||mips64||mips64el||mipsel||powerpc||powerpc64||riscv64||x86_64)
 +
 +ifneq ($(CONFIG_RUST_SCCACHE),)
 +  RUST_SCCACHE_DIR:=$(if $(call qstrip,$(CONFIG_RUST_SCCACHE_DIR)),$(call qstrip,$(CONFIG_RUST_SCCACHE_DIR)),$(TOPDIR)/.sccache)
