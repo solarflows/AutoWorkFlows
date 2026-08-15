@@ -358,11 +358,16 @@ jobs:
             make defconfig 2>&1
             if grep -q '^CONFIG_CCACHE=y$' .config; then
               export CCACHE_DIR="$(pwd)/.ccache"
-              ccache --max-size 10G
-              ccache --set-config=hash_dir=false
-              ccache --set-config=compression=true
-              ccache --set-config=compression_level=6
-              ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
+              # 优先使用 staging_dir/host/bin/ccache，若无则使用系统 ccache (加 || true 避免无独立命令时阻断)
+              CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
+              [ -x "$CCACHE_BIN" ] || CCACHE_BIN="ccache"
+              if command -v "$CCACHE_BIN" &>/dev/null || [ -x "$CCACHE_BIN" ]; then
+                "$CCACHE_BIN" --max-size 10G 2>/dev/null || true
+                "$CCACHE_BIN" --set-config=hash_dir=false 2>/dev/null || true
+                "$CCACHE_BIN" --set-config=compression=true 2>/dev/null || true
+                "$CCACHE_BIN" --set-config=compression_level=6 2>/dev/null || true
+                "$CCACHE_BIN" --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros 2>/dev/null || true
+              fi
               echo "✅ SDK ccache 已启用 (CONFIG_CCACHE=y, 官方机制)"
               CCACHE_ENABLED=true
               echo "ccache_enabled=true" >> $GITHUB_OUTPUT
@@ -457,7 +462,12 @@ jobs:
           echo "╔══════════════════════════════════════╗"
           echo "║  📈 SDK ccache 统计与命中分析         ║"
           echo "╚══════════════════════════════════════╝"
-          CC_RAW=$(ccache -s 2>/dev/null || true)
+          CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
+          [ -x "$CCACHE_BIN" ] || CCACHE_BIN="ccache"
+          CC_RAW=""
+          if command -v "$CCACHE_BIN" &>/dev/null || [ -x "$CCACHE_BIN" ]; then
+            CC_RAW=$("$CCACHE_BIN" -s 2>/dev/null || true)
+          fi
           echo "$CC_RAW"
 
           # 提取核心指标
