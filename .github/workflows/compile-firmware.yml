@@ -494,10 +494,18 @@ jobs:
           # 期望: TARGET_CC='ccache_cc' / HOSTCC='ccache gcc' / TARGET_CC_NOCACHE='aarch64-...-gcc'
           # 若 TARGET_CC 是 ccache gcc 或裸 gcc → 环境泄漏, 官方包装器未接管。
           echo "🔍 ccache 包装器变量验证 (make val):"
-          make val.TARGET_CC V=s 2>/dev/null || true
-          make val.TARGET_CXX V=s 2>/dev/null || true
-          make val.HOSTCC V=s 2>/dev/null || true
-          make val.TARGET_CC_NOCACHE V=s 2>/dev/null || true
+          TARGET_CC_VALUE=$(make -s val.TARGET_CC V=s 2>/dev/null | tail -1 || true)
+          TARGET_CXX_VALUE=$(make -s val.TARGET_CXX V=s 2>/dev/null | tail -1 || true)
+          HOSTCC_VALUE=$(make -s val.HOSTCC V=s 2>/dev/null | tail -1 || true)
+          TARGET_CC_NOCACHE_VALUE=$(make -s val.TARGET_CC_NOCACHE V=s 2>/dev/null | tail -1 || true)
+          printf '%s\n' "$TARGET_CC_VALUE" "$TARGET_CXX_VALUE" "$HOSTCC_VALUE" "$TARGET_CC_NOCACHE_VALUE"
+          if [ "$TARGET_CC_VALUE" = "ccache_cc" ]; then
+            echo "ccache_wrapper_valid=true" >> $GITHUB_OUTPUT
+            echo "✅ TARGET_CC 已由 ccache_cc 接管"
+          else
+            echo "ccache_wrapper_valid=false" >> $GITHUB_OUTPUT
+            echo "::warning::TARGET_CC 未由 ccache_cc 接管, 禁止保存共享 ccache"
+          fi
           ls -la staging_dir/host/bin/ccache_cc staging_dir/host/bin/ccache_cxx 2>/dev/null || true
           if [ "${{ inputs.cache_strategy }}" = "no-cache" ]; then
             echo "🔧 no-cache 模式: 构建内 ccache 仍由 seed CONFIG_CCACHE 控制, 仅跳过 actions/cache 持久化"
@@ -917,7 +925,7 @@ jobs:
             openwrt/staging_dir/tool*
 
       - name: Save ccache
-        if: success() && inputs.cache_strategy != 'no-cache'
+        if: success() && inputs.cache_strategy != 'no-cache' && steps.build.outputs.ccache_wrapper_valid == 'true'
         id: cache-cc-save
         uses: actions/cache/save@v5
         with:

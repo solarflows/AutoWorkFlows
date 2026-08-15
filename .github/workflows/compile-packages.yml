@@ -127,8 +127,8 @@ jobs:
           ls sdk/
 
       # ───────── ccache 共享恢复（与 compile-firmware 同前缀 key）─────────
-      # 刻意设计: 复用全量编译累积的 .ccache (同 prefix immwrt-v2-ccache-<target>-),
-      # 靠 base_dir 归一化绝对路径实现 openwrt/ 与 sdk/ 两目录树共享命中。
+      # actions/cache 的 cache version 包含 path，故旧的 openwrt/.ccache 和
+      # sdk/.ccache 必须分别 restore；合并后统一保存为 openwrt/.ccache。
       # 仅 restore 不 purge: purge 由全量编译的 latest-only 策略统一收敛。
       - name: Restore ccache
         id: cache-cc-restore
@@ -137,7 +137,28 @@ jobs:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           restore-keys: |
             immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
+          path: openwrt/.ccache
+
+      - name: Restore legacy SDK ccache
+        id: cache-cc-legacy-restore
+        uses: actions/cache/restore@v5
+        with:
+          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          restore-keys: |
+            immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
           path: sdk/.ccache
+
+      - name: Prepare shared ccache path
+        run: |
+          mkdir -p openwrt
+          if [ -d sdk/.ccache ] && [ ! -e openwrt/.ccache ]; then
+            mv sdk/.ccache openwrt/.ccache
+          elif [ -d sdk/.ccache ] && [ -d openwrt/.ccache ]; then
+            cp -a sdk/.ccache/. openwrt/.ccache/
+          fi
+          rm -rf sdk/.ccache
+          mkdir -p openwrt/.ccache
+          ln -s ../openwrt/.ccache sdk/.ccache
 
       - name: Setup Signing Key
         id: signing_key
@@ -321,29 +342,54 @@ jobs:
           #  rules.mk: CONFIG_CCACHE=y 时自动 TARGET_CC:=ccache_cc + export CCACHE_BASEDIR=$(TOPDIR)
           #            + CCACHE_DIR=$(TOPDIR)/.ccache → 路径归一化原生支持, 与全量(TOPDIR=openwrt)
           #            共享命中同一缓存, 无需手工 base_dir。
-          if [ -x staging_dir/host/bin/ccache ] && [ -x staging_dir/host/bin/ccache_cc ]; then
-            if grep -q '^config CCACHE' Config-build.in 2>/dev/null; then
-              ./scripts/config -e CONFIG_CCACHE && echo "✅ SDK ccache 已启用 (CONFIG_CCACHE=y, 官方机制)"
-            else
-              echo "::warning::SDK Config-build.in 无 CCACHE 选项 (旧 SDK?), ccache 未启用"
-            fi
-            # 容量上限无条件设置 (restore 的共享缓存目录自带 conf, 此处仅兜底首次场景)。
-            CCACHE_DIR="$(pwd)/.ccache" ccache --max-size 10G 2>/dev/null || true
-            echo "ccache_enabled=true" >> $GITHUB_OUTPUT
+          CCACHE_ENABLED=false
+          CCACHE_AVAILABLE=false
+          if [ -x staging_dir/host/bin/ccache ] && [ -x staging_dir/host/bin/ccache_cc ] \
+             && grep -q '^config CCACHE' Config-build.in 2>/dev/null; then
+            CCACHE_AVAILABLE=true
           else
-            echo "ccache_enabled=false" >> $GITHUB_OUTPUT
-            echo "⚠️ SDK 无 ccache 二进制/包装器, 本次编译不使用 ccache"
+            echo "⚠️ SDK 无完整 ccache 支持 (二进制/包装器或 CONFIG_CCACHE 选项缺失)"
           fi
 
           make defconfig 2>&1
+
+          # defconfig 可能覆盖 SDK 原始配置; 必须在最后一次 defconfig 后确认。
+          if [ "$CCACHE_AVAILABLE" = "true" ]; then
+            ./scripts/config -e CONFIG_CCACHE
+            make defconfig 2>&1
+            if grep -q '^CONFIG_CCACHE=y$' .config; then
+              export CCACHE_DIR="$(pwd)/.ccache"
+              ccache --max-size 10G
+              ccache --set-config=hash_dir=false
+              ccache --set-config=compression=true
+              ccache --set-config=compression_level=6
+              ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
+              echo "✅ SDK ccache 已启用 (CONFIG_CCACHE=y, 官方机制)"
+              CCACHE_ENABLED=true
+              echo "ccache_enabled=true" >> $GITHUB_OUTPUT
+            else
+              echo "::warning::SDK defconfig 未保留 CONFIG_CCACHE=y, 本次编译不使用 ccache"
+              echo "ccache_enabled=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ccache_enabled=false" >> $GITHUB_OUTPUT
+          fi
 
           # ── ccache 包装器变量级验证 (rules.mk val.% 目标) ──
           # 期望: TARGET_CC='ccache_cc' / HOSTCC='ccache gcc';
           # 若 TARGET_CC 是 ccache gcc 或裸 gcc → 环境泄漏, 官方包装器未接管。
           echo "🔍 ccache 包装器变量验证 (SDK):"
-          make val.TARGET_CC V=s 2>/dev/null || true
-          make val.HOSTCC V=s 2>/dev/null || true
-          make val.TARGET_CC_NOCACHE V=s 2>/dev/null || true
+          TARGET_CC_VALUE=$(make -s val.TARGET_CC V=s 2>/dev/null | tail -1 || true)
+          HOSTCC_VALUE=$(make -s val.HOSTCC V=s 2>/dev/null | tail -1 || true)
+          TARGET_CC_NOCACHE_VALUE=$(make -s val.TARGET_CC_NOCACHE V=s 2>/dev/null | tail -1 || true)
+          printf '%s\n' "$TARGET_CC_VALUE" "$HOSTCC_VALUE" "$TARGET_CC_NOCACHE_VALUE"
+          if [ "$CCACHE_ENABLED" = "true" ] && [ "$TARGET_CC_VALUE" = "ccache_cc" ]; then
+            echo "ccache_wrapper_valid=true" >> $GITHUB_OUTPUT
+            echo "✅ SDK TARGET_CC 已由 ccache_cc 接管"
+          else
+            echo "ccache_wrapper_valid=false" >> $GITHUB_OUTPUT
+            echo "::warning::SDK TARGET_CC 未由 ccache_cc 接管, 禁止保存共享 ccache"
+          fi
           echo "📌 下方编译循环已用 V=s, 可在此步骤日志中搜索 ccache_cc (目标包) / ccache gcc (host 工具) 前缀"
           echo "::endgroup::"
 
@@ -369,12 +415,20 @@ jobs:
       # 刻意设计: 复用全量编译的 immwrt-v2-ccache-<target>- prefix 实现双向共享;
       # 失败不 save (避免污染); 不 purge (由全量 latest-only 策略统一收敛)。
       - name: Save ccache
-        if: success() && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_enabled == 'true'
+        if: success() && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_enabled == 'true' && steps.compile.outputs.ccache_wrapper_valid == 'true'
         id: cache-cc-save
         uses: actions/cache/save@v5
         with:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
-          path: sdk/.ccache
+          path: openwrt/.ccache
+
+      - name: ccache Stats
+        if: always() && steps.compile.outputs.ccache_enabled == 'true'
+        run: |
+          cd sdk
+          export CCACHE_DIR="$(pwd)/.ccache"
+          echo "📈 SDK ccache 统计:"
+          ccache -s
 
       - name: Collect artifacts
         id: artifacts
