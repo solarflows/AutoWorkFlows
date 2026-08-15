@@ -499,12 +499,13 @@ jobs:
           HOSTCC_VALUE=$(make -s val.HOSTCC V=s 2>/dev/null | tail -1 || true)
           TARGET_CC_NOCACHE_VALUE=$(make -s val.TARGET_CC_NOCACHE V=s 2>/dev/null | tail -1 || true)
           printf '%s\n' "$TARGET_CC_VALUE" "$TARGET_CXX_VALUE" "$HOSTCC_VALUE" "$TARGET_CC_NOCACHE_VALUE"
-          if [ "$TARGET_CC_VALUE" = "ccache_cc" ]; then
+          # 兼容两种接管输出: 21.02 的 "ccache_cc" 与 新版本的 "ccache <cross>-gcc"
+          if echo "$TARGET_CC_VALUE" | grep -qE '^(ccache_cc|ccache )'; then
             echo "ccache_wrapper_valid=true" >> $GITHUB_OUTPUT
-            echo "✅ TARGET_CC 已由 ccache_cc 接管"
+            echo "✅ TARGET_CC 已由 ccache 接管 ($TARGET_CC_VALUE)"
           else
             echo "ccache_wrapper_valid=false" >> $GITHUB_OUTPUT
-            echo "::warning::TARGET_CC 未由 ccache_cc 接管, 禁止保存共享 ccache"
+            echo "::warning::TARGET_CC 未由 ccache 接管, 禁止保存共享 ccache"
           fi
           ls -la staging_dir/host/bin/ccache_cc staging_dir/host/bin/ccache_cxx 2>/dev/null || true
           if [ "${{ inputs.cache_strategy }}" = "no-cache" ]; then

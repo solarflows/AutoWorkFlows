@@ -38,7 +38,9 @@ jobs:
   compile-packages:
     name: Compile ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # qualcommax 首次构建 golang host 工具链耗时显著更长:
+    # run 31860987009 在 120 分钟时仍处于 haproxy 依赖编译阶段。
+    timeout-minutes: ${{ inputs.matrix_target == 'qualcommax' && 240 || 120 }}
     concurrency:
       group: packages-release-${{ inputs.matrix_target }}-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
       cancel-in-progress: false
@@ -119,16 +121,23 @@ jobs:
             exit 1
           }
 
+      # ───────── 解压 SDK 与恢复 ccache ─────────
+      # 架构设计说明：
+      # 将 SDK 直接解压到 openwrt/ 而非 sdk/ 目录，使 SDK 增量编译的工作区结构
+      # 与 compile-firmware.yml 全量编译完全同构（TOPDIR 均为 openwrt）。
+      # 这使 OpenWrt 官方 rules.mk 原生导出的 CCACHE_DIR=$(TOPDIR)/.ccache
+      # 在两套工作流中天然指向相同的 openwrt/.ccache，彻底消除 GitHub Actions
+      # actions/cache 因 path 字符串不同导致的 Cache Version 签名不匹配和跨目录软链接开销。
       - name: Extract SDK
         run: |
-          mkdir -p sdk
-          tar xf sdk-dl/${{ steps.resolve.outputs.sdk_file }} -C sdk/ --strip-components=1
-          echo "SDK 解包完成"
-          ls sdk/
+          mkdir -p openwrt
+          tar xf sdk-dl/${{ steps.resolve.outputs.sdk_file }} -C openwrt/ --strip-components=1
+          echo "SDK 解包完成 (解压至 openwrt/ 对齐全量编译目录树)"
+          ls openwrt/
 
-      # ───────── ccache 共享恢复（与 compile-firmware 同前缀 key）─────────
-      # actions/cache 的 cache version 包含 path，故旧的 openwrt/.ccache 和
-      # sdk/.ccache 必须分别 restore；合并后统一保存为 openwrt/.ccache。
+      # ───────── ccache 共享恢复（与 compile-firmware 完全同构）─────────
+      # 复用全量编译累积的 openwrt/.ccache (同 key 前缀 immwrt-v2-ccache-<target>-),
+      # 依靠 rules.mk 原生 CCACHE_BASEDIR=$(TOPDIR) 路径归一化与 hash_dir=false 实现双向无缝命中。
       # 仅 restore 不 purge: purge 由全量编译的 latest-only 策略统一收敛。
       - name: Restore ccache
         id: cache-cc-restore
@@ -138,27 +147,6 @@ jobs:
           restore-keys: |
             immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
           path: openwrt/.ccache
-
-      - name: Restore legacy SDK ccache
-        id: cache-cc-legacy-restore
-        uses: actions/cache/restore@v5
-        with:
-          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
-          restore-keys: |
-            immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
-          path: sdk/.ccache
-
-      - name: Prepare shared ccache path
-        run: |
-          mkdir -p openwrt
-          if [ -d sdk/.ccache ] && [ ! -e openwrt/.ccache ]; then
-            mv sdk/.ccache openwrt/.ccache
-          elif [ -d sdk/.ccache ] && [ -d openwrt/.ccache ]; then
-            cp -a sdk/.ccache/. openwrt/.ccache/
-          fi
-          rm -rf sdk/.ccache
-          mkdir -p openwrt/.ccache
-          ln -s ../openwrt/.ccache sdk/.ccache
 
       - name: Setup Signing Key
         id: signing_key
@@ -170,7 +158,7 @@ jobs:
           # 包管理器从 SDK 的 Config-build.in 探测 (convert-config.pl 把 .config 转成
           # Kconfig 格式: CONFIG_USE_APK=y → "config USE_APK ... default y"; 21.02 无此
           # 选项), 而非 targets.json 的静态字段 (分支升级到 snapshot 会失效)。
-          if grep -q '^config USE_APK' sdk/Config-build.in 2>/dev/null; then
+          if grep -q '^config USE_APK' openwrt/Config-build.in 2>/dev/null; then
             USE_APK=true
           else
             USE_APK=false
@@ -295,8 +283,8 @@ jobs:
           echo "📦 待编译: ${PACKAGES}"
 
           # 直接在 host 上使用自建 SDK (已含工具链,无需 docker 镜像)
-          # 这也实现了「不再依赖 ghcr.io/openwrt/sdk:* 上游 Docker 容器」的目标
-          cd sdk
+          # 解压在 openwrt/ 下与全量编译结构同构
+          cd openwrt
 
           # Match scripts/docker/sdk-test (本地复现脚本): put the local feed in
           # package/ as a core-level overlay. OpenWrt keeps core packages ahead of
@@ -340,11 +328,12 @@ jobs:
           #  target/sdk/Makefile: SDK_DIRS 打包整个 staging_dir/host (含 bin/ccache, bin/ccache_cc)
           #  target/sdk/convert-config.pl: 仅过滤 SIGNED_PACKAGES/PACKAGE/TARGET → CONFIG_CCACHE=y 保留
           #  rules.mk: CONFIG_CCACHE=y 时自动 TARGET_CC:=ccache_cc + export CCACHE_BASEDIR=$(TOPDIR)
-          #            + CCACHE_DIR=$(TOPDIR)/.ccache → 路径归一化原生支持, 与全量(TOPDIR=openwrt)
+          #            + CCACHE_DIR=$(TOPDIR)/.ccache → 路径归一化原生支持, TOPDIR 均为 openwrt,
           #            共享命中同一缓存, 无需手工 base_dir。
           CCACHE_ENABLED=false
           CCACHE_AVAILABLE=false
-          if [ -x staging_dir/host/bin/ccache ] && [ -x staging_dir/host/bin/ccache_cc ] \
+          # 兼容 OpenWrt 21.02 (有 ccache_cc 独立包装器) 与新版本/SNAPSHOT (直接 ccache 二进制)
+          if [ -x staging_dir/host/bin/ccache ] \
              && grep -q '^config CCACHE' Config-build.in 2>/dev/null; then
             CCACHE_AVAILABLE=true
           else
@@ -355,7 +344,17 @@ jobs:
 
           # defconfig 可能覆盖 SDK 原始配置; 必须在最后一次 defconfig 后确认。
           if [ "$CCACHE_AVAILABLE" = "true" ]; then
-            ./scripts/config -e CONFIG_CCACHE
+            # OpenWrt 的 scripts/config 是 Kconfig 源码目录，不是 Linux 内核式
+            # 的可执行脚本；直接更新 .config，再由 conf/defconfig 校验并补全配置。
+            if grep -q '^CONFIG_CCACHE=y$' .config; then
+              :
+            elif grep -q '^# CONFIG_CCACHE is not set$' .config; then
+              sed -i 's/^# CONFIG_CCACHE is not set$/CONFIG_CCACHE=y/' .config
+            elif grep -q '^CONFIG_CCACHE=' .config; then
+              sed -i 's/^CONFIG_CCACHE=.*/CONFIG_CCACHE=y/' .config
+            else
+              printf '%s\n' 'CONFIG_CCACHE=y' >> .config
+            fi
             make defconfig 2>&1
             if grep -q '^CONFIG_CCACHE=y$' .config; then
               export CCACHE_DIR="$(pwd)/.ccache"
@@ -383,12 +382,13 @@ jobs:
           HOSTCC_VALUE=$(make -s val.HOSTCC V=s 2>/dev/null | tail -1 || true)
           TARGET_CC_NOCACHE_VALUE=$(make -s val.TARGET_CC_NOCACHE V=s 2>/dev/null | tail -1 || true)
           printf '%s\n' "$TARGET_CC_VALUE" "$HOSTCC_VALUE" "$TARGET_CC_NOCACHE_VALUE"
-          if [ "$CCACHE_ENABLED" = "true" ] && [ "$TARGET_CC_VALUE" = "ccache_cc" ]; then
+          # 兼容两种接管输出: 21.02 的 "ccache_cc" 与 新版本的 "ccache <cross>-gcc"
+          if [ "$CCACHE_ENABLED" = "true" ] && echo "$TARGET_CC_VALUE" | grep -qE '^(ccache_cc|ccache )'; then
             echo "ccache_wrapper_valid=true" >> $GITHUB_OUTPUT
-            echo "✅ SDK TARGET_CC 已由 ccache_cc 接管"
+            echo "✅ SDK TARGET_CC 已由 ccache 接管 ($TARGET_CC_VALUE)"
           else
             echo "ccache_wrapper_valid=false" >> $GITHUB_OUTPUT
-            echo "::warning::SDK TARGET_CC 未由 ccache_cc 接管, 禁止保存共享 ccache"
+            echo "::warning::SDK TARGET_CC 未由 ccache 接管, 禁止保存共享 ccache"
           fi
           echo "📌 下方编译循环已用 V=s, 可在此步骤日志中搜索 ccache_cc (目标包) / ccache gcc (host 工具) 前缀"
           echo "::endgroup::"
@@ -422,13 +422,58 @@ jobs:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: openwrt/.ccache
 
-      - name: ccache Stats
+      # ───────── 编译耗时与日志统计 ─────────
+      - name: 📊 Build Log Analysis
+        if: always() && steps.compile.outcome == 'success'
+        run: |
+          cd openwrt
+          # 一次性提取所有 compile.txt 末行，再用 awk 分流统计
+          TAIL_ALL=$(find logs -name 'compile.txt' -print0 2>/dev/null | xargs -0 tail -qn1 2>/dev/null || true)
+          TOTAL=$(find logs -name 'compile.txt' 2>/dev/null | wc -l)
+          INCOMPLETE=$((TOTAL - $(echo "$TAIL_ALL" | grep -c '^time: ' || true)))
+          EMPTY=$(find logs -name 'compile.txt' -size 0 2>/dev/null | wc -l)
+          echo "$TAIL_ALL" | grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
+
+          echo "📊 SDK compile.txt: 总计 ${TOTAL}, 未完成 ${INCOMPLETE}, 空 ${EMPTY}"
+
+          {
+            echo ""
+            echo "### 📊 SDK 软件包编译耗时 Top 5"
+            echo '```text'
+            awk -F'#' '{
+              pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
+              real=$2;
+              printf "%8.2fs  %s\n", real, pkg
+            }' build_time_clean.log 2>/dev/null | sort -rn 2>/dev/null | head -5 || echo "无耗时数据"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ───────── ccache 统计与诊断展示 ─────────
+      - name: 📈 ccache Stats
         if: always() && steps.compile.outputs.ccache_enabled == 'true'
         run: |
-          cd sdk
+          cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
-          echo "📈 SDK ccache 统计:"
-          ccache -s
+          echo "╔══════════════════════════════════════╗"
+          echo "║  📈 SDK ccache 统计与命中分析         ║"
+          echo "╚══════════════════════════════════════╝"
+          CC_RAW=$(ccache -s 2>/dev/null || true)
+          echo "$CC_RAW"
+
+          # 提取核心指标
+          HITS_DIRECT=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(direct\)|Direct):\s*\K[0-9]+' | head -1 || echo "?")
+          HITS_PREP=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(preprocessed\)|Preprocessed):\s*\K[0-9]+' | head -1 || echo "?")
+          MISSES=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache miss|Misses):\s*\K[0-9]+' | head -1 || echo "?")
+          CACHE_SIZE=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache size \(|Cache size \()G(?:B|iB)\):\s*\K[0-9.]+' | head -1 || echo "?")
+          DISK_USAGE_HUMAN=$(du -sh ".ccache" 2>/dev/null | cut -f1 || echo "N/A")
+
+          {
+            echo ""
+            echo "### 📈 ccache 缓存统计 (SDK 增量编译)"
+            echo "| 来源 | Direct hits | Preprocessed | Misses | 缓存大小 | 状态 |"
+            echo "|---|---|---|---|---|---|"
+            echo "| **SDK ccache** | ${HITS_DIRECT:-?} | ${HITS_PREP:-?} | ${MISSES:-?} | ${CACHE_SIZE:-?}G (${DISK_USAGE_HUMAN}) | ${{ steps.compile.outputs.ccache_wrapper_valid == 'true' && '✅ 已接管' || '⚠️ 未接管' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect artifacts
         id: artifacts
@@ -439,7 +484,7 @@ jobs:
             echo "⚠️ 无软件包列表,跳过收集"
           else
             for pkg in $SDK_PKGS; do
-              find sdk/bin/packages/ -type f \( \
+              find openwrt/bin/packages/ -type f \( \
                 -name "${pkg}_*.ipk" -o \
                 -name "${pkg}_*.apk" -o \
                 -name "${pkg}*.ipk" -o \
@@ -657,11 +702,13 @@ jobs:
             SIGN_LINE="- 签名: ❌ 未签名"
           fi
           cat > combined-release.md <<EOF
-          ## ${{ inputs.matrix_target }} SDK + IB
+          ## 📦 ${{ inputs.matrix_target }} 固件 (IB 增量构建)
 
-          - 软件版本: ${{ inputs.version }}
-          - IB 基线版本: ${{ steps.resolve-ib.outputs.ib_version }}
-          - packages: ${{ inputs.matrix_packages_branch }} @ $(git -C pkgs-feed rev-parse --short HEAD)
+          - **构建类型**: ⚡ ImageBuilder 重打包 (SDK 增量编译插件 + IB 固件组装)
+          - **软件版本**: ${{ inputs.version }}
+          - **IB 基线版本**: ${{ steps.resolve-ib.outputs.ib_version }}
+          - **软件包 Feed**: \`${{ inputs.matrix_packages_branch }}\` @ $(git -C pkgs-feed rev-parse --short HEAD)
+          - **已打包插件数量**: ${{ steps.artifacts.outputs.package_count }} 个
           ${SIGN_LINE}
           EOF
           TAG="${{ inputs.version }}"
@@ -670,7 +717,7 @@ jobs:
             gh release upload "$TAG" --repo "$REPO" ib/release/firmware/* --clobber
             gh release edit "$TAG" --repo "$REPO" --notes-file combined-release.md --draft=false
           else
-            gh release create "$TAG" --repo "$REPO" --title "${{ inputs.matrix_target }} Build $TAG" \
+            gh release create "$TAG" --repo "$REPO" --title "${{ inputs.matrix_target }} Build $TAG (IB 增量)" \
               --notes-file combined-release.md ib/release/firmware/*
           fi
 
@@ -701,7 +748,7 @@ jobs:
             else
               SIGN_TEXT="❌ 未签名"
             fi
-            printf '%b\n' "${EXISTING}\n\n---\n### ${IMMWRT_TARGET} - SDK 构建 (.${PACKAGE_FORMAT})\n- commit: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')\n- 签名: ${SIGN_TEXT}" > release-notes.md
+            printf '%b\n' "${EXISTING}\n\n---\n### 📦 ${IMMWRT_TARGET} - SDK 增量构建 (.${PACKAGE_FORMAT})\n- **构建类型**: ⚡ 自建 SDK 独立编译 (增量编译插件)\n- **commit**: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')\n- **签名**: ${SIGN_TEXT}" > release-notes.md
             gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md
           else
             SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
@@ -715,7 +762,7 @@ jobs:
             else
               SIGN_TEXT="❌ 未签名"
             fi
-            printf '## Passwall Packages\n\n- **%s**: SDK 构建 (.%s), commit [`%s`](%s/commit/%s)\n- 签名: %s\n' \
+            printf '## Passwall Packages\n\n- **%s**: ⚡ SDK 增量构建 (.%s), commit [`%s`](%s/commit/%s)\n- **签名**: %s\n' \
               "$IMMWRT_TARGET" "$PACKAGE_FORMAT" "$PACKAGE_COMMIT" "$PACKAGE_REPO" "$PACKAGE_SHA" "$SIGN_TEXT" > release-notes.md
             gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
               --notes-file release-notes.md --latest=false "${PACKAGE_FILES[@]}"
@@ -738,16 +785,16 @@ jobs:
           # time.pl 无论命令成败都打印 "time:" 行 (scripts/time.pl), 失败日志同样以
           # "time:" 结尾, 故 compile.txt 末行是否 time: 不能判定失败; 仅保留为中断日志兜底。
           FAILED_PKGS=""
-          if [ -d sdk/logs ]; then
+          if [ -d openwrt/logs ]; then
             # 1) error.txt 权威源
-            for errfile in $(find sdk/logs -name 'error.txt' -type f 2>/dev/null | sort); do
+            for errfile in $(find openwrt/logs -name 'error.txt' -type f 2>/dev/null | sort); do
               while IFS= read -r line; do
                 pkg=$(echo "$line" | sed -n 's/.*ERROR: \(.*\) failed to build.*/\1/p' | sed 's/ \[[^]]*\]$//')
                 [ -n "$pkg" ] && FAILED_PKGS="$FAILED_PKGS $pkg"
               done < "$errfile"
             done
             # 2) 兜底: 末行不含 time: 的 compile.txt (日志被中断如 OOM, 无 error.txt)
-            for logfile in $(find sdk/logs -name 'compile.txt' -type f 2>/dev/null | sort); do
+            for logfile in $(find openwrt/logs -name 'compile.txt' -type f 2>/dev/null | sort); do
               LAST_LINE=$(tail -1 "$logfile" 2>/dev/null || true)
               if ! echo "$LAST_LINE" | grep -q '^time:'; then
                 PKG=$(echo "$logfile" | sed 's|.*logs/||; s|/compile.txt||')
@@ -764,7 +811,7 @@ jobs:
               echo "### ❌ ${pkg}" >> "$GITHUB_STEP_SUMMARY"
               echo '```text' >> "$GITHUB_STEP_SUMMARY"
               # 完整输出日志, 不截断/过滤; 仅对超大文件 (>300KB) 保护显示尾部 1000 行
-              for LOGFILE in "sdk/logs/$pkg/compile.txt" "sdk/logs/$pkg/host-compile.txt" "sdk/logs/$pkg/download.txt"; do
+              for LOGFILE in "openwrt/logs/$pkg/compile.txt" "openwrt/logs/$pkg/host-compile.txt" "openwrt/logs/$pkg/download.txt"; do
                 [ -f "$LOGFILE" ] || continue
                 echo "" >> "$GITHUB_STEP_SUMMARY"
                 echo "▍$LOGFILE ▍" >> "$GITHUB_STEP_SUMMARY"
@@ -780,6 +827,6 @@ jobs:
             done
           else
             echo '```text' >> "$GITHUB_STEP_SUMMARY"
-            tail -50 sdk/ib-build.log 2>/dev/null >> "$GITHUB_STEP_SUMMARY"
+            tail -50 openwrt/ib-build.log 2>/dev/null >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi

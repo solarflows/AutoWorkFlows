@@ -69,6 +69,14 @@ On build failure, follow this investigation sequence:
 5. Search workflows for `TARGET=`, `HOST=`, `BUILD=` export statements
 6. Review `ccache -s` output in build steps
 
+## Windows Environment & Artifact Handling
+
+When diagnosing or inspecting Linux-built SDK/ImageBuilder archives on Windows host:
+- Always use the workspace diagnostic directory `.diagnostics/` (which is git-ignored) for downloading, storing, and unpacking temporary inspection files, never pollute `%TEMP%` or system directories.
+- Always exclude directories containing POSIX relative symlinks (specifically `build_dir/` and intermediate kernel source trees).
+- POSIX cross-hierarchy relative symlinks (e.g. `../../../arch/...`) cause hangs, deadlocks, or permission errors on Windows filesystems across archive extraction tools.
+- When extracting archives on Windows, strictly filter out/exclude `*build_dir*` (or extract only target subdirectories like `staging_dir/host/` and top-level config files).
+
 ## Configuration Conventions
 
 ### Seed file merge order
