@@ -135,27 +135,32 @@ jobs:
           echo "SDK 解包完成 (解压至 openwrt/ 对齐全量编译目录树)"
           ls openwrt/
 
-      # ───────── toolchain 缓存共享恢复（只读: 不 save 不 purge）─────────
-      # SDK 自带 staging_dir/host, 但缺交叉工具链与已安装的 host 工具
-      # (rustc/go/node 等, qualcommax 曾因缺 rustc 每次自举 1h33m)。
-      # 复用全量编译保存的 immwrt-v2-toolchain-<target>- 缓存补齐,
-      # 使 SDK 增量编译与全量带缓存一样"全热"。
-      # 刻意设计: SDK 侧只有 restore —— 不产生新 toolchain 缓存条目,
-      # 不删除任何旧条目; 写入(save)与裁剪(cleanup/purge)均由全量
-      # compile-firmware 独占, 避免 SDK 路径与全量抢占缓存管理权。
-      # key 用本 run 唯一值保证不精确命中 (SDK 无 .git, 无法计算
-      # tools/toolchain 精确 hash), 强制走 restore-keys 前缀取最近缓存,
-      # 与全量路径自身的 restore-keys 兜底逻辑同构。
-      - name: Restore toolchain cache
-        id: cache-tc-restore
+      # ───────── SDK hostpkg 工具链缓存（SDK 自有命名空间 + 全量回退）─────────
+      # 全量 toolchain 缓存 path 只含 host*/tool*, 不含 rustc 安装位置
+      # (staging_dir/target-*/host/)、GOCACHE (tmp/go-build) —— 单独共享无效
+      # (run 31926183611 命中但无提速)。故 SDK 首选自有前缀
+      # immwrt-v2-sdk-hostpkg-<target>-<sdk_source_sha> (key 与 SDK tarball
+      # 源码版本精确绑定, restore+save+purge 全部自管)。
+      # 回退策略: SDK 自有缓存尚不存在时 (首次 run), restore-keys 兜底命中
+      # 全量编译的 immwrt-v2-toolchain-<target>- 缓存, 至少恢复其覆盖的
+      # staging_dir/host* (含 hostpkg 内 go/node 等已装 host 工具) 与 tool*;
+      # rustc 不在全量缓存 path 内, 仍需自举, 由后续 Save SDK hostpkg cache
+      # 生成完整快照。注意: 回退命中时 path 与缓存 version 不一致,
+      # actions/cache 会警告但正常解压, 属预期。
+      - name: Restore SDK hostpkg cache
+        id: cache-hostpkg-restore
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-sdk-${{ github.run_id }}
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ steps.resolve.outputs.sdk_source_sha }}
           restore-keys: |
+            immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-
             immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-
           path: |
-            openwrt/staging_dir/host*
-            openwrt/staging_dir/tool*
+            openwrt/staging_dir/hostpkg
+            openwrt/staging_dir/target-*/host
+            openwrt/dl/cargo
+            openwrt/dl/rustc
+            openwrt/tmp/go-build
 
       # ───────── ccache 共享恢复（与 compile-firmware 完全同构）─────────
       # 复用全量编译累积的 openwrt/.ccache (同 key 前缀 immwrt-v2-ccache-<target>-),
@@ -417,16 +422,16 @@ jobs:
             echo "ccache_wrapper_valid=false" >> $GITHUB_OUTPUT
             echo "::warning::SDK TARGET_CC 未由 ccache 接管, 禁止保存共享 ccache"
           fi
-          echo "📌 下方编译循环已用 V=s, 可在此步骤日志中搜索 ccache_cc (目标包) / ccache gcc (host 工具) 前缀"
+          echo "📌 下方编译循环已用 V=sc (仅摘要+命令), 完整分包日志由 BUILD_LOG=1 写入 logs/<pkg>/compile.txt"
           echo "::endgroup::"
 
           FAILED_PACKAGES=""
           # Compile each requested package and fail after collecting diagnostics.
           for pkg in $PACKAGES; do
             echo "::group::📦 Compile $pkg"
-            make package/"$pkg"/download V=s 2>&1
+            make package/"$pkg"/download V=sc 2>&1
             if ! make package/"$pkg"/compile \
-              BUILD_LOG=1 V=s -j$(nproc 2>/dev/null || echo 4) 2>&1; then
+              BUILD_LOG=1 V=sc -j$(nproc 2>/dev/null || echo 4) 2>&1; then
               echo "::error::⚠️ $pkg build failed"
               FAILED_PACKAGES="$FAILED_PACKAGES $pkg"
             fi
@@ -450,12 +455,13 @@ jobs:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: openwrt/.ccache
 
-      # ───────── 清理远端 ccache 缓存（SDK 保存成功后 latest-only 收敛）─────────
+      # ───────── 清理远端 ccache 快照（SDK 保存成功后 latest-only 收敛）─────────
       # 全量 compile-firmware 已有同款 purge, 但 SDK-only run 不触发全量 job,
       # 这里补齐 SDK 侧的收敛 (仅 ccache 前缀; 保持与 openwrt-build.instructions.md
       # 的 latest-only 策略一致)。当前 key 已先保存, 清理时明确排除它;
       # 列表失败则保留旧缓存, 删除失败仅报告不阻断。
-      - name: Purge stale ccache caches
+      # 注意: 清理的是过期缓存快照, 不是 ccache 数据本身。
+      - name: Purge stale ccache snapshots
         id: ccache-purge
         if: success() && steps.cache-cc-save.outcome == 'success'
         env:
@@ -479,6 +485,52 @@ jobs:
             echo "ℹ️ 无旧 ccache 缓存"
           fi
 
+      # ───────── SDK hostpkg 工具链缓存保存（仅编译成功）─────────
+      # rustc/go/node 等 host 工具经 SDK 自举安装到 staging_dir/hostpkg、
+      # staging_dir/target-*/host, GOCACHE 在 tmp/go-build, crate 在 dl/。
+      # 这些不经 ccache (各自独立缓存体系), 必须整目录快照才能跨 run 复用。
+      # key 绑定 sdk_source_sha: 同一 SDK 版本内容不变, 精确命中; 失败不 save。
+      - name: Save SDK hostpkg cache
+        if: success() && steps.compile.outcome == 'success'
+        id: cache-hostpkg-save
+        uses: actions/cache/save@v5
+        with:
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ steps.resolve.outputs.sdk_source_sha }}
+          path: |
+            openwrt/staging_dir/hostpkg
+            openwrt/staging_dir/target-*/host
+            openwrt/dl/cargo
+            openwrt/dl/rustc
+            openwrt/tmp/go-build
+
+      # ───────── 清理远端 SDK hostpkg 缓存（保留最近 N 份）─────────
+      # hostpkg 缓存按 sdk_source_sha 版本区分, 每个版本内容不同, 不能 latest-only
+      # 一刀切 (需保留旧版本供 SDK 回退); 只清理该 target 前缀下最旧的快照。
+      # 与全量 immwrt-v2-toolchain-* / immwrt-v2-ccache-* 前缀完全隔离, 互不干扰。
+      - name: Purge stale SDK hostpkg snapshots
+        id: hostpkg-purge
+        if: success() && steps.cache-hostpkg-save.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          PREFIX="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-"
+          KEEP=3
+          HOSTPKG_LIST=$(gh cache list --repo "$REPO" --key "$PREFIX" --limit 100 --json id,key,createdAt)
+          HOSTPKG_RC=$?
+          HOSTPKG_IDS=""
+          if [ "$HOSTPKG_RC" -eq 0 ]; then
+            HOSTPKG_IDS=$(echo "$HOSTPKG_LIST" | jq -r --argjson keep "$KEEP" 'sort_by(.createdAt) | .[0:-$keep] | .[].id')
+          fi
+          if [ "$HOSTPKG_RC" -ne 0 ]; then
+            echo "⚠️ 获取 SDK hostpkg 列表失败 (rc=${HOSTPKG_RC}), 保留旧缓存" >&2
+          elif [ -n "$HOSTPKG_IDS" ]; then
+            echo "$HOSTPKG_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
+              || echo "⚠️ 部分 SDK hostpkg 删除失败, 本轮成果仍已保存" >&2
+          else
+            echo "ℹ️ 无旧 SDK hostpkg 缓存 (保留最近 ${KEEP} 份)"
+          fi
+
       # ───────── 编译耗时与日志统计 ─────────
       - name: 📊 Build Log Analysis
         if: always() && steps.compile.outcome == 'success'
@@ -493,6 +545,13 @@ jobs:
 
           echo "📊 SDK compile.txt: 总计 ${TOTAL}, 未完成 ${INCOMPLETE}, 空 ${EMPTY}"
 
+          # ── 缓存命中信息 (供 summary 展示) ──
+          CC_RESTORE_KEY="${{ steps.cache-cc-restore.outputs.cache-matched-key || '未命中' }}"
+          TC_RESTORE_KEY="${{ steps.cache-hostpkg-restore.outputs.cache-matched-key || '未命中' }}"
+          # save action 无 cache-primary-key 输出, 直接展示写入的 key (已知值)
+          TC_SAVE_KEY="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-${{ steps.resolve.outputs.sdk_source_sha }}"
+          TC_SAVE_STATE="${{ steps.cache-hostpkg-save.outcome == 'success' && '✅ 已保存' || '未保存' }}"
+
           {
             echo ""
             echo "### 📊 SDK 软件包编译耗时 Top 5"
@@ -505,7 +564,19 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+          # ── 缓存状态表 (ccache + hostpkg 恢复/保存) ──
+          {
+            echo ""
+            echo "### 📦 缓存命中 (SDK 增量编译)"
+            echo "| 缓存 | 恢复来源 | 保存 key |"
+            echo "|---|---|---|"
+            echo "| **ccache** (C/C++ 对象) | \`${CC_RESTORE_KEY}\` | \`immwrt-v2-ccache-${IMMWRT_TARGET}-${{ github.run_id }}\` |"
+            echo "| **SDK hostpkg** (rustc/go/node) | \`${TC_RESTORE_KEY}\` | \`${TC_SAVE_KEY}\` (${TC_SAVE_STATE}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # ───────── ccache 统计与诊断展示 ─────────
+      # 规范: 原始 ccache -s 输出保留在 CI 终端 (echo "$CC_RAW"),
+      # summary note 只放提炼后的整洁指标表 (含命中率/恢复来源/保存 key)。
       - name: 📈 ccache Stats
         if: always() && steps.compile.outputs.ccache_enabled == 'true'
         run: |
@@ -520,21 +591,45 @@ jobs:
           if command -v "$CCACHE_BIN" &>/dev/null || [ -x "$CCACHE_BIN" ]; then
             CC_RAW=$("$CCACHE_BIN" -s 2>/dev/null || true)
           fi
+          # 原始输出保留到 CI 终端, 供详细诊断
           echo "$CC_RAW"
 
-          # 提取核心指标
+          # 提取核心指标 (兼容 ccache 5.x / 6.x 输出格式)
           HITS_DIRECT=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(direct\)|Direct):\s*\K[0-9]+' | head -1 || echo "?")
           HITS_PREP=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(preprocessed\)|Preprocessed):\s*\K[0-9]+' | head -1 || echo "?")
           MISSES=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache miss|Misses):\s*\K[0-9]+' | head -1 || echo "?")
           CACHE_SIZE=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache size \(|Cache size \()G(?:B|iB)\):\s*\K[0-9.]+' | head -1 || echo "?")
           DISK_USAGE_HUMAN=$(du -sh ".ccache" 2>/dev/null | cut -f1 || echo "N/A")
 
+          # 命中率: 优先 ccache 5.x 的 "cache hit rate" 行, 兼容 6.x 的 Hits 汇总
+          HIT_RATE=$(echo "$CC_RAW" | grep -oP 'cache hit rate\s+\K[0-9.]+ ?%' | head -1 || echo "?")
+          if [ "$HIT_RATE" = "?" ]; then
+            HITS_TOTAL=$(echo "$CC_RAW" | grep -oP '^\s*Hits:\s+\K[0-9]+' | head -1 || echo "?")
+            CALLS_TOTAL=$(echo "$CC_RAW" | grep -oP '^\s*Hits:\s+[0-9]+ / \K[0-9]+' | head -1 || echo "?")
+            if [[ "$HITS_TOTAL" =~ ^[0-9]+$ ]] && [[ "$CALLS_TOTAL" =~ ^[0-9]+$ ]] && [ "$CALLS_TOTAL" -gt 0 ]; then
+              HIT_RATE=$(awk -v h="$HITS_TOTAL" -v t="$CALLS_TOTAL" 'BEGIN{printf "%.1f%%", h/t*100}')
+            fi
+          fi
+
+          RESTORE_KEY="${{ steps.cache-cc-restore.outputs.cache-matched-key || '未命中' }}"
+          # save action 无 cache-primary-key 输出, 直接展示写入的 key (已知值)
+          SAVE_KEY="immwrt-v2-ccache-${IMMWRT_TARGET}-${{ github.run_id }}"
+          SAVE_STATE="${{ steps.cache-cc-save.outcome == 'success' && '✅ 已保存' || '未保存' }}"
+
           {
             echo ""
             echo "### 📈 ccache 缓存统计 (SDK 增量编译)"
-            echo "| 来源 | Direct hits | Preprocessed | Misses | 缓存大小 | 状态 |"
-            echo "|---|---|---|---|---|---|"
-            echo "| **SDK ccache** | ${HITS_DIRECT:-?} | ${HITS_PREP:-?} | ${MISSES:-?} | ${CACHE_SIZE:-?}G (${DISK_USAGE_HUMAN}) | ${{ steps.compile.outputs.ccache_wrapper_valid == 'true' && '✅ 已接管' || '⚠️ 未接管' }} |"
+            echo ""
+            echo "| 指标 | 值 |"
+            echo "|---|---|"
+            echo "| 命中率 | **${HIT_RATE}** |"
+            echo "| Direct hits | ${HITS_DIRECT} |"
+            echo "| Preprocessed | ${HITS_PREP} |"
+            echo "| Misses | ${MISSES} |"
+            echo "| 缓存大小 | ${CACHE_SIZE:-?}G (磁盘 ${DISK_USAGE_HUMAN}) |"
+            echo "| 恢复来源 | \`${RESTORE_KEY}\` |"
+            echo "| 保存 key | \`${SAVE_KEY}\` (${SAVE_STATE}) |"
+            echo "| 包装器接管 | ${{ steps.compile.outputs.ccache_wrapper_valid == 'true' && '✅ 已接管' || '⚠️ 未接管' }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect artifacts
