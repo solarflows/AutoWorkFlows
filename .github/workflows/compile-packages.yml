@@ -135,6 +135,28 @@ jobs:
           echo "SDK 解包完成 (解压至 openwrt/ 对齐全量编译目录树)"
           ls openwrt/
 
+      # ───────── toolchain 缓存共享恢复（只读: 不 save 不 purge）─────────
+      # SDK 自带 staging_dir/host, 但缺交叉工具链与已安装的 host 工具
+      # (rustc/go/node 等, qualcommax 曾因缺 rustc 每次自举 1h33m)。
+      # 复用全量编译保存的 immwrt-v2-toolchain-<target>- 缓存补齐,
+      # 使 SDK 增量编译与全量带缓存一样"全热"。
+      # 刻意设计: SDK 侧只有 restore —— 不产生新 toolchain 缓存条目,
+      # 不删除任何旧条目; 写入(save)与裁剪(cleanup/purge)均由全量
+      # compile-firmware 独占, 避免 SDK 路径与全量抢占缓存管理权。
+      # key 用本 run 唯一值保证不精确命中 (SDK 无 .git, 无法计算
+      # tools/toolchain 精确 hash), 强制走 restore-keys 前缀取最近缓存,
+      # 与全量路径自身的 restore-keys 兜底逻辑同构。
+      - name: Restore toolchain cache
+        id: cache-tc-restore
+        uses: actions/cache/restore@v5
+        with:
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-sdk-${{ github.run_id }}
+          restore-keys: |
+            immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-
+          path: |
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
+
       # ───────── ccache 共享恢复（与 compile-firmware 完全同构）─────────
       # 复用全量编译累积的 openwrt/.ccache (同 key 前缀 immwrt-v2-ccache-<target>-),
       # 依靠 rules.mk 原生 CCACHE_BASEDIR=$(TOPDIR) 路径归一化与 hash_dir=false 实现双向无缝命中。
