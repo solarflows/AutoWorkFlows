@@ -418,7 +418,8 @@ jobs:
 
       # ───────── ccache 快照保存（仅编译成功, 与全量同 prefix）─────────
       # 刻意设计: 复用全量编译的 immwrt-v2-ccache-<target>- prefix 实现双向共享;
-      # 失败不 save (避免污染); 不 purge (由全量 latest-only 策略统一收敛)。
+      # 失败不 save (避免污染)。保存成功后 purge 旧 ccache (与全量 latest-only 一致:
+      # SDK-only run 不会触发全量 purge, 若不收敛 run_id 键会重复累积挤占缓存配额)。
       - name: Save ccache
         if: success() && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_enabled == 'true' && steps.compile.outputs.ccache_wrapper_valid == 'true'
         id: cache-cc-save
@@ -426,6 +427,35 @@ jobs:
         with:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: openwrt/.ccache
+
+      # ───────── 清理远端 ccache 缓存（SDK 保存成功后 latest-only 收敛）─────────
+      # 全量 compile-firmware 已有同款 purge, 但 SDK-only run 不触发全量 job,
+      # 这里补齐 SDK 侧的收敛 (仅 ccache 前缀; 保持与 openwrt-build.instructions.md
+      # 的 latest-only 策略一致)。当前 key 已先保存, 清理时明确排除它;
+      # 列表失败则保留旧缓存, 删除失败仅报告不阻断。
+      - name: Purge stale ccache caches
+        id: ccache-purge
+        if: success() && steps.cache-cc-save.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
+          CC_CURRENT="${CC_PREFIX}${{ github.run_id }}"
+          CC_LIST=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt)
+          CC_RC=$?
+          CC_IDS=""
+          if [ "$CC_RC" -eq 0 ]; then
+            CC_IDS=$(echo "$CC_LIST" | jq -r --arg current "$CC_CURRENT" '[.[] | select(.key != $current)] | .[].id')
+          fi
+          if [ "$CC_RC" -ne 0 ]; then
+            echo "⚠️ 获取 ccache 列表失败 (rc=${CC_RC}), 保留旧缓存" >&2
+          elif [ -n "$CC_IDS" ]; then
+            echo "$CC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
+              || echo "⚠️ 部分 ccache 删除失败, 本轮成果仍已保存" >&2
+          else
+            echo "ℹ️ 无旧 ccache 缓存"
+          fi
 
       # ───────── 编译耗时与日志统计 ─────────
       - name: 📊 Build Log Analysis
@@ -786,6 +816,21 @@ jobs:
           path: build-info.json
           retention-days: 7
 
+      # ───────── 失败日志归档（与全量 compile-firmware 同款, 补齐 SDK 路径缺口）─────────
+      # 诊断步骤的 "完整内容见 artifact" 必须真正有 artifact 可查:
+      # openwrt/logs/** (BUILD_LOG=1 各包 compile/error/download) + .config + IB 构建日志。
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.IMMWRT_TARGET }}-sdk-build-log
+          path: |
+            openwrt/logs/**
+            openwrt/.config
+            ib/ib-build*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: SDK Build Diagnostics
         if: failure()
         run: |
@@ -836,7 +881,14 @@ jobs:
               echo '```' >> "$GITHUB_STEP_SUMMARY"
             done
           else
-            echo '```text' >> "$GITHUB_STEP_SUMMARY"
-            tail -50 openwrt/ib-build.log 2>/dev/null >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # IB 构建发生在 ib/ 目录 (cd ib 后 tee ib-build*.log), 不在 openwrt/ 下
+            IB_LOG=$(find ib -maxdepth 1 -name 'ib-build*.log' 2>/dev/null | head -1 || true)
+            if [ -n "$IB_LOG" ]; then
+              echo '```text' >> "$GITHUB_STEP_SUMMARY"
+              echo "▍${IB_LOG} (末尾 50 行) ▍" >> "$GITHUB_STEP_SUMMARY"
+              tail -50 "$IB_LOG" 2>/dev/null >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "⚠️ 无可用构建日志 (openwrt/logs 与 ib/ib-build*.log 均缺失, 完整日志见 artifact)" >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi

@@ -726,7 +726,10 @@ jobs:
         with:
           path: published-state
           pattern: '*-published-state'
-          merge-multiple: true
+          # 刻意不加 merge-multiple: true! 各 executor 上传的内部文件都是 build-info.json,
+          # merge-multiple 会把它们解压到同一目录导致同名文件互相覆盖
+          # (run 31878516045 只合并到 1 个 target, qualcommax 状态丢失)。
+          # 保留 artifact 子目录, 由 Merge 步骤 find 遍历 (见下)。
 
       - name: Merge published build state
         id: merge-state
@@ -739,12 +742,15 @@ jobs:
           printf '%s\n' "$STATE" > build-state.json
 
           MERGED_COUNT=0
-          for info in published-state/*.json; do
+          # download-artifact 保留 artifact 名子目录 (published-state/<artifact-name>/build-info.json),
+          # find 遍历所有 artifact 的 build-info.json, 免疫同名覆盖与 artifact 数量变化。
+          while IFS= read -r info; do
             [ -f "$info" ] || continue
             STATE_TARGET=$(jq -r '.target // empty' "$info" 2>/dev/null)
             SRC_SHA=$(jq -r '.source_sha // empty' "$info" 2>/dev/null)
             PKG_SHA=$(jq -r '.packages_sha // empty' "$info" 2>/dev/null)
             [ -z "$STATE_TARGET" ] && continue
+            echo "ℹ️ 合并状态来自 $(basename "$(dirname "$info")") → ${STATE_TARGET}"
             jq --arg target "$STATE_TARGET" --arg src "$SRC_SHA" --arg pkg "$PKG_SHA" \
               --arg mode "$(jq -r '.build_mode // "unknown"' "$info" 2>/dev/null)" \
               --arg now "$(date +'%Y-%m-%d %H:%M:%S')" \
@@ -755,7 +761,7 @@ jobs:
               build-state.json > build-state.new
             mv build-state.new build-state.json
             MERGED_COUNT=$((MERGED_COUNT + 1))
-          done
+          done < <(find published-state -name 'build-info.json' -type f 2>/dev/null | sort)
           echo "merged_count=${MERGED_COUNT}" >> "$GITHUB_OUTPUT"
           if [ "$MERGED_COUNT" -eq 0 ]; then
             echo "::notice::没有成功 target 的 published-state artifact,跳过状态写入"
