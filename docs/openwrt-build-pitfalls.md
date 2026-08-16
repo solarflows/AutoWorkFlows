@@ -79,6 +79,42 @@ The package Makefile expected an architecture-specific GNU target directory, so 
 
 Do not set workflow-level, job-level, or exported shell variables named `TARGET`, `HOST`, or `BUILD`. Use `${{ inputs.matrix_target }}` inline, as the previous workflow used `${{ matrix.target }}`, or use a scoped name such as `FIRMWARE_TARGET`. Cache keys, artifact names, and tarball names must not depend on an exported generic `TARGET` variable.
 
+## persist-state merge-multiple Overwrites Same-named Artifact Files
+
+### Symptom
+
+`Persist build state` reported `✅ 已合并 1 个成功 target` while both targets (mt798x + qualcommax) succeeded and uploaded their `*-published-state` artifacts (run 31878516045). The `IMMWRT_BUILD_STATE` repository variable kept the stale state for qualcommax (`last_mode: firmware`, old `source_sha`/`packages_sha`).
+
+### Verified Root Cause
+
+The `persist-state` job downloaded artifacts with:
+
+```yaml
+uses: actions/download-artifact@v8
+with:
+  path: published-state
+  pattern: '*-published-state'
+  merge-multiple: true
+```
+
+Each executor uploads a differently-named artifact (`mt798x-published-state`, `qualcommax-published-state`) but the file inside is always `build-info.json`. With `merge-multiple: true`, download-artifact flattens all artifacts into one directory, so the second `build-info.json` silently overwrote the first; `for info in published-state/*.json` then iterated only one file. Downloading each artifact separately confirmed both files were individually correct — the bug was purely in the merge side.
+
+### Fix
+
+Remove `merge-multiple: true` so download-artifact keeps artifact-name subdirectories (`published-state/<artifact-name>/build-info.json`), then iterate with `find`:
+
+```bash
+while IFS= read -r info; do
+  ...
+done < <(find published-state -name 'build-info.json' -type f 2>/dev/null | sort)
+```
+
+The `find`-based loop is immune to same-name collisions and to future changes in artifact naming/count.
+
+### Verification
+
+Rerun a two-target SDK/IB build: `Persist build state` should log `✅ 已合并 2 个成功 target` and both targets' `last_build`/`last_mode` must update in `IMMWRT_BUILD_STATE`.
+
 ### Diagnostic Notes
 
 If libffi `compile.txt` is very small, approximately 461 bytes and 0.2 seconds in the observed failure, the retry was stamp-skipped. Inspect `logs.1` for the first-pass configure error.

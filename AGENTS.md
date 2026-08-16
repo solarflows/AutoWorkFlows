@@ -62,7 +62,7 @@ See [`.github/instructions/build-artifacts.instructions.md`](.github/instruction
 
 On build failure, use the `openwrt-build-diagnostics` skill for read-only diagnosis. Do not modify workflows or configs directly. The skill analyzes `error.txt`, `compile.txt`, `logs.1/`, and produces an evidence-backed report.
 
-Before investigating, check `docs/openwrt-build-pitfalls.md` and the skill's `references/diagnostic-signatures.md` for a known signature (e.g. `TARGET` env leakage, libffi, stamp-skipped retry, ccache mismatch). Reuse the verified root cause instead of re-deriving it.
+Before investigating, check `docs/openwrt-build-pitfalls.md`, `docs/sdk-hostpkg-cache.md`, and the skill's `references/diagnostic-signatures.md` for a known signature (e.g. `TARGET` env leakage, libffi, persist-state artifact overwrite, stamp-skipped retry, ccache mismatch, SDK hostpkg cache miss). Reuse the verified root cause instead of re-deriving it.
 
 ## General Conventions
 
