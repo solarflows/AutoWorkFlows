@@ -2,26 +2,19 @@
 index bb840ace..dfc85e07 100644
 --- a/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
 +++ b/luci-app-passwall/luasrc/model/cbi/passwall/client/global.lua
-@@ -152,16 +152,16 @@ o = s:taboption("Main", Value, "tcp_node_socks_port", translate("TCP Node") .. "
+@@ -182,12 +182,12 @@ o = s:taboption("Main", Value, "tcp_node_socks_port", translate("TCP Node") .. "
  o.default = 1070
  o.datatype = "port"
  o:depends({ tcp_node = "", ["!reverse"] = true })
 ---[[
-+
-+o = s:taboption("Main", Flag, "tcp_node_socks_bind_local", translate("TCP Node") .. " Socks " .. translate("Bind Local"), translate("When selected, it can only be accessed localhost."))
-+o.default = "1"
-+o:depends({ tcp_node = "", ["!reverse"] = true })
 +
  if has_singbox or has_xray then
  	o = s:taboption("Main", Value, "tcp_node_http_port", translate("TCP Node") .. " HTTP " .. translate("Listen Port") .. " " .. translate("0 is not use"))
 -	o.default = 0
 +	o.default = 10708
  	o.datatype = "port"
++	o:depends({ tcp_node = "", ["!reverse"] = true })
  end
 -]]--
--o = s:taboption("Main", Flag, "tcp_node_socks_bind_local", translate("TCP Node") .. " Socks " .. translate("Bind Local"), translate("When selected, it can only be accessed localhost."))
--o.default = "1"
--o:depends({ tcp_node = "", ["!reverse"] = true })
- 
- -- Node → DNS Depends Settings
- o = s:taboption("Main", DummyValue, "_node_sel_shunt", "")
+ o = s:taboption("Main", Flag, "tcp_node_socks_bind_local", translate("TCP Node") .. " Socks " .. translate("Bind Local"), translate("When selected, it can only be accessed localhost."))
+ o.default = "1"
