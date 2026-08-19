@@ -121,7 +121,7 @@ jobs:
           sudo -E apt -yqq autoclean
           sudo -E apt -yqq clean
           sudo -E apt -yqq install dos2unix libfuse-dev
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.eu.org/init_build_environment.sh)'
+          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
           sudo -E systemctl daemon-reload
           sudo timedatectl set-timezone "$TZ"
 
@@ -469,6 +469,50 @@ jobs:
           echo "    ├─ dl/           : $(du -sh openwrt/dl 2>/dev/null | cut -f1 || echo 'N/A')"
           echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
 
+      # ───────── 工具链预编译（确保 OpenWrt 自带 ccache 可用）─────────
+      # 这不是拆分 Job，而是在同一工作区内显式先完成 tools/toolchain 依赖。
+      # 冷缓存时正常构建；缓存命中时由 OpenWrt stamp 快速跳过。
+      # 若缓存保留了 stamp 但丢失 host/ccache，先使 host staging 失效，避免 make 误判完成。
+      - name: 🔧 Prepare toolchain & ccache
+        id: prepare_toolchain
+        run: |
+          set -euo pipefail
+          echo "╔══════════════════════════════════════╗"
+          echo "║  🔧 Prepare toolchain & ccache       ║"
+          echo "╚══════════════════════════════════════╝"
+          cd openwrt
+          export CCACHE_DIR="$(pwd)/.ccache"
+
+          CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
+          ccache_is_usable() {
+            [ -x "$CCACHE_BIN" ] && "$CCACHE_BIN" --version >/dev/null 2>&1
+          }
+
+          # 缓存可能只恢复了 stamp 而没有 ccache 可执行文件。删除 host staging
+          # 会同时移除 tools 完成标记，随后 make tools/compile 会按依赖重新生成它。
+          if ! ccache_is_usable; then
+            echo "⚠️ OpenWrt host ccache 缺失或不可执行，重新准备 staging_dir/host ..."
+            if [ -e staging_dir/host ] || [ -L staging_dir/host ]; then
+              rm -rf staging_dir/host
+            fi
+          else
+            echo "✅ 已发现可用的 OpenWrt ccache，将复用工具链 stamp（如有效）"
+          fi
+
+          NPROC=$(($(nproc) + 1))
+          echo "🔨 执行 OpenWrt tools/compile + toolchain/compile (${NPROC} 线程)..."
+          make -j"${NPROC}" V=sc tools/compile toolchain/compile 2>&1 | tee toolchain-prebuild.log
+
+          CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
+          if ! ccache_is_usable; then
+            echo "::error::工具链预编译完成，但 OpenWrt ccache 仍不可用: ${CCACHE_BIN}"
+            echo "::error::请检查 CONFIG_CCACHE=y、tools/compile 输出以及 toolchain-prebuild.log"
+            exit 1
+          fi
+          echo "🔧 OpenWrt ccache: ${CCACHE_BIN}"
+          "$CCACHE_BIN" --version
+          echo "toolchain_prepared=true" >> "$GITHUB_OUTPUT"
+
       - name: 🔨 5. Build Firmware
         id: build
         run: |
@@ -478,18 +522,24 @@ jobs:
           echo "╚══════════════════════════════════════╝"
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
-          ccache --max-size 10G
+          CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
+          if [ ! -x "$CCACHE_BIN" ] || ! "$CCACHE_BIN" --version >/dev/null 2>&1; then
+            echo "::error::工具链预编译步骤未提供可执行的 OpenWrt ccache: ${CCACHE_BIN}"
+            exit 1
+          fi
+          echo "🔧 使用 ccache: $CCACHE_BIN"
+          "$CCACHE_BIN" --max-size 10G
           # compiler_check 不设: rules.mk 会 export CCACHE_COMPILERCHECK
           # (环境变量 > 配置文件), 此处 --set-config 会被静默覆盖, 属死配置。
           # CC/CXX 包装也不 export: CONFIG_CCACHE=y 时 rules.mk 自动
           # TARGET_CC:=ccache_cc / HOSTCC:=ccache $(HOSTCC), 官方机制已覆盖
           # 目标侧(MAKE_FLAGS 传 TARGET_CONFIGURE_OPTS)与 host 侧(HOSTCC)。
-          ccache --set-config=hash_dir=false
+          "$CCACHE_BIN" --set-config=hash_dir=false
           # 路径归一化由 rules.mk 原生机制处理 (export CCACHE_BASEDIR=$(TOPDIR)),
           # 与 compile-packages (SDK TOPDIR=sdk/) 天然一致, 无需额外 base_dir。
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
+          "$CCACHE_BIN" --set-config=compression=true
+          "$CCACHE_BIN" --set-config=compression_level=6
+          "$CCACHE_BIN" --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
           # ── ccache 包装器变量级验证 (rules.mk val.% 目标, 秒级零成本) ──
           # 期望: TARGET_CC='ccache_cc' / HOSTCC='ccache gcc' / TARGET_CC_NOCACHE='aarch64-...-gcc'
           # 若 TARGET_CC 是 ccache gcc 或裸 gcc → 环境泄漏, 官方包装器未接管。
@@ -529,7 +579,7 @@ jobs:
       # 此诊断步骤强制 clean+重编一个轻量 C 包 (jansson) 并 V=sc 抓取前缀。
       # ccache 命中使重编仅需数秒; continue-on-error 纯诊断不阻塞构建。
       - name: 🔍 Verify ccache wrapping
-        if: always() && !cancelled()
+        if: always() && !cancelled() && steps.prepare_toolchain.outputs.toolchain_prepared == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -547,7 +597,7 @@ jobs:
       # 刻意设计: 失败后先 git pull 最新源码再重试(上游可能已修),
       # logs/ → logs.1/ 保留初次轮日志用于对比诊断; 单线程轮用 V=sc 输出完整日志
       - name: 🔁 Retry build
-        if: always() && !cancelled() && steps.build.outputs.make_exit != '0'
+        if: always() && !cancelled() && steps.prepare_toolchain.outputs.toolchain_prepared == 'true' && steps.build.outputs.make_exit != '0'
         id: retry
         run: |
           set -euo pipefail
@@ -687,7 +737,9 @@ jobs:
           echo "║  📈 ccache 统计与压缩测量             ║"
           echo "╚══════════════════════════════════════╝"
 
-          if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
+          CCACHE_BIN="$(pwd)/openwrt/staging_dir/host/bin/ccache"
+          [ -x "$CCACHE_BIN" ] || CCACHE_BIN="$(command -v ccache || true)"
+          if [ -n "$CCACHE_BIN" ] && [ -d openwrt/.ccache ]; then
             export CCACHE_DIR="$(pwd)/openwrt/.ccache"
 
             # ── 磁盘用量 + 压缩大小 ──
@@ -700,7 +752,7 @@ jobs:
             fi
 
             # ── 解析关键指标（兼容 ccache 3.x 旧格式 + 4.x 新格式）──
-            CC_RAW=$(ccache -s 2>/dev/null || true)
+            CC_RAW=$("$CCACHE_BIN" -s 2>/dev/null || true)
             HITS_DIRECT=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(direct\)|Direct):\s*\K[0-9]+' | head -1)
             HITS_PREP=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(preprocessed\)|Preprocessed):\s*\K[0-9]+' | head -1)
             MISSES=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache miss|Misses):\s*\K[0-9]+' | head -1)
@@ -811,7 +863,12 @@ jobs:
               fi
             done
 
-            if [ "$HAS_DOWNLOAD_LOGS" = "true" ] && [ "$HAS_COMPILE_LOGS" = "false" ]; then
+            if [ -s toolchain-prebuild.log ] && [ ! -s build.log ] && [ "$HAS_DOWNLOAD_LOGS" = "false" ] && [ "$HAS_COMPILE_LOGS" = "false" ]; then
+              echo "## ❌ 工具链预编译失败详情" >> "$GITHUB_STEP_SUMMARY"
+              echo '```text' >> "$GITHUB_STEP_SUMMARY"
+              tail -100 toolchain-prebuild.log >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            elif [ "$HAS_DOWNLOAD_LOGS" = "true" ] && [ "$HAS_COMPILE_LOGS" = "false" ]; then
               # 有 download.txt 但无 compile.txt → 下载阶段失败
               echo "## ❌ 下载失败详情" >> "$GITHUB_STEP_SUMMARY"
               echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -875,7 +932,13 @@ jobs:
               echo "## ❌ 构建失败详情" >> "$GITHUB_STEP_SUMMARY"
               echo "" >> "$GITHUB_STEP_SUMMARY"
               echo '```text' >> "$GITHUB_STEP_SUMMARY"
-              tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+              if [ -s build.log ]; then
+                tail -100 build.log >> "$GITHUB_STEP_SUMMARY"
+              elif [ -s toolchain-prebuild.log ]; then
+                tail -100 toolchain-prebuild.log >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "未生成 build.log 或 toolchain-prebuild.log" >> "$GITHUB_STEP_SUMMARY"
+              fi
               echo '```' >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
@@ -906,6 +969,7 @@ jobs:
           path: |
             openwrt/build.log
             openwrt/build.1.log
+            openwrt/toolchain-prebuild.log
             openwrt/logs/**
             openwrt/logs.1/**
             openwrt/.config

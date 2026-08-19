@@ -581,7 +581,7 @@ jobs:
           sudo -E apt -yqq clean
           echo "📦 安装编译依赖..."
           sudo -E apt -yqq install dos2unix libfuse-dev
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.eu.org/init_build_environment.sh)'
+          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
           sudo -E systemctl daemon-reload
           sudo timedatectl set-timezone "$TZ"
           echo "✅ 环境准备完成"
