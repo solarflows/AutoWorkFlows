@@ -29,7 +29,7 @@ on:
           - 'full'            # 全量编译 (固件 + SDK + IB)
           - 'sdk-packages'    # 仅用 SDK 编译软件包
       cache_strategy:
-        description: '缓存策略 (仅 build-firmware 模式生效)'
+        description: '缓存策略 (非 smart 策略强制全量编译)'
         required: false
         default: 'smart'
         type: choice
@@ -38,7 +38,7 @@ on:
           - 'clean-toolchain'  # 不用工具链缓存, ccache 正常
           - 'clean-ccache'     # 不用 ccache, 工具链缓存正常
           - 'clean-all'        # 两者都清空重建
-          - 'no-cache'         # 不使用任何缓存 (不恢复/不编译 ccache/不清理)
+          - 'no-cache'         # 不持久化 Actions Cache,仍允许构建内 ccache
       skip_upstream:
         description: '跳过上游同步 (节省时间)'
         required: false
@@ -98,6 +98,7 @@ jobs:
       has_firmware:             ${{ steps.decision.outputs.has_firmware }}
       has_sdk_ib:               ${{ steps.decision.outputs.has_sdk_ib }}
       has_packages:             ${{ steps.decision.outputs.has_packages }}
+      cache_strategy:              ${{ steps.decision.outputs.cache_strategy }}
     steps:
       - name: Checkout AutoWorkflows (sparse)
         uses: actions/checkout@v6
@@ -420,6 +421,15 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
+          CACHE_STRATEGY="${{ github.event.inputs.cache_strategy || 'smart' }}"
+          case "$CACHE_STRATEGY" in
+            smart|clean-toolchain|clean-ccache|clean-all|no-cache) ;;
+            *)
+              echo "::warning::未知缓存策略 '$CACHE_STRATEGY', 回退到 smart"
+              CACHE_STRATEGY=smart
+              ;;
+          esac
+          echo "cache_strategy=$CACHE_STRATEGY" >> "$GITHUB_OUTPUT"
           FILTERED=$(cat /tmp/filtered_targets.json)
           CHANGES=$(cat /tmp/target_changes.json)
           echo '[]' > /tmp/target_plan.json
@@ -472,36 +482,44 @@ jobs:
 
             need_sdk=false
             need_ib=false
-            if [ "$TRIGGER" = "sdk-packages" ]; then
-              need_sdk=true
-            elif [ "$TRIGGER" = "smart" ]; then
-              if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ]; then
-                # Package-only changes use the existing SDK and IB together.
+            # Non-default cache strategies are a routing decision, not an executor
+            # fallback: they always use the full-build workflow so its cache
+            # maintenance can perform the requested clean/rebuild operation.
+            if [ "$CACHE_STRATEGY" = "smart" ]; then
+              if [ "$TRIGGER" = "sdk-packages" ]; then
                 need_sdk=true
-                need_ib=true
+              elif [ "$TRIGGER" = "smart" ]; then
+                if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ]; then
+                  # Package-only changes use the existing SDK and IB together.
+                  need_sdk=true
+                  need_ib=true
+                fi
               fi
-            fi
 
-            if [ "$need_sdk" = "true" ] && ! probe_index sdk "$ARTIFACTS_TAG" "$ARTIFACTS_REPO" sdk-index.json "$MATRIX_TARGET"; then
-              SDK_READY=false
-            fi
-            if [ "$need_ib" = "true" ] && ! probe_index ib "$ARTIFACTS_TAG" "$ARTIFACTS_REPO" ib-index.json "$MATRIX_TARGET"; then
-              IB_READY=false
-            fi
-            if [ "$need_sdk" = "true" ] && [ "$need_ib" = "true" ] && \
-               [ "$SDK_READY" = "true" ] && [ "$IB_READY" = "true" ]; then
-              SDK_VERSION_KEY=$(jq -r '.key' "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json")
-              IB_VERSION_KEY=$(jq -r '.key' "/tmp/ib-probe-${MATRIX_TARGET}/selected.json")
-              SDK_SOURCE_SHA=$(jq -r '.value.source_sha' "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json")
-              IB_SOURCE_SHA=$(jq -r '.value.source_sha' "/tmp/ib-probe-${MATRIX_TARGET}/selected.json")
-              if [ "$SDK_VERSION_KEY" != "$IB_VERSION_KEY" ] || [ "$SDK_SOURCE_SHA" != "$IB_SOURCE_SHA" ]; then
-                echo "::warning::[${MATRIX_TARGET}] 最新 SDK/IB 版本或源码不一致,升级为全量编译"
+              if [ "$need_sdk" = "true" ] && ! probe_index sdk "$ARTIFACTS_TAG" "$ARTIFACTS_REPO" sdk-index.json "$MATRIX_TARGET"; then
                 SDK_READY=false
+              fi
+              if [ "$need_ib" = "true" ] && ! probe_index ib "$ARTIFACTS_TAG" "$ARTIFACTS_REPO" ib-index.json "$MATRIX_TARGET"; then
                 IB_READY=false
               fi
+              if [ "$need_sdk" = "true" ] && [ "$need_ib" = "true" ] && \
+                 [ "$SDK_READY" = "true" ] && [ "$IB_READY" = "true" ]; then
+                SDK_VERSION_KEY=$(jq -r '.key' "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json")
+                IB_VERSION_KEY=$(jq -r '.key' "/tmp/ib-probe-${MATRIX_TARGET}/selected.json")
+                SDK_SOURCE_SHA=$(jq -r '.value.source_sha' "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json")
+                IB_SOURCE_SHA=$(jq -r '.value.source_sha' "/tmp/ib-probe-${MATRIX_TARGET}/selected.json")
+                if [ "$SDK_VERSION_KEY" != "$IB_VERSION_KEY" ] || [ "$SDK_SOURCE_SHA" != "$IB_SOURCE_SHA" ]; then
+                  echo "::warning::[${MATRIX_TARGET}] 最新 SDK/IB 版本或源码不一致,升级为全量编译"
+                  SDK_READY=false
+                  IB_READY=false
+                fi
+              fi
             fi
 
-            if [ "$TRIGGER" = "full" ]; then
+            if [ "$CACHE_STRATEGY" != "smart" ]; then
+              echo "ℹ️ [${MATRIX_TARGET}] cache_strategy=${CACHE_STRATEGY},强制全量编译"
+              SHOULD_FW=true; SHOULD_PUB_FW=true
+            elif [ "$TRIGGER" = "full" ]; then
               SHOULD_FW=true; SHOULD_PUB_FW=true
             elif [ "$TRIGGER" = "sdk-packages" ]; then
               if [ "$SDK_READY" = "true" ]; then
@@ -567,7 +585,7 @@ jobs:
           {
             echo "## 🎯 Build Decision"
             echo ""
-            echo "**触发**: \`${TRIGGER}\` | **目标**: \`${{ github.event.inputs.target || 'both' }}\` | **缓存**: \`${{ github.event.inputs.cache_strategy || 'smart' }}\`"
+            echo "**触发**: \`${TRIGGER}\` | **目标**: \`${{ github.event.inputs.target || 'both' }}\` | **缓存**: \`${CACHE_STRATEGY}\`"
             echo ""
             echo "**版本**: 固件 \`${VER}\` / SDK \`${SDKV}\` / IB \`${IBV}\`"
             echo ""
@@ -626,7 +644,7 @@ jobs:
       version:                   ${{ needs.plan.outputs.version }}
       sdk_version:               ${{ needs.plan.outputs.sdk_version }}
       ib_version:                ${{ needs.plan.outputs.ib_version }}
-      cache_strategy:            ${{ github.event.inputs.cache_strategy || 'smart' }}
+      cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
       publish_sdk_ib:            true
     secrets:
@@ -663,6 +681,7 @@ jobs:
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
       sdk_version:               ${{ needs.plan.outputs.sdk_version }}
+      cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
@@ -696,6 +715,7 @@ jobs:
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
       sdk_version:               ${{ needs.plan.outputs.sdk_version }}
+      cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}

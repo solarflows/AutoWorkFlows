@@ -160,7 +160,7 @@ Hooks/Prepare/Post += ShadowsocksR/Fixup/Prepare
 
 ## Cache Strategy
 
-The supported strategies are `smart`, `clean-toolchain`, `clean-ccache`, `clean-all`, and `no-cache`. `no-cache` skips ccache wrapping, restore, statistics, and cleanup so it can answer whether cache state contributes to a failure. When ccache is enabled, configure its size and compiler checks unconditionally; only wrapper export is conditional.
+The supported strategies are `smart`, `clean-toolchain`, `clean-ccache`, `clean-all`, and `no-cache`. `plan` routes every non-`smart` strategy to the full-build executor; the executor then performs the selected restore/save/purge behavior. `no-cache` skips Actions Cache restore, save, statistics, and purge, but does not forcibly disable OpenWrt's in-build ccache when the seed retains `CONFIG_CCACHE=y`. ccache configuration remains guarded by the discovered build support.
 
 ## Toolchain Cache Self-Deletion
 
@@ -213,8 +213,9 @@ This ordering means:
 - a compile or diagnostic failure skips both saves and purge, so an existing cache is not replaced;
 - a save failure skips purge, so an existing cache remains available;
 - a purge/API failure may temporarily leave more than one entry, but cannot delete the current result;
-- `ccache --max-size 10G` and compression manage the contents of one ccache snapshot, not the number of remote Actions cache entries;
-- the v2 workflow no longer performs a monthly full flush, and does not remove v1 or unrelated workflow caches.
+- `ccache --max-size 10G` manages the contents of one ccache snapshot; ccache's internal compression and Actions Cache archive compression are separate controls, so workflows do not force a compression mode;
+- the v2 workflow no longer performs a monthly full flush, and does not remove v1 or unrelated workflow caches;
+- full builds may produce `immwrt-v2-sdk-hostpkg-*` snapshots, but only the SDK executor retains and purges that namespace.
 
 ## Make 表达式版本号注入 Shell (SDK/IB 打包崩溃)
 

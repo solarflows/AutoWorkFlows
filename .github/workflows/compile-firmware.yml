@@ -103,10 +103,17 @@ jobs:
       - name: Compute toolchain hash
         id: toolchain_hash
         run: |
-          HASH=$(git -C openwrt log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
+          # The checkout is intentionally shallow, so git log can return no
+          # result even when the current tree contains the relevant sources.
+          # Hash the current tree objects instead; this is stable at depth=1.
+          TOOLS_TREE=$(git -C openwrt rev-parse HEAD:tools 2>/dev/null || echo "missing")
+          TOOLCHAIN_TREE=$(git -C openwrt rev-parse HEAD:toolchain 2>/dev/null || echo "missing")
+          HASH=$(printf '%s\n%s\n' "$TOOLS_TREE" "$TOOLCHAIN_TREE" | sha256sum | cut -c1-16)
           CACHE_STRATEGY="${{ inputs.cache_strategy }}"
           if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
-            HASH="force-${HASH}"
+            # Cache keys are immutable. A clean rebuild must write a new snapshot
+            # even when the source hash has not changed since the previous clean run.
+            HASH="force-${HASH}-${GITHUB_RUN_ID}"
           fi
           echo "hash=$HASH" >> $GITHUB_OUTPUT
 
@@ -171,7 +178,7 @@ jobs:
             openwrt/staging_dir/tool*
 
       - name: Restore ccache
-        if: inputs.cache_strategy != 'no-cache'
+        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-ccache'
         id: cache-cc
         uses: actions/cache/restore@v5
         with:
@@ -191,7 +198,9 @@ jobs:
           CACHE_STRATEGY="${{ inputs.cache_strategy }}"
           # clean-toolchain 模式: restore 已跳过(见上一步), 无需 rm -rf
           if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ]; then
-            command -v ccache &>/dev/null && ccache -C 2>/dev/null || true
+            CCACHE_BIN="$(pwd)/openwrt/staging_dir/host/bin/ccache"
+            [ -x "$CCACHE_BIN" ] || CCACHE_BIN="$(command -v ccache 2>/dev/null || true)"
+            [ -n "$CCACHE_BIN" ] && "$CCACHE_BIN" -C 2>/dev/null || true
             rm -rf openwrt/.ccache 2>/dev/null || true
           fi
 
@@ -478,34 +487,64 @@ jobs:
           echo "╚══════════════════════════════════════╝"
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
-          ccache --max-size 10G
+          CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
+          [ -x "$CCACHE_BIN" ] || CCACHE_BIN="$(command -v ccache 2>/dev/null || true)"
+          if [ -z "$CCACHE_BIN" ]; then
+            echo "::error::找不到 ccache (SDK/toolchain 或 runner PATH)"
+            exit 1
+          fi
+          "$CCACHE_BIN" --max-size 10G
           # compiler_check 不设: rules.mk 会 export CCACHE_COMPILERCHECK
           # (环境变量 > 配置文件), 此处 --set-config 会被静默覆盖, 属死配置。
           # CC/CXX 包装也不 export: CONFIG_CCACHE=y 时 rules.mk 自动
           # TARGET_CC:=ccache_cc / HOSTCC:=ccache $(HOSTCC), 官方机制已覆盖
           # 目标侧(MAKE_FLAGS 传 TARGET_CONFIGURE_OPTS)与 host 侧(HOSTCC)。
-          ccache --set-config=hash_dir=false
+          "$CCACHE_BIN" --set-config=hash_dir=false
           # 路径归一化由 rules.mk 原生机制处理 (export CCACHE_BASEDIR=$(TOPDIR)),
-          # 与 compile-packages (SDK TOPDIR=sdk/) 天然一致, 无需额外 base_dir。
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime,time_macros
+          # 与 compile-packages (SDK TOPDIR=openwrt/) 天然一致, 无需额外 base_dir。
+          # Do not force compression here: qualcommax exports CCACHE_NOCOMPRESS,
+          # and Actions Cache compresses the archive independently. Keep only the
+          # existing hash/mtime policy until an A/B build justifies changing it.
+          "$CCACHE_BIN" --set-config=sloppiness=file_stat_matches,include_file_mtime,include_file_ctime
           # ── ccache 包装器变量级验证 (rules.mk val.% 目标, 秒级零成本) ──
-          # 期望: TARGET_CC='ccache_cc' / HOSTCC='ccache gcc' / TARGET_CC_NOCACHE='aarch64-...-gcc'
-          # 若 TARGET_CC 是 ccache gcc 或裸 gcc → 环境泄漏, 官方包装器未接管。
+          # 同时检查 C/C++ 的 target/host 包装器及其 NOCACHE 原值，避免只验证
+          # TARGET_CC 却让 TARGET_CXX 或 host 编译绕过 ccache。
           echo "🔍 ccache 包装器变量验证 (make val):"
           TARGET_CC_VALUE=$(make -s val.TARGET_CC V=s 2>/dev/null | tail -1 || true)
           TARGET_CXX_VALUE=$(make -s val.TARGET_CXX V=s 2>/dev/null | tail -1 || true)
           HOSTCC_VALUE=$(make -s val.HOSTCC V=s 2>/dev/null | tail -1 || true)
+          HOSTCXX_VALUE=$(make -s val.HOSTCXX V=s 2>/dev/null | tail -1 || true)
           TARGET_CC_NOCACHE_VALUE=$(make -s val.TARGET_CC_NOCACHE V=s 2>/dev/null | tail -1 || true)
-          printf '%s\n' "$TARGET_CC_VALUE" "$TARGET_CXX_VALUE" "$HOSTCC_VALUE" "$TARGET_CC_NOCACHE_VALUE"
-          # 兼容两种接管输出: 21.02 的 "ccache_cc" 与 新版本的 "ccache <cross>-gcc"
-          if echo "$TARGET_CC_VALUE" | grep -qE '^(ccache_cc|ccache )'; then
+          TARGET_CXX_NOCACHE_VALUE=$(make -s val.TARGET_CXX_NOCACHE V=s 2>/dev/null | tail -1 || true)
+          HOSTCC_NOCACHE_VALUE=$(make -s val.HOSTCC_NOCACHE V=s 2>/dev/null | tail -1 || true)
+          HOSTCXX_NOCACHE_VALUE=$(make -s val.HOSTCXX_NOCACHE V=s 2>/dev/null | tail -1 || true)
+          printf 'TARGET_CC=%s\nTARGET_CXX=%s\nHOSTCC=%s\nHOSTCXX=%s\n' \
+            "$TARGET_CC_VALUE" "$TARGET_CXX_VALUE" "$HOSTCC_VALUE" "$HOSTCXX_VALUE"
+          printf 'TARGET_CC_NOCACHE=%s\nTARGET_CXX_NOCACHE=%s\nHOSTCC_NOCACHE=%s\nHOSTCXX_NOCACHE=%s\n' \
+            "$TARGET_CC_NOCACHE_VALUE" "$TARGET_CXX_NOCACHE_VALUE" \
+            "$HOSTCC_NOCACHE_VALUE" "$HOSTCXX_NOCACHE_VALUE"
+
+          is_ccache_wrapper() {
+            printf '%s\n' "$1" | grep -qE '(^|[[:space:]/])ccache(_cc|_cxx)?([[:space:]]|$)'
+          }
+          is_plain_compiler() {
+            [ -n "$1" ] && ! printf '%s\n' "$1" | grep -q 'ccache'
+          }
+          WRAPPERS_VALID=false
+          if is_ccache_wrapper "$TARGET_CC_VALUE" && is_ccache_wrapper "$TARGET_CXX_VALUE" \
+             && is_ccache_wrapper "$HOSTCC_VALUE" && is_ccache_wrapper "$HOSTCXX_VALUE" \
+             && is_plain_compiler "$TARGET_CC_NOCACHE_VALUE" \
+             && is_plain_compiler "$TARGET_CXX_NOCACHE_VALUE" \
+             && is_plain_compiler "$HOSTCC_NOCACHE_VALUE" \
+             && is_plain_compiler "$HOSTCXX_NOCACHE_VALUE"; then
+            WRAPPERS_VALID=true
+          fi
+          if [ "$WRAPPERS_VALID" = true ]; then
             echo "ccache_wrapper_valid=true" >> $GITHUB_OUTPUT
-            echo "✅ TARGET_CC 已由 ccache 接管 ($TARGET_CC_VALUE)"
+            echo "✅ target/host C/C++ 编译器均由 ccache 接管, NOCACHE 变量保持裸编译器"
           else
             echo "ccache_wrapper_valid=false" >> $GITHUB_OUTPUT
-            echo "::warning::TARGET_CC 未由 ccache 接管, 禁止保存共享 ccache"
+            echo "::warning::ccache 包装器变量验证失败, 禁止保存共享 ccache"
           fi
           ls -la staging_dir/host/bin/ccache_cc staging_dir/host/bin/ccache_cxx 2>/dev/null || true
           if [ "${{ inputs.cache_strategy }}" = "no-cache" ]; then
@@ -687,7 +726,9 @@ jobs:
           echo "║  📈 ccache 统计与压缩测量             ║"
           echo "╚══════════════════════════════════════╝"
 
-          if command -v ccache &>/dev/null && [ -d openwrt/.ccache ]; then
+          CCACHE_BIN="$(pwd)/openwrt/staging_dir/host/bin/ccache"
+          [ -x "$CCACHE_BIN" ] || CCACHE_BIN="$(command -v ccache 2>/dev/null || true)"
+          if [ -n "$CCACHE_BIN" ] && [ -d openwrt/.ccache ]; then
             export CCACHE_DIR="$(pwd)/openwrt/.ccache"
 
             # ── 磁盘用量 + 压缩大小 ──
@@ -700,7 +741,7 @@ jobs:
             fi
 
             # ── 解析关键指标（兼容 ccache 3.x 旧格式 + 4.x 新格式）──
-            CC_RAW=$(ccache -s 2>/dev/null || true)
+            CC_RAW=$("$CCACHE_BIN" -s 2>/dev/null || true)
             HITS_DIRECT=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(direct\)|Direct):\s*\K[0-9]+' | head -1)
             HITS_PREP=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(preprocessed\)|Preprocessed):\s*\K[0-9]+' | head -1)
             MISSES=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache miss|Misses):\s*\K[0-9]+' | head -1)
@@ -912,12 +953,15 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # ───────── toolchain/ccache 缓存保存（仅编译成功）─────────
-      # 先保存本轮结果，再清理旧 key。编译失败时两个 save 都跳过,
-      # 因而不会替换已有缓存；save 失败时 purge 也不会执行。
+      # ───────── toolchain/ccache/SDK tool 缓存保存（仅编译成功）─────────
+      # full executor 维护全量 toolchain 和共享 ccache，并生产 SDK 专用
+      # host/tool 快照。三类缓存使用独立 save，某一类保存失败不阻塞另外两类。
+      # SDK producer 与 consumer 必须使用完全相同的 SDK path 列表；SDK
+      # executor 独占 SDK 快照的保留和清理，full executor 不删除该 namespace。
       - name: Save toolchain cache
         if: success() && inputs.cache_strategy != 'no-cache'
         id: cache-tc-save
+        continue-on-error: true
         uses: actions/cache/save@v5
         with:
           key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
@@ -928,22 +972,37 @@ jobs:
       - name: Save ccache
         if: success() && inputs.cache_strategy != 'no-cache' && steps.build.outputs.ccache_wrapper_valid == 'true'
         id: cache-cc-save
+        continue-on-error: true
         uses: actions/cache/save@v5
         with:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: openwrt/.ccache
 
-      # ───────── 清理远端 GitHub Actions 缓存（仅两类 cache 都保存成功）─────────
+      - name: Save SDK hostpkg cache
+        if: success() && inputs.cache_strategy != 'no-cache'
+        id: cache-sdk-hostpkg-save
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ steps.clone_packages.outputs.sha_full }}-${{ github.run_id }}
+          path: |
+            openwrt/staging_dir/hostpkg
+            openwrt/staging_dir/target-*/host
+            openwrt/dl/cargo
+            openwrt/dl/rustc
+            openwrt/tmp/go-build
+
+      # ───────── 清理远端工具链缓存（独立维护）─────────
       # 当前 key 已先保存，清理时明确排除它；清理失败只会暂时多留旧 cache,
-      # 不会删除本轮成果或影响已有可用缓存。
-      - name: Purge stale GitHub Actions caches
-        id: cache-purge
-        if: success() && inputs.cache_strategy != 'no-cache' && steps.cache-tc-save.outcome == 'success' && steps.cache-cc-save.outcome == 'success'
+      # 不会删除本轮成果或影响已有可用缓存。always() 使 ccache/SDK save
+      # 的独立失败不会阻塞本类 purge。
+      - name: Purge stale toolchain caches
+        id: cache-tc-purge
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-tc-save.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-
           TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
           TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
           TC_LIST=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt)
@@ -961,6 +1020,14 @@ jobs:
             echo "ℹ️ 无旧工具链缓存"
           fi
 
+      # ───────── 清理远端 ccache（独立维护）─────────
+      - name: Purge stale ccache snapshots
+        id: cache-cc-purge
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-cc-save.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
           CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
           CC_CURRENT="${CC_PREFIX}${{ github.run_id }}"
           CC_LIST=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt)
@@ -977,6 +1044,10 @@ jobs:
           else
             echo "ℹ️ 无旧 ccache 缓存"
           fi
+
+      # SDK host/tool 快照的保留和清理由 compile-packages 独占；full
+      # 只负责生产当前源码对应的快照，避免两个 executor 并发删除同一 namespace。
+      # no-cache 不保存任何 Actions Cache；其余策略按各自策略恢复、保存并清理。
 
       # ════════════ 产物打包 ════════════
       # 刻意设计: 打包后输出 release/ 根目录结构(深度1), 便于人工快速核验产物完整性
