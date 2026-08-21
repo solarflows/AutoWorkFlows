@@ -168,6 +168,7 @@ jobs:
       - name: Restore toolchain cache
         id: cache-tc-restore
         if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
+        continue-on-error: true
         uses: actions/cache/restore@v5
         with:
           key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
@@ -180,6 +181,7 @@ jobs:
       - name: Restore ccache
         if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-ccache'
         id: cache-cc
+        continue-on-error: true
         uses: actions/cache/restore@v5
         with:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
@@ -774,6 +776,7 @@ jobs:
           [ -x "$CCACHE_BIN" ] || CCACHE_BIN="$(command -v ccache 2>/dev/null || true)"
           if [ -n "$CCACHE_BIN" ] && [ -d openwrt/.ccache ]; then
             export CCACHE_DIR="$(pwd)/openwrt/.ccache"
+            . AutoWorkFlows/.github/scripts/parse-ccache-stats.sh
 
             # ── 磁盘用量 + 压缩大小 ──
             DISK_USAGE_HUMAN=$(du -sh "openwrt/.ccache" 2>/dev/null | cut -f1)
@@ -784,24 +787,26 @@ jobs:
               CC_GZIP_HUMAN=$(numfmt --to=iec "$CC_GZIP_BYTES" 2>/dev/null || echo "${CC_GZIP_BYTES} B")
             fi
 
-            # ── 解析关键指标（兼容 ccache 3.x 旧格式 + 4.x 新格式）──
+            # ── 解析关键指标（兼容 ccache 3.x 旧格式 + 4.x/6.x 新格式）──
             CC_RAW=$("$CCACHE_BIN" -s 2>/dev/null || true)
-            HITS_DIRECT=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(direct\)|Direct):\s*\K[0-9]+' | head -1)
-            HITS_PREP=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache hit \(preprocessed\)|Preprocessed):\s*\K[0-9]+' | head -1)
-            MISSES=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache miss|Misses):\s*\K[0-9]+' | head -1)
-            CACHE_SIZE=$(echo "$CC_RAW" | grep -oP '^\s*(?:cache size \(|Cache size \()G(?:B|iB)\):\s*\K[0-9.]+' | head -1)
-            # 如果 4.x 格式的 Direct/Preprocessed/Misses 没抓到，说明可能是其他格式，置空即可
-            [ -z "$HITS_DIRECT" ] && HITS_DIRECT="?"
-            [ -z "$HITS_PREP" ] && HITS_PREP="?"
-            [ -z "$MISSES" ] && MISSES="?"
-            [ -z "$CACHE_SIZE" ] && CACHE_SIZE="?"
+            ccache_stats_parse "$CC_RAW"
+            HITS_DIRECT="$CCACHE_STATS_HITS_DIRECT"
+            HITS_PREP="$CCACHE_STATS_HITS_PREPROCESSED"
+            MISSES="$CCACHE_STATS_MISSES"
+            HIT_RATE="$CCACHE_STATS_HIT_RATE"
+            CACHE_SIZE="$CCACHE_STATS_SIZE_GB"
+            CACHE_SIZE_LABEL="$CACHE_SIZE"
+            [ "$CACHE_SIZE" = "N/A" ] || CACHE_SIZE_LABEL="${CACHE_SIZE}G"
+            DISK_USAGE_HUMAN="${DISK_USAGE_HUMAN:-N/A}"
+            CC_GZIP_HUMAN="${CC_GZIP_HUMAN:-N/A}"
 
             # ── 终端日志 ──
             echo "📈 ccache 统计:"
             echo "  Direct hits:   ${HITS_DIRECT}"
             echo "  Preprocessed:  ${HITS_PREP}"
             echo "  Misses:        ${MISSES}"
-            echo "  Cache size:    ${CACHE_SIZE}G (disk ${DISK_USAGE_HUMAN}, gzip ~${CC_GZIP_HUMAN})"
+            echo "  Hit rate:      ${HIT_RATE}"
+            echo "  Cache size:    ${CACHE_SIZE_LABEL} (disk ${DISK_USAGE_HUMAN}, gzip ~${CC_GZIP_HUMAN})"
 
             # ── Summary ──
             TC_HIT_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
@@ -809,13 +814,18 @@ jobs:
             {
               echo ""
               echo "### 📈 ccache 统计"
-              echo "| 项 | Direct hits | Preprocessed | Misses | 缓存大小 | 压缩后 |"
-              echo "|---|---|---|---|---|---|"
-              echo "| **ccache** | ${HITS_DIRECT} | ${HITS_PREP} | ${MISSES} | ${CACHE_SIZE}G | ~${CC_GZIP_HUMAN} |"
-              echo "| **工具链** | ${TC_HIT_LABEL} | — | — | ${TC_DISK} | — |"
+              echo "| 项 | 命中率 | Direct hits | Preprocessed | Misses | 缓存大小 | 压缩后 |"
+              echo "|---|---|---|---|---|---|---|"
+              echo "| **ccache** | ${HIT_RATE} | ${HITS_DIRECT} | ${HITS_PREP} | ${MISSES} | ${CACHE_SIZE_LABEL} | ~${CC_GZIP_HUMAN} |"
+              echo "| **工具链** | — | ${TC_HIT_LABEL} | — | — | ${TC_DISK} | — |"
             } | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$CCACHE_STATS_AVAILABLE" = false ]; then
+              echo "::warning title=ccache statistics::无法从 ccache -s 解析编译统计，Summary 已显示 N/A"
+              printf '%s\n' '- ccache 统计输出缺少可识别的命中/未命中字段，Summary 使用 `N/A`。' >> .ci-annotations.md
+            fi
           else
-            echo "⚠️ ccache 不可用或无缓存目录, 跳过统计"
+            echo "::warning title=ccache statistics::ccache 不可用或无缓存目录，跳过统计"
+            printf '%s\n' '- ccache 统计步骤未找到可用的 ccache 或 `.ccache` 目录，已跳过统计。' >> .ci-annotations.md
           fi
 
       # ───────── 编译/下载错误诊断（统一处理）─────────
@@ -1040,7 +1050,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ steps.clone_packages.outputs.sha_full }}-${{ github.run_id }}
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: |
             openwrt/staging_dir/hostpkg
             openwrt/staging_dir/target-*/host
@@ -1055,23 +1065,38 @@ jobs:
       - name: Purge stale toolchain caches
         id: cache-tc-purge
         if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-tc-save.outcome == 'success'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
           TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
           TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
+          set +e
           TC_LIST=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt)
           TC_RC=$?
           TC_IDS=""
+          TC_IDS_RC=0
           if [ "$TC_RC" -eq 0 ]; then
             TC_IDS=$(echo "$TC_LIST" | jq -r --arg current "$TC_CURRENT" '[.[] | select(.key != $current)] | .[].id')
+            TC_IDS_RC=$?
           fi
+          set -e
           if [ "$TC_RC" -ne 0 ]; then
-            echo "⚠️ 获取工具链缓存列表失败 (rc=${TC_RC}), 保留旧缓存" >&2
+            echo "::warning title=toolchain retention::获取工具链缓存列表失败，保留旧缓存 (rc=${TC_RC})"
+            printf '%s\n' '- 工具链缓存列表获取失败，旧快照已保留。' >> .ci-annotations.md
+          elif [ "$TC_IDS_RC" -ne 0 ]; then
+            echo "::warning title=toolchain retention::解析工具链缓存列表失败，跳过清理"
+            printf '%s\n' '- 工具链缓存列表解析失败，本轮跳过清理。' >> .ci-annotations.md
           elif [ -n "$TC_IDS" ]; then
-            echo "$TC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
-              || echo "⚠️ 部分工具链缓存删除失败, 本轮成果仍已保存" >&2
+            set +e
+            echo "$TC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO"
+            DELETE_RC=$?
+            set -e
+            if [ "$DELETE_RC" -ne 0 ]; then
+              echo "::warning title=toolchain retention::部分工具链旧快照删除失败"
+              printf '%s\n' '- 部分工具链旧快照删除失败，本轮快照仍已保存。' >> .ci-annotations.md
+            fi
           else
             echo "ℹ️ 无旧工具链缓存"
           fi
@@ -1080,23 +1105,38 @@ jobs:
       - name: Purge stale ccache snapshots
         id: cache-cc-purge
         if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-cc-save.outcome == 'success'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
           CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
           CC_CURRENT="${CC_PREFIX}${{ github.run_id }}"
+          set +e
           CC_LIST=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt)
           CC_RC=$?
           CC_IDS=""
+          CC_IDS_RC=0
           if [ "$CC_RC" -eq 0 ]; then
             CC_IDS=$(echo "$CC_LIST" | jq -r --arg current "$CC_CURRENT" '[.[] | select(.key != $current)] | .[].id')
+            CC_IDS_RC=$?
           fi
+          set -e
           if [ "$CC_RC" -ne 0 ]; then
-            echo "⚠️ 获取 ccache 列表失败 (rc=${CC_RC}), 保留旧缓存" >&2
+            echo "::warning title=ccache retention::获取 ccache 快照列表失败，保留旧缓存"
+            printf '%s\n' '- ccache 快照清理失败，旧快照已保留。' >> .ci-annotations.md
+          elif [ "$CC_IDS_RC" -ne 0 ]; then
+            echo "::warning title=ccache retention::解析 ccache 列表失败，跳过清理"
+            printf '%s\n' '- ccache 快照列表解析失败，本轮跳过清理。' >> .ci-annotations.md
           elif [ -n "$CC_IDS" ]; then
-            echo "$CC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO" \
-              || echo "⚠️ 部分 ccache 删除失败, 本轮成果仍已保存" >&2
+            set +e
+            echo "$CC_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO"
+            DELETE_RC=$?
+            set -e
+            if [ "$DELETE_RC" -ne 0 ]; then
+              echo "::warning title=ccache retention::部分 ccache 旧快照删除失败"
+              printf '%s\n' '- 部分 ccache 旧快照删除失败，本轮快照仍已保存。' >> .ci-annotations.md
+            fi
           else
             echo "ℹ️ 无旧 ccache 缓存"
           fi
@@ -1562,3 +1602,48 @@ jobs:
           name: ${{ env.IMMWRT_TARGET }}-published-state
           path: build-info.json
           retention-days: 7
+
+      - name: 📝 Annotations
+        if: always()
+        continue-on-error: true
+        run: |
+          ANNOTATIONS_FILE="${GITHUB_WORKSPACE}/.ci-annotations.md"
+          note() {
+            printf '%s\n' "$1" >> "$ANNOTATIONS_FILE"
+          }
+          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
+          if [ "$CACHE_STRATEGY" != "no-cache" ]; then
+            if [ "${{ steps.cache-tc-restore.outcome || 'skipped' }}" = "failure" ]; then
+              note '- 工具链缓存恢复失败，已继续构建。'
+            fi
+            if [ "${{ steps.cache-cc.outcome || 'skipped' }}" = "failure" ]; then
+              note '- ccache 快照恢复失败，已继续构建。'
+            fi
+            if [ "${{ steps.cache-tc-save.outcome || 'skipped' }}" = "failure" ]; then
+              note '- 工具链缓存保存失败，本次固件产物仍可用。'
+            fi
+            if [ "${{ steps.cache-cc-save.outcome || 'skipped' }}" = "failure" ]; then
+              note '- ccache 快照保存失败，本次固件产物仍可用。'
+            fi
+            if [ "${{ steps.cache-sdk-hostpkg-save.outcome || 'skipped' }}" = "failure" ]; then
+              note '- SDK host/tool 快照保存失败，本次固件产物仍可用。'
+            fi
+            if [ "${{ steps.cache-tc-purge.outcome || 'skipped' }}" = "failure" ]; then
+              note '- 工具链缓存清理步骤失败，旧快照已保留。'
+            fi
+            if [ "${{ steps.cache-cc-purge.outcome || 'skipped' }}" = "failure" ]; then
+              note '- ccache 快照清理步骤失败，旧快照已保留。'
+            fi
+          fi
+          if [ "${{ steps.build.outputs.ccache_wrapper_valid || 'false' }}" != "true" ] && [ "${{ steps.build.outcome || 'skipped' }}" = "success" ]; then
+            note '- ccache 包装器校验未通过，未保存 full ccache 快照。'
+          fi
+          {
+            echo ""
+            echo "## Annotations"
+            if [ -s "$ANNOTATIONS_FILE" ]; then
+              cat "$ANNOTATIONS_FILE"
+            else
+              echo "无非阻断问题。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

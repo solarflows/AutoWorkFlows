@@ -1,6 +1,6 @@
 # SDK Hostpkg Cache Sharing Plan
 
-This document explains why the SDK incremental path needs its own host/tool cache, how it falls back to the full-build toolchain cache, and how both paths share ccache. It mirrors the implementation in `.github/workflows/compile-packages.yml` and `.github/workflows/compile-firmware.yml`.
+This document explains why the SDK incremental path needs its own host/tool cache, how it falls back to the full-build toolchain cache, and how its compiler ccache snapshots remain separate from the full-build shared ccache. It mirrors the implementation in `.github/workflows/compile-packages.yml` and `.github/workflows/compile-firmware.yml`.
 
 ## Background
 
@@ -31,13 +31,13 @@ So the shared restore restored cross toolchain the SDK tarball already ships, an
 
 ## Attempt 2: SDK-owned host/tool cache (current)
 
-Use a dedicated immutable-snapshot namespace `immwrt-v2-sdk-hostpkg-<target>-<sdk_source_sha>-<run_id>`. The SDK executor owns restore, save, and retention; the full executor may produce the same snapshot after a successful full build but never purges this namespace:
+Use a dedicated immutable-snapshot namespace `immwrt-v2-sdk-hostpkg-<target>-<run_id>`. The target and run ID make each save immutable and allow the newest snapshot to roll automatically; the SDK executor owns restore, save, and retention, while the full executor may produce the same snapshot after a successful full build but never purges this namespace:
 
 ```yaml
-# SDK restore: source-specific prefix, run_id only for the new immutable snapshot
-key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ steps.resolve.outputs.sdk_source_sha }}-${{ github.run_id }}
+# SDK restore: target prefix, run_id only for the new immutable snapshot
+key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
 restore-keys: |
-  immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ steps.resolve.outputs.sdk_source_sha }}-
+  immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-
 path: |
   openwrt/staging_dir/hostpkg
   openwrt/staging_dir/target-*/host
@@ -54,10 +54,10 @@ path: |
   openwrt/staging_dir/tool*
 ```
 
-- `key` binds to `sdk_source_sha` and appends `github.run_id`; the source-specific restore prefix reuses the newest snapshot for that SDK, while every save is a new immutable key. SDK has no `.git`, so it cannot compute the full-build `git log tools toolchain` hash.
+- `key` uses the target and `github.run_id`; the target restore prefix reuses the newest immutable snapshot, while every save is a new rolling key. The selected SDK artifact's `source_sha` remains recorded and checked when resolving SDK/IB, but it is not part of the cache key. SDK has no `.git`, so it cannot compute the full-build `git log tools toolchain` hash.
 - `save` runs only after SDK package compilation succeeds and is `continue-on-error`; a cache API failure must not invalidate the package/IB result. The SDK purge keeps three snapshots per target in total (the current snapshot plus at most two older snapshots) and explicitly excludes the current key.
 - The full-toolchain fallback is a **separate restore action**, not another `restore-keys` entry. The workflow first queries accessible immutable keys with `gh cache list`, then restores the selected SDK snapshot exactly. If that lookup misses or fails, the SDK restore is not assumed to have succeeded and the fallback uses the full producer's path list (`staging_dir/host*` and `staging_dir/tool*`; `host*` may include `staging_dir/hostpkg`). The full fallback then uses its own prefix as a best-effort lookup; `cache-hit == false` is not treated as proof that no prefix snapshot was restored.
-- A full build may produce an SDK snapshot with the same path/key scheme. It does not purge the SDK namespace; SDK runs own retention. The full-build `immwrt-v2-toolchain-*` and `immwrt-v2-ccache-*` namespaces remain maintained by `compile-firmware.yml`.
+- A full build may produce an SDK host/tool snapshot with the same path/key scheme. It does not purge the SDK namespaces; SDK runs own retention for both SDK host/tool and SDK compiler ccache snapshots. The full-build `immwrt-v2-toolchain-*` and shared `immwrt-v2-ccache-*` namespaces remain maintained by `compile-firmware.yml`.
 
 ## Cache strategy routing
 
@@ -72,10 +72,11 @@ path: |
 
 ## ccache sharing boundary
 
-Both executors restore the same `openwrt/.ccache` path and use the target-specific `immwrt-v2-ccache-<target>-<run_id>` namespace. OpenWrt's `rules.mk` supplies `CCACHE_DIR=$(TOPDIR)/.ccache` and `CCACHE_BASEDIR=$(TOPDIR)`; both workflows use `openwrt` as `TOPDIR`. This makes sharing structurally valid, but hit rate still depends on compiler version, target triple, flags, configuration, source, and wrapper form. SDK consumes the shared ccache and does not save or purge it.
+Both executors use the same `openwrt/.ccache` path. Full builds restore/save/purge the shared `immwrt-v2-ccache-<target>-<run_id>` namespace; SDK builds first restore and may save/purge their own `immwrt-v2-sdk-ccache-<target>-<run_id>` compiler snapshot, then fall back to the full namespace when needed. SDK never saves to or purges the full namespace. OpenWrt's `rules.mk` supplies `CCACHE_DIR=$(TOPDIR)/.ccache` and `CCACHE_BASEDIR=$(TOPDIR)`; both workflows use `openwrt` as `TOPDIR`. This makes either snapshot structurally valid, but hit rate still depends on compiler version, target triple, flags, configuration, source, and wrapper form.
 
 ## Verification
 
-- First SDK/IB run after this change: expect an SDK-specific miss followed, only then, by a separate full-toolchain fallback restore; a successful compile saves `immwrt-v2-sdk-hostpkg-<target>-<sha>-<run_id>`.
-- Subsequent runs with the same SDK source SHA: expect an SDK-specific prefix hit and no repeated cold host-tool bootstrap for cached paths.
+- First SDK/IB run after this change: expect an SDK-specific miss followed, only then, by a separate full-toolchain fallback restore; a successful compile saves `immwrt-v2-sdk-hostpkg-<target>-<run_id>`.
+- Subsequent runs for the same target: expect an SDK-specific prefix hit and no repeated cold host-tool bootstrap for cached paths; if a tool is incompatible with the selected SDK, OpenWrt stamps force the affected tool to rebuild.
+- A successful SDK compile with valid wrappers may also save `immwrt-v2-sdk-ccache-<target>-<run_id>`; this snapshot is retained independently and never updates the full-build ccache namespace.
 - A full build may create the SDK snapshot, while retention is performed only by the SDK executor.
