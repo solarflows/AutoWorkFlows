@@ -109,7 +109,7 @@ checkout_partial_code -r https://github.com/sirpdboy/luci-app-lucky luci-app-luc
 # # MosDNS            插件化可定制的DNS转发器
 # svn co https://github.com/QiuSimons/openwrt-mos/trunk/luci-app-mosdns
 # svn co https://github.com/QiuSimons/openwrt-mos/trunk/mosdns
-checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app-mosdns mosdns v2dat
+checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app-mosdns mosdns geo2txt
 # mmconfig          3G/LTE 解调器设置
 format_git_clone_output -r https://github.com/erdoukki/luci-app-mmconfig
 # modeminfo         3G/LTE 解调器信息

@@ -41,7 +41,7 @@ checkout_partial_code -r https://github.com/gdy666/luci-app-lucky luci-app-lucky
 
 # M
 # MosDNS            插件化可定制的DNS转发器
-checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app-mosdns mosdns v2dat
+checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app-mosdns mosdns geo2txt
 
 # P
 # PassWall1&2       科学上网
