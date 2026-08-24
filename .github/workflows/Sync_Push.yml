@@ -509,99 +509,6 @@ jobs:
             exit 1
           fi
 
-  sync_mt798x:
-    name: 同步 mt798x 实际源码
-    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 检出 mt798x 目标仓库
-        uses: actions/checkout@v6
-        with:
-          repository: solarflows/immortalwrt-mt798x
-          ref: test
-          fetch-depth: 0
-          token: ${{ secrets.ACCESS_TOKEN }}
-
-      - name: 配置环境
-        run: |
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-
-      - name: 拉取 mt798x 上游
-        run: |
-          set -euo pipefail
-          git remote add upstream https://github.com/hanwckf/immortalwrt-mt798x.git
-          git fetch --no-tags upstream openwrt-21.02
-
-      - name: 检测上游是否有更新
-        id: check
-        run: |
-          set -euo pipefail
-          upstream_commit=$(git rev-parse upstream/openwrt-21.02)
-          current_commit=$(git rev-parse HEAD)
-          echo "当前 test 提交: $current_commit"
-          echo "上游 openwrt-21.02 提交: $upstream_commit"
-          echo "expected_remote_sha=$current_commit" >> "$GITHUB_OUTPUT"
-          if git merge-base --is-ancestor "$upstream_commit" "$current_commit"; then
-            echo "🟢 上游最新提交已包含在 test 分支。"
-            echo "has_update=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "🔵 检测到 mt798x 上游更新，准备变基。"
-            echo "has_update=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 变基到 mt798x 上游
-        if: steps.check.outputs.has_update == 'true'
-        run: |
-          set -euo pipefail
-          if git rebase upstream/openwrt-21.02; then
-            echo "✅ mt798x 变基成功"
-          else
-            echo "::error::mt798x 变基失败，保留远端 test 分支并停止同步"
-            git rebase --abort || true
-            exit 1
-          fi
-
-      - name: 推送 mt798x 更新
-        if: steps.check.outputs.has_update == 'true'
-        run: |
-          set -euo pipefail
-          remote_url="https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/immortalwrt-mt798x.git"
-          max_retries=3
-          retry_delay=10
-          expected="${{ steps.check.outputs.expected_remote_sha }}"
-          lease="--force-with-lease=refs/heads/test:${expected}"
-          for i in $(seq 1 $max_retries); do
-            if [ -z "$expected" ]; then
-              lease="--force-with-lease=refs/heads/test:"
-            fi
-            if git push "$remote_url" "$lease" HEAD:refs/heads/test; then
-              echo "✅ 已推送 mt798x test"
-              exit 0
-            fi
-            remote_sha=$(git ls-remote "$remote_url" refs/heads/test) || {
-              echo "::error::读取 mt798x test 远端 SHA 失败"
-              exit 1
-            }
-            current=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
-            if [ "$current" = "$(git rev-parse HEAD)" ]; then
-              echo "✅ 远端已包含本地 HEAD"
-              exit 0
-            fi
-            if [ "$current" != "$expected" ]; then
-              echo "::error::mt798x test 远端已在重试期间变化，拒绝覆盖"
-              exit 1
-            fi
-            if [ "$i" -lt "$max_retries" ]; then
-              echo "::warning::mt798x 推送失败，${retry_delay} 秒后重试 ($i/$max_retries)"
-              sleep "$retry_delay"
-              retry_delay=$((retry_delay * 2))
-            fi
-          done
-          echo "::error::mt798x 推送失败（已重试）"
-          exit 1
-
   sync_vikingyfy:
     name: 同步VIKINGYFY仓库
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
@@ -747,7 +654,7 @@ jobs:
   del_runs:
     name: 删除旧运行记录
     if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
-    needs: [sync_lede, sync_luci, sync_packages, sync_mt798x, sync_vikingyfy]
+    needs: [sync_lede, sync_luci, sync_packages, sync_vikingyfy]
     runs-on: ubuntu-latest
     permissions:
       actions: write

@@ -84,7 +84,7 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 
 Qualcomm 的 `VIKINGYFY-main` 源码由 `Sync_Push.yml` 持久化使用 `solarflows/packages.git;qualcommax`，该分支同时应用 net-snmp 的 `interface.*` trigger 修复。编译 workflow 只消费已经同步到远端的源码和 feed，不在编译工作树临时改写 feed 内容。
 
-mt798x 的 active 源是 `solarflows/immortalwrt-mt798x@test`，由 `Sync_Push.yml` 跟踪 `hanwckf/immortalwrt-mt798x:openwrt-21.02`；`solarflows/lede` 仍是 legacy 镜像，不代表 mt798x 当前构建源。
+mt798x 的 active 源是 `solarflows/immortalwrt-mt798x@test`，其中 `test` 分支由人工维护，不由 `Sync_Push.yml` 自动同步；`solarflows/lede` 仍是 legacy 镜像，不代表 mt798x 当前构建源。
 
 ---
 
