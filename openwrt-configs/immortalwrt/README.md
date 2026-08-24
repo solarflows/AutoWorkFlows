@@ -36,7 +36,7 @@ map(. + {
 | env 变量 | 默认值 | 说明 |
 |----------|--------|------|
 | `DEFAULTS_REPO` | `solarflows/AutoWorkflows` | 本仓库（默认值仓库 / SDK/IB 发布仓库） |
-| `PACKAGES_FEED_REPO` | `solarflows/openwrt-packages` | openwrt 软件包源（feed）仓库 |
+| `PACKAGES_FEED_REPO` | `solarflows/openwrt-packages` | 插件 overlay 仓库；标准源码 feed 由各源码仓库的 `feeds.conf.default` 决定 |
 | `PACKAGES_FEED_NAME` | `solarflows` | feed 在源码树中的目录名（`package/<feed_name>`） |
 | `ARTIFACTS_RELEASE_REPO` | `solarflows/AutoWorkflows` | SDK/IB 统一 tarball 发布仓库 |
 | `ARTIFACTS_KEEP_VERSIONS` | `7` | 统一 tag 保留最近 N 个版本 |
@@ -74,6 +74,17 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `packages_branch` | `.target` | feed 仓库分支名（也可不写，见必填字段表） |
+
+### 标准 packages feed 与插件 overlay
+
+两类仓库职责不同：
+
+- `solarflows/packages` 是 OpenWrt/ImmortalWrt 的标准 packages feed。
+- `solarflows/openwrt-packages` 是本项目维护的插件 overlay，仍由 `OpenWRT_Packages_Updater.yml` 更新。
+
+Qualcomm 的 `VIKINGYFY-main` 源码由 `Sync_Push.yml` 持久化使用 `solarflows/packages.git;qualcommax`，该分支同时应用 net-snmp 的 `interface.*` trigger 修复。编译 workflow 只消费已经同步到远端的源码和 feed，不在编译工作树临时改写 feed 内容。
+
+mt798x 的 active 源是 `solarflows/immortalwrt-mt798x@test`，由 `Sync_Push.yml` 跟踪 `hanwckf/immortalwrt-mt798x:openwrt-21.02`；`solarflows/lede` 仍是 legacy 镜像，不代表 mt798x 当前构建源。
 
 ---
 

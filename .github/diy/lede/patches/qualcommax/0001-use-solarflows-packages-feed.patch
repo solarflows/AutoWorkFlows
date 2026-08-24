@@ -1,0 +1,9 @@
+diff --git a/feeds.conf.default b/feeds.conf.default
+--- a/feeds.conf.default
++++ b/feeds.conf.default
+@@ -1,4 +1,4 @@
+-src-git packages https://github.com/immortalwrt/packages.git
++src-git packages https://github.com/solarflows/packages.git;qualcommax
+ src-git luci https://github.com/immortalwrt/luci.git
+ src-git routing https://github.com/openwrt/routing.git
+ src-git telephony https://github.com/openwrt/telephony.git

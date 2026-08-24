@@ -19,6 +19,9 @@ jobs:
   update:
     # if: github.event.repository.owner.id == github.event.sender.id || github.event.sender.type == 'Bot'
     runs-on: ubuntu-latest
+    concurrency:
+      group: openwrt-packages-updater-${{ matrix.target }}
+      cancel-in-progress: false
 
     strategy:
       fail-fast: false
@@ -36,7 +39,7 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
           sudo timedatectl set-timezone "Asia/Shanghai"
-          ( sudo -E apt-get -qq install rename ) &
+          sudo -E apt-get -qq install rename
 
           # 写入 Job Summary 头部
           echo "# 🔄 OpenWRT Packages Updater" >> $GITHUB_STEP_SUMMARY
@@ -54,10 +57,8 @@ jobs:
           # 避免当仓库中存在与分支同名的 release (如 qualcommax/mt798x) 时产生歧义
           git clone --single-branch --branch ${{matrix.target}} https://github.com/solarflows/openwrt-packages.git ${{matrix.target}}
           cd ${{matrix.target}}
-          git rm -r --cache * >/dev/null 2>&1 &
-          # 删除除diy目录以外的文件夹
-          # rm -rf `find ./* -maxdepth 0 -type d ! -name "diy"` >/dev/null 2>&1
-          rm -rf ./* >/dev/null 2>&1
+          # 同步清理工作树，保留 .git；不能后台运行 git rm，否则会与生成和 git add 竞争。
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
           bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/${{matrix.target}}.sh
 
       - name: 修改代码
@@ -119,24 +120,48 @@ jobs:
 
           # 应用补丁（temp* 前缀的补丁失败仅警告，不中断）
           PATCH_DIR="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches/${{matrix.target}}"
-          find "$PATCH_DIR" -type f -name '*.patch' ! -name 'temp*' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%' | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
-          find "$PATCH_DIR" -type f -name 'temp*.patch' -print0 | sort -z | while IFS= read -r -d '' f; do
-            echo "应用临时补丁: $f"
-            patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f" || echo "::warning::临时补丁应用失败 (忽略): $f"
-          done
+          if [ ! -d "$PATCH_DIR" ]; then
+            echo "ℹ️ 无目标专用补丁目录，跳过: $PATCH_DIR"
+          else
+            while IFS= read -r -d '' f; do
+              echo "检查并应用补丁: $f"
+              patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$f"
+              patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f"
+            done < <(find "$PATCH_DIR" -type f -name '*.patch' ! -name 'temp*' -print0 | sort -z)
+            while IFS= read -r -d '' f; do
+              echo "检查临时补丁: $f"
+              if patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$f" && \
+                 patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f"; then
+                :
+              else
+                find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete
+                echo "::warning::临时补丁检查失败，跳过且不提交: $f"
+              fi
+            done < <(find "$PATCH_DIR" -type f -name 'temp*.patch' -print0 | sort -z)
+          fi
 
       - name: 应用全局补丁
         run: |
           cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 应用全局补丁（temp* 前缀的补丁失败仅警告，不中断）
-          rm -rf v2ray-geodata >/dev/null 2>&1
+          rm -rf v2ray-geodata
           PATCH_DIR="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches"
-          find "$PATCH_DIR" -maxdepth 1 -type f -name '*.patch' ! -name 'temp*' -print0 | sort -z | xargs -I % -t -0 -n 1 sh -c "cat '%' | patch -d './' -p1 -E --forward --no-backup-if-mismatch" || exit 1
-          find "$PATCH_DIR" -maxdepth 1 -type f -name 'temp*.patch' -print0 | sort -z | while IFS= read -r -d '' f; do
-            echo "应用临时补丁: $f"
-            patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f" || echo "::warning::临时补丁应用失败 (忽略): $f"
-          done
+          while IFS= read -r -d '' f; do
+            echo "检查并应用全局补丁: $f"
+            patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$f"
+            patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f"
+          done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name '*.patch' ! -name 'temp*' -print0 | sort -z)
+          while IFS= read -r -d '' f; do
+            echo "检查全局临时补丁: $f"
+            if patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$f" && \
+               patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$f"; then
+              :
+            else
+              find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete
+              echo "::warning::全局临时补丁检查失败，跳过且不提交: $f"
+            fi
+          done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name 'temp*.patch' -print0 | sort -z)
 
       - name: 生成 README (仅 main 分支)
         if: matrix.target == 'main'
@@ -217,7 +242,11 @@ jobs:
             commit_message="🔗 Trigger update-$(TZ='Asia/Shanghai' date -d now)"
           fi
           # 添加文件到工作区
-          git add .
+          git add -A
+          if find . -type f -name '*.rej' -print -quit | grep -q .; then
+            echo "::error::发现未处理的 .rej 文件，拒绝提交"
+            exit 1
+          fi
 
           # 检查是否有需要提交的更改
           if [ -n "$(git status --porcelain)" ]; then

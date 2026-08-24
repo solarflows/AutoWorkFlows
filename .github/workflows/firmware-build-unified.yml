@@ -117,6 +117,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          set -euo pipefail
           echo "🚀 触发 OpenWRT_Packages_Updater..."
           BEFORE=$(date +%s)
           echo "before_ts=${BEFORE}" >> $GITHUB_OUTPUT
@@ -127,8 +128,11 @@ jobs:
           for i in $(seq 1 10); do
             # gh 的 --jq 只接受单个表达式, 不支持 --argjson/--arg;
             # 时间戳是纯数字, 直接嵌入表达式 (双引号内不做路径名展开, [] 安全)
-            RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow OpenWRT_Packages_Updater.yml --limit 10 \
-              --json databaseId,createdAt --jq "[.[] | select((.createdAt | fromdateiso8601) > ${BEFORE})] | .[0].databaseId // empty" 2>/dev/null || true)
+            if ! RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow OpenWRT_Packages_Updater.yml --limit 20 \
+              --json databaseId,createdAt,headBranch,event --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
+              echo "::error::查询 OpenWRT_Packages_Updater run 失败"
+              exit 1
+            fi
             [ -n "$RUN_ID" ] && break
             sleep 3
           done
@@ -148,16 +152,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          set -euo pipefail
           echo "🚀 触发 Sync_Push..."
           BEFORE=$(date +%s)
+          echo "before_ts=${BEFORE}" >> $GITHUB_OUTPUT
           gh workflow run Sync_Push.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }}
           RUN_ID=""
           for i in $(seq 1 10); do
             # gh 的 --jq 只接受单个表达式, 不支持 --argjson/--arg; 时间戳直接嵌入
-            RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --limit 10 \
-              --json databaseId,createdAt --jq "[.[] | select((.createdAt | fromdateiso8601) > ${BEFORE})] | .[0].databaseId // empty" 2>/dev/null || true)
+            if ! RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --limit 20 \
+              --json databaseId,createdAt,headBranch,event --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
+              echo "::error::查询 Sync_Push run 失败"
+              exit 1
+            fi
             [ -n "$RUN_ID" ] && break
             sleep 3
           done
@@ -187,32 +196,61 @@ jobs:
         if: github.event.inputs.skip_upstream != 'true'
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        continue-on-error: true
         run: |
+          set -euo pipefail
           BEFORE_TS="${{ steps.trigger-updater.outputs.before_ts || 0 }}"
+          SYNC_BEFORE_TS="${{ steps.trigger-sync.outputs.before_ts || 0 }}"
           UPDATER_ID="${{ steps.trigger-updater.outputs.updater_id }}"
           SYNC_ID="${{ steps.trigger-sync.outputs.sync_id }}"
+          WAIT_FOR_SYNC="${{ github.event.inputs.trigger != 'sdk-packages' }}"
           # 触发步骤轮询超时 (30s) 时, 这里用触发时间戳补查一次; 此时 run 必然已创建
           if [ -z "$UPDATER_ID" ] && [ -n "$BEFORE_TS" ] && [ "$BEFORE_TS" != "0" ]; then
             echo "🔎 触发步骤未取到 Updater run ID, 补查..."
             for i in $(seq 1 10); do
-              UPDATER_ID=$(gh run list --repo ${{ github.repository }} --workflow OpenWRT_Packages_Updater.yml --limit 10 \
-                --json databaseId,createdAt --jq "[.[] | select((.createdAt | fromdateiso8601) > ${BEFORE_TS})] | .[0].databaseId // empty" 2>/dev/null || true)
+              if ! UPDATER_ID=$(gh run list --repo ${{ github.repository }} --workflow OpenWRT_Packages_Updater.yml --limit 20 \
+                --json databaseId,createdAt,headBranch,event --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE_TS} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
+                echo "::error::补查 OpenWRT_Packages_Updater run 失败"
+                exit 1
+              fi
               [ -n "$UPDATER_ID" ] && break
               sleep 3
             done
           fi
           if [ -n "$UPDATER_ID" ]; then
-            timeout 3600 gh run watch "$UPDATER_ID" --repo ${{ github.repository }} --interval 5 --exit-status \
-              && echo "✅ updater 完成" || echo "⚠️ updater 失败或超时"
+            if timeout 3600 gh run watch "$UPDATER_ID" --repo ${{ github.repository }} --interval 5 --exit-status; then
+              echo "✅ updater 完成"
+            else
+              echo "::error::updater 失败或超时，停止构建"
+              exit 1
+            fi
           else
-            echo "⚠️ updater run ID 未获取, 跳过等待"
+            echo "::error::updater run ID 未获取，停止构建"
+            exit 1
           fi
-          if [ -n "$SYNC_ID" ]; then
-            timeout 3600 gh run watch "$SYNC_ID" --repo ${{ github.repository }} --interval 5 --exit-status \
-              && echo "✅ sync 完成" || echo "⚠️ sync 失败或超时"
+          if [ "$WAIT_FOR_SYNC" = "true" ] && [ -z "$SYNC_ID" ] && [ -n "$SYNC_BEFORE_TS" ] && [ "$SYNC_BEFORE_TS" != "0" ]; then
+            echo "🔎 触发步骤未取到 Sync_Push run ID, 补查..."
+            for i in $(seq 1 10); do
+              if ! SYNC_ID=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --limit 20 \
+                --json databaseId,createdAt,headBranch,event --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${SYNC_BEFORE_TS} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
+                echo "::error::补查 Sync_Push run 失败"
+                exit 1
+              fi
+              [ -n "$SYNC_ID" ] && break
+              sleep 3
+            done
+          fi
+          if [ "$WAIT_FOR_SYNC" != "true" ]; then
+            echo "⏭️ sdk-packages 模式不触发或等待 Sync_Push"
+          elif [ -n "$SYNC_ID" ]; then
+            if timeout 3600 gh run watch "$SYNC_ID" --repo ${{ github.repository }} --interval 5 --exit-status; then
+              echo "✅ sync 完成"
+            else
+              echo "::error::sync 失败或超时，停止构建"
+              exit 1
+            fi
           else
-            echo "⏭️ sync run ID 未获取, 跳过等待"
+            echo "::error::sync run ID 未获取，停止构建"
+            exit 1
           fi
 
       # ── 版本号生成 ──
@@ -374,14 +412,13 @@ jobs:
               fi
             fi
 
-            # 软件包 SHA 检测
             CURR_PKG=$(git ls-remote "https://github.com/${{ env.PACKAGES_FEED_REPO }}.git" "${CURR_PKG_BRANCH}" 2>/dev/null | cut -f1 | head -1)
             LAST_PKG=$(jq -r ".\"${MATRIX_TARGET}\".packages_sha // empty" build-state.json)
             if [ -n "$LAST_PKG" ] && [ "$LAST_PKG" = "$CURR_PKG" ]; then
               echo "  ✅ [${MATRIX_TARGET}] 软件包未变更 (${CURR_PKG:0:7})"
               PKG_STATUS="✅ 未变更"
             else
-              echo "  🟡 [${TARGET}] 软件包变更: ${LAST_PKG:-无} → ${CURR_PKG:0:7}"
+              echo "  🟡 [${MATRIX_TARGET}] 软件包变更: ${LAST_PKG:-无} → ${CURR_PKG:0:7}"
               PACKAGES_CHANGED=true
               PKG_STATUS="🟡 变更"
             fi
