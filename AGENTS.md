@@ -1,71 +1,17 @@
-# AGENTS.md — AutoWorkflows
+## Agent Routing
 
-Automated CI/CD workflows for [solarflows/openwrt-packages](https://github.com/solarflows/openwrt-packages): plugin collection, ImmortalWrt firmware builds, and upstream sync.
+- Use `OpenWrt Build Orchestrator` for `firmware-build-unified.yml`, build planning, matrices, change detection, cache strategy, and build-state decisions.
+- Use `OpenWrt Build Executor and Release` for `compile-firmware.yml`, `compile-packages.yml`, SDK/ImageBuilder, signing, diagnostics, and artifact publication.
+- Use `Upstream Fork Sync` for `Sync_Push.yml`, source-fork synchronization, rebase, patch application, and branch safety.
+- Use `OpenWrt Packages Feed Publisher` for `OpenWRT_Packages_Updater.yml`, DIY package scripts, overlay patches, and feed generation.
+- Use `Geodata Release Publisher` for `v2ray-geodataUpdater.yaml`, geodata updates, checksums, and release assets.
+- Use `openwrt-build-diagnostics` for real OpenWrt build logs and Actions build artifacts.
 
-## Directory Map
+## Shared Agent Rules
 
-| Path | Purpose |
-|:-----|:--------|
-| `.github/workflows/` | GitHub Actions workflows (orchestrator + reusable executors) |
-| `openwrt-configs/immortalwrt/` | Build target configs (seed files, sdk.config, targets.json) |
-| `.github/instructions/` | File-scoped Agent behaviour rules |
-| `.github/skills/` | Agent skill definitions (build diagnostics) |
-| `docs/` | Pitfall records and root-cause analysis |
-| `scripts/` | Helper scripts and build-log samples |
-
-## Core Architecture
-
-### Decision vs. Execution
-
-The `plan` job in `firmware-build-unified.yml` owns all decisions: trigger mode, change detection, versioning, cache strategy, and route selection. The active reusable workflows (`compile-firmware.yml`, `compile-packages.yml`) only execute. The SDK-only and SDK+IB package paths share `compile-packages.yml`; the standalone ImageBuilder workflow is archived. **Never add fallback or escalation logic to reusable workflows.**
-
-### Workflow ↔ Target Separation
-
-`targets.json` stores only per-target deltas. Defaults live in the workflow `env` block and `inputs.default`. There is no `defaults` JSON block — jq fills missing fields via `//`. See [`openwrt-configs/immortalwrt/README.md`](openwrt-configs/immortalwrt/README.md).
-
-### Two Hardware Platforms
-
-| | mt798x | qualcommax |
-|:--|:--|:--|
-| SoC | MT7981 (Filogic 820) | IPQ60xx |
-| ImmortalWrt branch | 21.02 | SNAPSHOT (main) |
-| Package / firewall | IPK + iptables | APK + nftables |
-| Storage | NAND-constrained → slim backends | Ample → full preinstall |
-
-Platform differences are encoded in the respective seed directories.
-
-### Package Signing (IPK vs APK)
-
-Signing is auto-detected from the build config, never statically configured. Detection reads `CONFIG_USE_APK=y` in `.config` (full build) or `config USE_APK` in SDK `Config-build.in` (SDK/IB path).
-
-| | mt798x | qualcommax |
-|:--|:--|:--|
-| Format | IPK (opkg) | APK (apk) |
-| Signing | usign Ed25519 — `USIGN_KEY` → `key-build` | openssl ECDSA prime256v1 — `APK_BUILD_KEY` → `private-key.pem` |
-| Public key | derived from private (104-byte seckey structure) | derived via `openssl ec -pubout` |
-
-A single `Setup Signing Key` step runs after `make defconfig` and outputs `sign_mode` (`apk` / `usign` / `random` / `none`). See [docs/signing-ipk-apk-plan.md](docs/signing-ipk-apk-plan.md).
-
-## Modifying Build Configs
-
-See [`.github/instructions/openwrt-config.instructions.md`](.github/instructions/openwrt-config.instructions.md) for seed file format, sdk.config usage, and target configuration rules.
-
-## Modifying Workflows
-
-See [`.github/instructions/openwrt-build.instructions.md`](.github/instructions/openwrt-build.instructions.md) and [`docs/openwrt-build-pitfalls.md`](docs/openwrt-build-pitfalls.md) for workflow architecture, diagnostic requirements, and verified failure patterns.
-
-## Artifact Naming
-
-See [`.github/instructions/build-artifacts.instructions.md`](.github/instructions/build-artifacts.instructions.md) for SDK, ImageBuilder, and firmware naming conventions, shared artifact tags, checksum format, and release management.
-
-## Build Diagnostics
-
-On build failure, use the `openwrt-build-diagnostics` skill for read-only diagnosis. Do not modify workflows or configs directly. The skill analyzes `error.txt`, `compile.txt`, `logs.1/`, and produces an evidence-backed report.
-
-Before investigating, check `docs/openwrt-build-pitfalls.md`, `docs/sdk-hostpkg-cache.md`, and the skill's `references/diagnostic-signatures.md` for a known signature (e.g. `TARGET` env leakage, libffi, persist-state artifact overwrite, stamp-skipped retry, ccache mismatch, SDK hostpkg cache miss). Reuse the verified root cause instead of re-deriving it.
-
-## General Conventions
-
-- Move deprecated workflows to `.github/archive/workflows/` instead of deleting them
-- GitHub API operations use `secrets.ACCESS_TOKEN` via `GH_TOKEN` env variable
-- Workflow triggers: `workflow_dispatch` (manual) + `schedule` (cron)
+- Read applicable instructions before editing.
+- Keep edits scoped and preserve existing architecture.
+- Do not commit, push, rebase, tag, trigger remote workflows, modify Releases, or expose secrets unless the user explicitly requests and the operation is separately reviewed.
+- Never export `TARGET`, `HOST`, or `BUILD` into OpenWrt-related processes.
+- Treat archived workflows as historical reference only.
+- Validate changed YAML, Shell blocks, patches, generated artifacts, and workflow contracts.
