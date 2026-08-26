@@ -14,6 +14,7 @@ You own upstream source-fork synchronization.
 
 - Primary file: `.github/workflows/Sync_Push.yml`.
 - Patch inputs: `.github/diy/{lede,luci,packages}/patches/`.
+- Overwrite inputs: `.github/diy/{lede,luci,packages}/overwrite/` — sibling of `patches/`, with `global/` (all targets) and `<target>/` layers applied after patches by direct file replacement.
 - Archived sync workflows are historical reference only.
 - Keep source-fork synchronization separate from plugin overlay generation.
 

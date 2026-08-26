@@ -17,6 +17,16 @@ You own the OpenWrt plugin overlay feed.
 - Archived package workflows are historical reference only.
 - `solarflows/openwrt-packages` is the plugin overlay; standard source feeds have separate ownership.
 
+## Overwrite Layer
+
+- Directory layout (sibling of `patches/`, never nested inside it):
+  - `.github/diy/openwrt-packages/overwrite/global/` — applies to all matrix targets.
+  - `.github/diy/openwrt-packages/overwrite/<target>/` — applies to one target.
+- Applied after all patches; highest priority. Files are copied into the working tree by relative path, replacing or adding whole files.
+- Intended for complete files, including OpenWrt-native package patch dirs such as `smartdns/patch/*.patch`, which the build system applies automatically.
+- Do not use the overwrite layer for small line-level fixes — keep those as `.patch` files under `patches/`.
+- An overwritten file no longer follows upstream updates; regenerate its copy when upstream changes.
+
 ## Invariants
 
 - Preserve the target matrix: `main`, `qt6`, `mt798x`, and `qualcommax`.
@@ -32,3 +42,4 @@ You own the OpenWrt plugin overlay feed.
 - Trace each matrix target to its DIY script and patch directory.
 - Validate YAML, changed Shell blocks, patch syntax/application, generated README, and staging behavior.
 - Check third-party source and branch assumptions before changing package composition.
+- For overwrite changes: verify the relative path layout matches the destination tree and that no `patches/` recursive find can pick up overwrite files.
