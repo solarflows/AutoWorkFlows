@@ -1,0 +1,45 @@
+diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
+index 3290cbb..f6f121c 100644
+--- a/src/dns_client/client_http2.c
++++ b/src/dns_client/client_http2.c
+@@ -156,7 +156,22 @@ static int _dns_client_send_http2_stream(struct dns_server_info *server_info, st
+ 	/* Create HTTP/2 stream */
+ 	http2_stream = http2_stream_new(http2_ctx);
+ 	if (http2_stream == NULL) {
+-		int ret = _dns_client_http2_send_result_from_errno(server_info, "create http2 stream", errno);
++		int ret;
++		/*
++		 * ENOSPC here means the peer's MAX_CONCURRENT_STREAMS quota is
++		 * exhausted. Healthy connections free slots within milliseconds,
++		 * so a saturated state implies leaked streams on a wedged
++		 * connection. Treat it as a connection error so the context gets
++		 * torn down and rebuilt, instead of retrying against a zombie
++		 * connection forever (DNS hang while process looks alive).
++		 */
++		if (errno == ENOSPC) {
++			tlog(TLOG_WARN, "http2 peer stream limit reached, reset connection, server=%s:%d",
++				 server_info->ip, server_info->port);
++			http2_ctx_put(http2_ctx);
++			return DNS_CLIENT_HTTP2_STREAM_SEND_CONN_ERROR;
++		}
++		ret = _dns_client_http2_send_result_from_errno(server_info, "create http2 stream", errno);
+ 		http2_ctx_put(http2_ctx);
+ 		return ret;
+ 	}
+diff --git a/src/http_parse/http2.c b/src/http_parse/http2.c
+index 248eb63..a005547 100644
+--- a/src/http_parse/http2.c
++++ b/src/http_parse/http2.c
+@@ -2296,7 +2296,11 @@ void http2_stream_close(struct http2_stream *stream)
+ 	struct http2_ctx *ctx = stream->ctx;
+ 	if (ctx) {
+ 		pthread_mutex_lock(&ctx->mutex);
+-		if (_http2_stream_has_pending_send(stream)) {
++		/* If the connection is dead (status < 0), pending data can never be
++		 * flushed: deferring removal would leak the stream and its
++		 * active_local_streams slot until the whole context is rebuilt.
++		 * Remove it right away instead. */
++		if (_http2_stream_has_pending_send(stream) && ctx->status >= 0) {
+ 			stream->close_after_send = 1;
+ 			stream->ex_data = NULL;
+ 			if (_http2_stream_flush_pending_send(stream) < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {

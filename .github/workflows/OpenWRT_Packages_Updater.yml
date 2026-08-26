@@ -163,6 +163,39 @@ jobs:
             fi
           done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name 'temp*.patch' -print0 | sort -z)
 
+      - name: 应用覆写层
+        run: |
+          cd $GITHUB_WORKSPACE/${{matrix.target}}
+
+          # 覆写层：将 overwrite 目录中的文件按相对路径直接替换或新增到工作树。
+          # 优先级最高，在所有补丁之后应用；目录结构即仓库相对路径。
+          # 目录与 patches 平级：overwrite/global 为全局层，overwrite/<target> 为分支层。
+          apply_overwrite() {
+            local layer_dir="$1"
+            local layer_name="$2"
+            if [ ! -d "$layer_dir" ]; then
+              echo "ℹ️ 无覆写层目录，跳过: $layer_dir"
+              return 0
+            fi
+            local count=0
+            while IFS= read -r -d '' f; do
+              local rel="${f#"$layer_dir"/}"
+              mkdir -p "$(dirname "$rel")"
+              cp -f "$f" "$rel"
+              echo "覆写: $rel ($layer_name)"
+              count=$((count + 1))
+            done < <(find "$layer_dir" -type f -print0 | sort -z)
+            if [ "$count" -gt 0 ]; then
+              echo "- **$layer_name**: $count 个文件" >> $GITHUB_STEP_SUMMARY
+            fi
+          }
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📝 覆写层" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          apply_overwrite "$GITHUB_WORKSPACE/.github/diy/openwrt-packages/overwrite/global" "全局覆写"
+          apply_overwrite "$GITHUB_WORKSPACE/.github/diy/openwrt-packages/overwrite/${{matrix.target}}" "${{matrix.target}} 覆写"
+
       - name: 生成 README (仅 main 分支)
         if: matrix.target == 'main'
         run: |

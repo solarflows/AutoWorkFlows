@@ -142,6 +142,27 @@ jobs:
               fi
             fi
 
+            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            for ow_dir in \
+              "$GITHUB_WORKSPACE/.github/diy/lede/overwrite/global" \
+              "$GITHUB_WORKSPACE/.github/diy/lede/overwrite/$target"; do
+              if [ -d "$ow_dir" ]; then
+                echo "应用覆写层: $ow_dir"
+                changed=false
+                while IFS= read -r -d '' f; do
+                  rel="${f#"$ow_dir"/}"
+                  mkdir -p "$(dirname "$rel")"
+                  cp -f "$f" "$rel"
+                  echo "覆写: $rel"
+                  changed=true
+                done < <(find "$ow_dir" -type f -print0 | sort -z)
+                if [ "$changed" = true ]; then
+                  git add -A
+                  git commit -m "Applying overwrite layer ($(basename "$ow_dir"))." || true
+                fi
+              fi
+            done
+
             if [ -d .github ]; then
                 rm -rf .github
                 git add .
@@ -272,6 +293,27 @@ jobs:
                 continue
               fi
             fi
+
+            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            for ow_dir in \
+              "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/global" \
+              "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/$target"; do
+              if [ -d "$ow_dir" ]; then
+                echo "应用覆写层: $ow_dir"
+                changed=false
+                while IFS= read -r -d '' f; do
+                  rel="${f#"$ow_dir"/}"
+                  mkdir -p "$(dirname "$rel")"
+                  cp -f "$f" "$rel"
+                  echo "覆写: $rel"
+                  changed=true
+                done < <(find "$ow_dir" -type f -print0 | sort -z)
+                if [ "$changed" = true ]; then
+                  git add -A
+                  git commit -m "Applying overwrite layer ($(basename "$ow_dir"))." || true
+                fi
+              fi
+            done
 
             if [[ $target == "lean" ]]; then
               retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" "HEAD:refs/heads/master" || {
@@ -452,6 +494,27 @@ jobs:
                 continue
               fi
             fi
+
+            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            for ow_dir in \
+              "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/global" \
+              "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/$target"; do
+              if [ -d "$ow_dir" ]; then
+                echo "应用覆写层: $ow_dir"
+                changed=false
+                while IFS= read -r -d '' f; do
+                  rel="${f#"$ow_dir"/}"
+                  mkdir -p "$(dirname "$rel")"
+                  cp -f "$f" "$rel"
+                  echo "覆写: $rel"
+                  changed=true
+                done < <(find "$ow_dir" -type f -print0 | sort -z)
+                if [ "$changed" = true ]; then
+                  git add -A
+                  git commit -m "Applying overwrite layer ($(basename "$ow_dir"))." || true
+                fi
+              fi
+            done
 
             if [[ $target == "lean" ]]; then
               retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" "HEAD:refs/heads/master" || {
