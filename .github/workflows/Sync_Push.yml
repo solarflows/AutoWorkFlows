@@ -13,7 +13,10 @@ on:
         - '.github/workflows/Sync_Push.yml'
         - '.github/diy/lede/patches/**/*.patch'
         - '.github/diy/luci/patches/**/*.patch'
-        - '.github/diy/packages/patches/**/*.patch'  # 当workflow文件有改变时触发
+        - '.github/diy/packages/patches/**/*.patch'
+        - '.github/diy/lede/overwrite/**'
+        - '.github/diy/luci/overwrite/**'
+        - '.github/diy/packages/overwrite/**'  # 当workflow文件有改变时触发
   watch:
     types: [started]
   workflow_dispatch:
@@ -148,20 +151,23 @@ jobs:
               "$GITHUB_WORKSPACE/.github/diy/lede/overwrite/$target"; do
               if [ -d "$ow_dir" ]; then
                 echo "应用覆写层: $ow_dir"
-                changed=false
                 while IFS= read -r -d '' f; do
                   rel="${f#"$ow_dir"/}"
                   mkdir -p "$(dirname "$rel")"
                   cp -f "$f" "$rel"
                   echo "覆写: $rel"
-                  changed=true
                 done < <(find "$ow_dir" -type f -print0 | sort -z)
-                if [ "$changed" = true ]; then
-                  git add -A
-                  git commit -m "Applying overwrite layer ($(basename "$ow_dir"))." || true
-                fi
               fi
             done
+            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "Applying overwrite layer." || {
+                echo "::error::覆写层提交失败: $target"
+                overall_patch_failed=true
+              }
+              git reset -q || true
+            fi
 
             if [ -d .github ]; then
                 rm -rf .github
@@ -300,20 +306,23 @@ jobs:
               "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/$target"; do
               if [ -d "$ow_dir" ]; then
                 echo "应用覆写层: $ow_dir"
-                changed=false
                 while IFS= read -r -d '' f; do
                   rel="${f#"$ow_dir"/}"
                   mkdir -p "$(dirname "$rel")"
                   cp -f "$f" "$rel"
                   echo "覆写: $rel"
-                  changed=true
                 done < <(find "$ow_dir" -type f -print0 | sort -z)
-                if [ "$changed" = true ]; then
-                  git add -A
-                  git commit -m "Applying overwrite layer ($(basename "$ow_dir"))." || true
-                fi
               fi
             done
+            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "Applying overwrite layer." || {
+                echo "::error::覆写层提交失败: $target"
+                overall_patch_failed=true
+              }
+              git reset -q || true
+            fi
 
             if [[ $target == "lean" ]]; then
               retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" "HEAD:refs/heads/master" || {
@@ -353,6 +362,30 @@ jobs:
                 fi
               fi
             done < <(find "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" -type f -name '*.patch' -print0 | sort -z)
+          fi
+
+          # 覆写层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
+          for ow_dir in \
+            "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/global" \
+            "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/hanwckf"; do
+            if [ -d "$ow_dir" ]; then
+              echo "应用覆写层: $ow_dir"
+              while IFS= read -r -d '' f; do
+                rel="${f#"$ow_dir"/}"
+                mkdir -p "$(dirname "$rel")"
+                cp -f "$f" "$rel"
+                echo "覆写: $rel"
+              done < <(find "$ow_dir" -type f -print0 | sort -z)
+            fi
+          done
+          # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Applying overwrite layer." || {
+              echo "::error::覆写层提交失败: hanwckf"
+              exit 1
+            }
+            git reset -q || true
           fi
 
           if [ "$patch_failed" = false ]; then
@@ -501,20 +534,23 @@ jobs:
               "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/$target"; do
               if [ -d "$ow_dir" ]; then
                 echo "应用覆写层: $ow_dir"
-                changed=false
                 while IFS= read -r -d '' f; do
                   rel="${f#"$ow_dir"/}"
                   mkdir -p "$(dirname "$rel")"
                   cp -f "$f" "$rel"
                   echo "覆写: $rel"
-                  changed=true
                 done < <(find "$ow_dir" -type f -print0 | sort -z)
-                if [ "$changed" = true ]; then
-                  git add -A
-                  git commit -m "Applying overwrite layer ($(basename "$ow_dir"))." || true
-                fi
               fi
             done
+            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "Applying overwrite layer." || {
+                echo "::error::覆写层提交失败: $target"
+                overall_patch_failed=true
+              }
+              git reset -q || true
+            fi
 
             if [[ $target == "lean" ]]; then
               retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" "HEAD:refs/heads/master" || {
@@ -555,6 +591,30 @@ jobs:
                 fi
               fi
             done < <(find "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" -type f -name '*.patch' -print0 | sort -z)
+          fi
+
+          # 覆写层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
+          for ow_dir in \
+            "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/global" \
+            "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/hanwckf"; do
+            if [ -d "$ow_dir" ]; then
+              echo "应用覆写层: $ow_dir"
+              while IFS= read -r -d '' f; do
+                rel="${f#"$ow_dir"/}"
+                mkdir -p "$(dirname "$rel")"
+                cp -f "$f" "$rel"
+                echo "覆写: $rel"
+              done < <(find "$ow_dir" -type f -print0 | sort -z)
+            fi
+          done
+          # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Applying overwrite layer." || {
+              echo "::error::覆写层提交失败: hanwckf"
+              exit 1
+            }
+            git reset -q || true
           fi
 
           if [ "$patch_failed" = false ]; then

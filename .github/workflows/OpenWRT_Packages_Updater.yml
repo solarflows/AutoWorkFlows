@@ -8,6 +8,7 @@ on:
       - '.github/diy/Update.sh'
       - '.github/workflows/OpenWRT_Packages_Updater.yml'
       - '.github/diy/openwrt-packages/patches/**/*.patch'
+      - '.github/diy/openwrt-packages/overwrite/**'
       - '.github/diy/openwrt-packages/core'
       - '.github/diy/openwrt-packages/*.sh'
       - '.github/diy/openwrt-packages/readme-template.md'
