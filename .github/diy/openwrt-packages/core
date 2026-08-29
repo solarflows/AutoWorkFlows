@@ -1,4 +1,4 @@
-﻿#
+#
 # 脚本核心文件
 #
 
@@ -60,11 +60,16 @@ format_git_clone_output() {
 checkout_partial_code() {
   local repo_url=""
   local branch=""
+  local preserve_links=false
 
 
   # 解析命令行参数
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --preserve-links)
+        preserve_links=true
+        shift
+        ;;
       -r | --repo)
         repo_url=$2
         shift 2
@@ -93,12 +98,28 @@ checkout_partial_code() {
     exit 1
   fi
 
-  # 提取指定子目录到目标运行目录或当前目录，若文件夹不存在则报错并退出
+  local rsync_link_option="--copy-links"
+  local rsync_status=0
+  if [[ "$preserve_links" == true ]]; then
+    rsync_link_option="--links"
+  fi
+
+  # 提取指定子目录到目标运行目录或当前目录
   for dir in "${@}"; do
     if [ "$dir" != "--repo" ] && [ "$dir" != "-r" ] && [ "$dir" != "--branch" ] && [ "$dir" != "-b" ]; then
-        if ! rsync -av --copy-links $temp_dir/$dir .;then
-          echo "错误：$dir 文件夹不存在于仓库中"
+        if ! compgen -G "$temp_dir/$dir" > /dev/null; then
+          echo "错误：$dir 文件夹不存在于仓库中" >&2
+          rm -rf "$temp_dir"
           exit 1
+        fi
+
+        if rsync -av "$rsync_link_option" "$temp_dir"/$dir .; then
+          :
+        else
+          rsync_status=$?
+          echo "错误：从 $repo_url 同步 '$dir' 失败（rsync 退出码 $rsync_status）" >&2
+          rm -rf "$temp_dir"
+          exit "$rsync_status"
         fi
     fi
   done

@@ -99,7 +99,7 @@ checkout_partial_code -r https://github.com/openwrt/packages utils/irqbalance
 checkout_partial_code -r https://github.com/immortalwrt/packages libs/libtorrent-rasterbar
 # linkease          易有云官方软件(易有云ddnsto,linkshare)
 checkout_partial_code -r https://github.com/linkease/istore/ luci/*
-checkout_partial_code -r https://github.com/linkease/nas-packages-luci luci/*
+checkout_partial_code --preserve-links -r https://github.com/linkease/nas-packages-luci luci/*
 checkout_partial_code -r https://github.com/linkease/istore-ui app-store-ui
 checkout_partial_code -r https://github.com/linkease/nas-packages network/services/* multimedia/*
 # lucky             大吉多种功能结合体
