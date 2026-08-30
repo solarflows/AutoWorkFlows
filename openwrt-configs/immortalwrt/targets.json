@@ -13,13 +13,29 @@
     },
     {
       "target": "qualcommax",
+      "target_family": "qualcommax",
       "repo": "solarflows/ImmortalWrt-QualcommAX",
       "ref": "VIKINGYFY-main",
       "config": "qualcommax",
       "packages_branch": "qualcommax",
       "release_repo": "solarflows/ImmortalWrt-QualcommAX",
+      "firmware_release_tag_prefix": "",
+      "passwall_tag": "packages",
       "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
       "artifacts_release_tag": "artifacts-qualcommax"
+    },
+    {
+      "target": "qualcommax-ipq807x",
+      "target_family": "qualcommax",
+      "repo": "solarflows/ImmortalWrt-QualcommAX",
+      "ref": "VIKINGYFY-main",
+      "config": "ipq807x",
+      "packages_branch": "qualcommax",
+      "release_repo": "solarflows/ImmortalWrt-QualcommAX",
+      "firmware_release_tag_prefix": "qualcommax-ipq807x",
+      "passwall_tag": "packages-qualcommax-ipq807x",
+      "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
+      "artifacts_release_tag": "artifacts-qualcommax-ipq807x"
     }
   ]
 }

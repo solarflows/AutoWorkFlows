@@ -15,11 +15,13 @@ on:
       matrix_release_repo:  { required: true, type: string }
       matrix_passwall_repo: { required: true, type: string }
       matrix_passwall_tag:  { required: true, type: string }
+      matrix_firmware_release_tag_prefix: { required: false, type: string, default: '' }
       matrix_artifacts_release_repo: { required: true, type: string }
       matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_artifacts_keep_versions: { required: false, type: number, default: 7 }
       # ── 默认值（workflow 内置;调用方不传则用这里,见 firmware-build-unified env）──
       defaults_repo:        { required: false, type: string, default: 'solarflows/AutoWorkflows' }
+      defaults_ref:         { required: false, type: string, default: 'main' }
       packages_feed_repo:   { required: false, type: string, default: 'solarflows/openwrt-packages' }
       packages_feed_name:   { required: false, type: string, default: 'solarflows' }
       # ── 全局上下文 ──
@@ -55,6 +57,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ${{ inputs.defaults_repo }}
+          ref: ${{ inputs.defaults_ref }}
           path: AutoWorkFlows
 
       - name: Checkout Source Repo
@@ -1190,6 +1193,10 @@ jobs:
         id: build-info-step
         run: |
           PKG_FORMAT="${{ steps.apply_config.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
+          FIRMWARE_RELEASE_TAG="${{ inputs.version }}"
+          if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
+            FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+          fi
 
           # ── 从编译产物 feeds.buildinfo 提取各 feed 版本 (恢复 v1 功能) ──
           # solarflows 软件包是直接 clone 到 package/solarflows/ (非 src-git feed),
@@ -1257,7 +1264,7 @@ jobs:
             "release_repo": "${{ inputs.matrix_release_repo }}",
             "passwall_repo": "${{ inputs.matrix_passwall_repo }}",
             "passwall_tag": "${{ inputs.matrix_passwall_tag }}",
-            "release_tag": "${{ inputs.version }}",
+            "release_tag": "${FIRMWARE_RELEASE_TAG}",
             "build_mode": "firmware",
             "packages_format": "${PKG_FORMAT}",
             "timestamp": "$(TZ=${TZ} date +'%Y-%m-%d %H:%M:%S')"
@@ -1346,6 +1353,9 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_TAG="${{ inputs.version }}"
+          if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
+            RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+          fi
           RELEASE_REPO="${{ inputs.matrix_release_repo }}"
           FIRMWARE_DIR="openwrt/release/firmware"
           [ -d "$FIRMWARE_DIR" ] && [ -n "$(find "$FIRMWARE_DIR" -maxdepth 1 -type f -print -quit)" ] || {
@@ -1396,66 +1406,101 @@ jobs:
           cd openwrt
           mkdir -p release/sdk release/ib
 
-          # SDK tarball + sha256
-          # 上游产物名: <dist>-sdk-[<version>-]<board>[_gcc-<ver>]<suffix>.<host_os>-<host_arch>.tar.{xz,zst}
-          # (target/sdk/Makefile 的 SDK_NAME), 故 find 用 *-sdk-*.tar.* 匹配, 兼容两种压缩格式。
-          SDK_TARBALL=$(find bin/targets -type f \( -name '*-sdk-*.tar.xz' -o -name '*-sdk-*.tar.zst' \) | head -1)
-          if [ -n "$SDK_TARBALL" ]; then
-            cp "$SDK_TARBALL" release/sdk/
-            # 统一命名: sdk-<target>-<version>-<arch>.tar.{xz,zst} (version 来自 version.mk)
-            SDK_VERSION="${{ steps.apply_config.outputs.source_version }}"
-            # 防御: 版本号必须是纯字符串, 残留 make 表达式则显式报错 (曾发生 exit 127)
-            case "$SDK_VERSION" in
-              *'$('*) echo "::error::apply_config.source_version 含 make 表达式: ${SDK_VERSION}"; exit 1 ;;
+          # ── 版本号 (多 tarball 共用; 防御: 必须是纯字符串, 残留 make 表达式则显式报错) ──
+          SDK_VERSION="${{ steps.apply_config.outputs.source_version }}"
+          SDK_ORIG_VER="${{ steps.apply_config.outputs.patched_version }}"
+          IB_VERSION="$SDK_VERSION"
+          IB_ORIG_VER="$SDK_ORIG_VER"
+          for V in "$SDK_VERSION" "$SDK_ORIG_VER"; do
+            case "$V" in
+              *'('*) echo "::error::apply_config 版本号含 make 表达式: ${V}"; exit 1 ;;
             esac
-            SDK_ORIG_VER="${{ steps.apply_config.outputs.patched_version }}"
-            SDK_EXT=$(basename "$SDK_TARBALL" | sed -E 's/.*\.(tar\..*)$/\1/')
+          done
+
+          # ── SDK: 收集当前独立 target 的全部 tarball 并统一改名。保留多产物
+          # 收集能力，索引仍保持现有消费者契约。──
+          SDK_NAMES=""
+          declare -A SDK_SEEN
+          while IFS= read -r TARBALL; do
+            [ -n "$TARBALL" ] || continue
+            # 上游产物名: <dist>-sdk-[<version>-]<board>[_gcc-<ver>]<suffix>.<host_os>-<host_arch>.tar.{xz,zst}
+            # (target/sdk/Makefile 的 SDK_NAME), 故 find 用 *-sdk-*.tar.* 匹配, 兼容两种压缩格式。
+            BASE=$(basename "$TARBALL")
+            EXT=$(printf '%s' "$BASE" | sed -E 's/.*\.(tar\..*)$/\1/')
             # 优先剥掉上游文件名里的版本前缀 (CONFIG_VERSION_FILENAMES=y 时含 <version>-;
             # 用 patch 后版本号匹配, 与构建期 VERSION_NUMBER 一致), 否则整体提取 (文件名无版本前缀)
-            SDK_ARCH=$(basename "$SDK_TARBALL" | sed -E "s/.*-sdk-${SDK_ORIG_VER}-(.*)\.tar\..*/\1/")
-            if [ "$SDK_ARCH" = "$(basename "$SDK_TARBALL")" ]; then
-              SDK_ARCH=$(basename "$SDK_TARBALL" | sed -E 's/.*-sdk-(.*)\.tar\..*/\1/')
+            TAIL=$(printf '%s' "$BASE" | sed -E "s/.*-sdk-${SDK_ORIG_VER}-(.*)\.tar\..*/\1/")
+            if [ "$TAIL" = "$BASE" ]; then
+              TAIL=$(printf '%s' "$BASE" | sed -E 's/.*-sdk-(.*)\.tar\..*/\1/')
             fi
-            SDK_NEW_NAME="sdk-${IMMWRT_TARGET}-${SDK_VERSION}-${SDK_ARCH}.${SDK_EXT}"
-            mv "release/sdk/$(basename "$SDK_TARBALL")" "release/sdk/${SDK_NEW_NAME}"
-
-            # sha256 统一为 ${SDK_NEW_NAME}.sha256 两列标准格式 (hash + 空格 + 文件名),
-            # 供消费方 sha256sum -c 校验。mv 后重算而非复用上游 .sha256sum:
+            NEW_NAME="sdk-${IMMWRT_TARGET}-${SDK_VERSION}-${TAIL}.${EXT}"
+            # 去重防御: 上游文件名未提供足够区分信息时追加稳定后缀
+            if [ -n "${SDK_SEEN[$NEW_NAME]:-}" ]; then
+              EMB=$(printf '%s' "$TAIL" | sed -nE "s/.*${IMMWRT_TARGET}-([A-Za-z0-9]+)[_.].*/\1/p")
+              if [ -z "$EMB" ]; then EMB="extra${SDK_SEEN[$NEW_NAME]}"; fi
+              NEW_NAME="sdk-${IMMWRT_TARGET}-${SDK_VERSION}-${TAIL}-${EMB}.${EXT}"
+            fi
+            SDK_SEEN[$NEW_NAME]=$(( ${SDK_SEEN[$NEW_NAME]:-0} + 1 ))
+            cp "$TARBALL" "release/sdk/${NEW_NAME}"
+            # sha256 统一为 ${NEW_NAME}.sha256 两列标准格式 (hash + 空格 + 文件名),
+            # 供消费方 sha256sum -c 校验。复制后重算而非复用上游 .sha256sum:
             # 上游文件名/目录前缀可能与新名不一致, 重算保证内容与上传文件名精确匹配
-            (cd release/sdk && sha256sum "$SDK_NEW_NAME" > "${SDK_NEW_NAME}.sha256")
-            echo "sdk_new_name=${SDK_NEW_NAME}" >> $GITHUB_OUTPUT
-            echo "sdk_version_key=${SDK_VERSION}" >> $GITHUB_OUTPUT
-            echo "sdk_arch=${SDK_ARCH}" >> $GITHUB_OUTPUT
-            echo "✅ SDK: ${SDK_NEW_NAME}"
-          else
+            (cd release/sdk && sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256")
+            SDK_NAMES="${SDK_NAMES}${NEW_NAME}"$'\n'
+            echo "✅ SDK: ${NEW_NAME}"
+          done < <(find bin/targets -type f \( -name '*-sdk-*.tar.xz' -o -name '*-sdk-*.tar.zst' \) | LC_ALL=C sort)
+          if [ -z "$SDK_NAMES" ]; then
             echo "::warning::SDK tarball 未生成 (检查 01-base.seed 中 CONFIG_SDK=y)"
           fi
 
-          # IB tarball + sha256
-          # 上游产物名: <dist>-imagebuilder-[<version>-]<board>[_gcc-<ver>].<host_os>-<host_arch>.tar.{xz,zst}
-          # (target/imagebuilder/Makefile 的 IB_NAME), find 用 *-imagebuilder-*.tar.* 匹配。
-          IB_TARBALL=$(find bin/targets -type f \( -name '*-imagebuilder-*.tar.xz' -o -name '*-imagebuilder-*.tar.zst' \) | head -1)
-          if [ -n "$IB_TARBALL" ]; then
-            cp "$IB_TARBALL" release/ib/
-            IB_VERSION="${{ steps.apply_config.outputs.source_version }}"
-            IB_ORIG_VER="${{ steps.apply_config.outputs.patched_version }}"
-            IB_EXT=$(basename "$IB_TARBALL" | sed -E 's/.*\.(tar\..*)$/\1/')
-            IB_ARCH=$(basename "$IB_TARBALL" | sed -E "s/.*-imagebuilder-${IB_ORIG_VER}-(.*)\.tar\..*/\1/")
-            if [ "$IB_ARCH" = "$(basename "$IB_TARBALL")" ]; then
-              IB_ARCH=$(basename "$IB_TARBALL" | sed -E 's/.*-imagebuilder-(.*)\.tar\..*/\1/')
+          # ── IB: 同 SDK 逻辑。上游产物名: <dist>-imagebuilder-[<version>-]<board>[_gcc-<ver>].<host_os>-<host_arch>.tar.{xz,zst} ──
+          IB_NAMES=""
+          declare -A IB_SEEN
+          while IFS= read -r TARBALL; do
+            [ -n "$TARBALL" ] || continue
+            BASE=$(basename "$TARBALL")
+            EXT=$(printf '%s' "$BASE" | sed -E 's/.*\.(tar\..*)$/\1/')
+            TAIL=$(printf '%s' "$BASE" | sed -E "s/.*-imagebuilder-${IB_ORIG_VER}-(.*)\.tar\..*/\1/")
+            if [ "$TAIL" = "$BASE" ]; then
+              TAIL=$(printf '%s' "$BASE" | sed -E 's/.*-imagebuilder-(.*)\.tar\..*/\1/')
             fi
-            IB_NEW_NAME="ib-${IMMWRT_TARGET}-${IB_VERSION}-${IB_ARCH}.${IB_EXT}"
-            mv "release/ib/$(basename "$IB_TARBALL")" "release/ib/${IB_NEW_NAME}"
-
-            # sha256 统一为 ${IB_NEW_NAME}.sha256 两列标准格式 (同 SDK 逻辑, mv 后重算)
-            (cd release/ib && sha256sum "$IB_NEW_NAME" > "${IB_NEW_NAME}.sha256")
-            echo "ib_new_name=${IB_NEW_NAME}" >> $GITHUB_OUTPUT
-            echo "ib_version_key=${IB_VERSION}" >> $GITHUB_OUTPUT
-            echo "ib_arch=${IB_ARCH}" >> $GITHUB_OUTPUT
-            echo "✅ IB:  ${IB_NEW_NAME}"
-          else
+            NEW_NAME="ib-${IMMWRT_TARGET}-${IB_VERSION}-${TAIL}.${EXT}"
+            if [ -n "${IB_SEEN[$NEW_NAME]:-}" ]; then
+              EMB=$(printf '%s' "$TAIL" | sed -nE "s/.*${IMMWRT_TARGET}-([A-Za-z0-9]+)[_.].*/\1/p")
+              if [ -z "$EMB" ]; then EMB="extra${IB_SEEN[$NEW_NAME]}"; fi
+              NEW_NAME="ib-${IMMWRT_TARGET}-${IB_VERSION}-${TAIL}-${EMB}.${EXT}"
+            fi
+            IB_SEEN[$NEW_NAME]=$(( ${IB_SEEN[$NEW_NAME]:-0} + 1 ))
+            cp "$TARBALL" "release/ib/${NEW_NAME}"
+            # sha256 统一为 ${NEW_NAME}.sha256 两列标准格式 (同 SDK 逻辑, mv 后重算)
+            (cd release/ib && sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256")
+            IB_NAMES="${IB_NAMES}${NEW_NAME}"$'\n'
+            echo "✅ IB:  ${NEW_NAME}"
+          done < <(find bin/targets -type f \( -name '*-imagebuilder-*.tar.xz' -o -name '*-imagebuilder-*.tar.zst' \) | LC_ALL=C sort)
+          if [ -z "$IB_NAMES" ]; then
             echo "::warning::IB tarball 未生成 (检查 01-base.seed 中 CONFIG_IB=y)"
           fi
+
+          # ── 输出: 换行分隔名单; compile-packages 消费方读取索引 .[$v].file ──
+          sdk_primary=$(printf '%s\n' "$SDK_NAMES" | head -1)
+          ib_primary=$(printf '%s\n' "$IB_NAMES" | head -1)
+          sdk_arch=$(printf '%s' "$sdk_primary" | sed -E "s/^sdk-${IMMWRT_TARGET}-${SDK_VERSION}-(.*)\.tar\..*/\1/")
+          ib_arch=$(printf '%s' "$ib_primary" | sed -E "s/^ib-${IMMWRT_TARGET}-${IB_VERSION}-(.*)\.tar\..*/\1/")
+
+          {
+            echo "sdk_new_names<<SDK_EOF"
+            printf '%s\n' "$SDK_NAMES"
+            echo "SDK_EOF"
+            echo "sdk_primary=${sdk_primary}"
+            echo "sdk_version_key=${SDK_VERSION}"
+            echo "sdk_arch=${sdk_arch}"
+            echo "ib_new_names<<IB_EOF"
+            printf '%s\n' "$IB_NAMES"
+            echo "IB_EOF"
+            echo "ib_primary=${ib_primary}"
+            echo "ib_version_key=${IB_VERSION}"
+            echo "ib_arch=${ib_arch}"
+          } >> "$GITHUB_OUTPUT"
 
           # ── SDK/IB 目录结构（深度 1）──
           echo ""
@@ -1470,27 +1515,40 @@ jobs:
           echo '```'
 
       - name: Upload SDK to release
-        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.sdk_new_name != ''
+        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.sdk_primary != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          set -euo pipefail
           TAG="${{ inputs.matrix_artifacts_release_tag }}"
           REPO="${{ inputs.matrix_artifacts_release_repo }}"
           # 确保 release 存在 (非 draft, 多版本共存)
           gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
             gh release create "$TAG" --repo "$REPO" \
               --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false
-          SDK_FILE="openwrt/release/sdk/${{ steps.sdk_ib.outputs.sdk_new_name }}"
-          SDK_SHA="${SDK_FILE}.sha256"
-          gh release upload "$TAG" --repo "$REPO" "$SDK_FILE" "$SDK_SHA" --clobber
-          echo "📤 SDK 已上传到 ${REPO}@${TAG}"
+
+          # ── 当前 target 的 SDK 全量上传 ──
+          CURRENT_NAMES=$(cat <<'SDK_NAMES_EOF'
+          ${{ steps.sdk_ib.outputs.sdk_new_names }}
+          SDK_NAMES_EOF
+          )
+          while IFS= read -r SDK_NAME; do
+            if [ -z "$SDK_NAME" ]; then continue; fi
+            SDK_FILE="openwrt/release/sdk/${SDK_NAME}"
+            gh release upload "$TAG" --repo "$REPO" "$SDK_FILE" "${SDK_FILE}.sha256" --clobber
+            echo "📤 SDK 已上传: ${SDK_NAME}"
+          done <<< "$CURRENT_NAMES"
 
           # ── 更新 sdk-index.json ──
+          # 版本键只写主文件; compile-packages 读取 .file, 保持现有索引契约。
+          PRIMARY="${{ steps.sdk_ib.outputs.sdk_primary }}"
+          SDK_FILE="openwrt/release/sdk/${PRIMARY}"
+          SDK_SHA="${SDK_FILE}.sha256"
+          SHA256=$(awk '{print $1}' "$SDK_SHA")
           mkdir -p /tmp/sdk_index
           (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "sdk-index.json" 2>/dev/null) || echo '{}' > /tmp/sdk_index/sdk-index.json
-          SHA256=$(cat "$SDK_SHA" | awk '{print $1}')
           jq --arg v "${{ steps.sdk_ib.outputs.sdk_version_key }}" \
-             --arg f "${{ steps.sdk_ib.outputs.sdk_new_name }}" \
+             --arg f "$PRIMARY" \
              --arg s "$SHA256" \
              --arg src "${{ steps.clone_packages.outputs.sha_full }}" \
              --arg arch "${{ steps.sdk_ib.outputs.sdk_arch }}" \
@@ -1507,60 +1565,89 @@ jobs:
           ' /tmp/sdk_index/sdk-index_new.json > /tmp/sdk_index/sdk-index.json
           gh release upload "$TAG" --repo "$REPO" /tmp/sdk_index/sdk-index.json --clobber
 
-          # ── 清理旧版本 tarball (同名由 --clobber 替换; 异名按版本号保留最近 KEEP 组) ──
-          NEW_FILE="${{ steps.sdk_ib.outputs.sdk_new_name }}"
+          # ── 清理旧版本 tarball: 按产物文件名分组, 每组保留 KEEP 个版本 ──
+          # 无法从文件名解析分组时归 default 组。
           gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' \
-            | grep -E "^sdk-${IMMWRT_TARGET}-.*\.tar\.(xz|zst)$" > /tmp/sdk_files.txt || echo "  (当前无历史 SDK tarball, 跳过清理)"
-          KEEP_HEAD=$(jq -Rr --argjson n "$KEEP" '
-            def vtok: if test("^[0-9]+$") then tonumber
-                      elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
-                      elif . == "SNAPSHOT" then -1 else 0 end;
-            [inputs] | sort_by([splits("[._-]") | vtok]) | .[-$n:][]
-          ' /tmp/sdk_files.txt)
-          while read -r f; do
-            [ -z "$f" ] && continue
-            [ "$f" = "$NEW_FILE" ] && { echo "  (保留本次上传: $f)"; continue; }
-            if echo "$KEEP_HEAD" | grep -qxF "$f"; then
-              echo "  (保留: $f)"
-            else
-              echo "🗑️ 删除旧版本: $f"
-              gh release delete-asset "$TAG" --repo "$REPO" "$f" --yes || echo "  ⚠️ 删除失败: $f"
-              if gh release delete-asset "$TAG" --repo "$REPO" "$f.sha256" --yes 2>/dev/null; then
-                echo "  🧹 已同步删除 ${f}.sha256"
-              else
-                echo "  (无 ${f}.sha256 伴生文件)"
-              fi
-            fi
+            | grep -E "^sdk-${IMMWRT_TARGET}-.*\.tar\.(xz|zst)$" > /tmp/sdk_files.txt || :
+          rm -f /tmp/sdk_group_*.txt
+          SDK_GROUP_LIST=""
+          while IFS= read -r f; do
+            if [ -z "$f" ]; then continue; fi
+            group=$(printf '%s\n' "$f" | sed -nE "s/.*${IMMWRT_TARGET}-([A-Za-z0-9]+)[_.].*/\1/p" | tail -1)
+            if [ -z "$group" ]; then group=default; fi
+            group_file="/tmp/sdk_group_${group}.txt"
+            if [ ! -f "$group_file" ]; then SDK_GROUP_LIST="${SDK_GROUP_LIST}${group}"$'\n'; fi
+            printf '%s\n' "$f" >> "$group_file"
           done < /tmp/sdk_files.txt
+          while IFS= read -r group; do
+            if [ -z "$group" ]; then continue; fi
+            group_file="/tmp/sdk_group_${group}.txt"
+            KEEP_HEAD=$(jq -Rsr --argjson n "$KEEP" '
+              def vtok: if test("^[0-9]+$") then tonumber
+                        elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
+                        elif . == "SNAPSHOT" then -1 else 0 end;
+              split("\n") | map(select(length > 0))
+              | sort_by([splits("[._-]") | vtok]) | .[-$n:][]
+            ' "$group_file")
+            while IFS= read -r f; do
+              if [ -z "$f" ]; then continue; fi
+              if printf '%s\n' "$CURRENT_NAMES" | grep -qxF "$f"; then
+                echo "  (保留本次上传: $f)"
+              elif printf '%s\n' "$KEEP_HEAD" | grep -qxF "$f"; then
+                echo "  (保留: $f)"
+              else
+                echo "🗑️ 删除旧版本: $f"
+                gh release delete-asset "$TAG" --repo "$REPO" "$f" --yes || echo "  ⚠️ 删除失败: $f"
+                if gh release delete-asset "$TAG" --repo "$REPO" "$f.sha256" --yes 2>/dev/null; then
+                  echo "  🧹 已同步删除 ${f}.sha256"
+                else
+                  echo "  (无 ${f}.sha256 伴生文件)"
+                fi
+              fi
+            done < "$group_file"
+          done <<< "$SDK_GROUP_LIST"
 
       - name: Upload IB to release
-        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.ib_new_name != ''
+        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.ib_primary != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          set -euo pipefail
           TAG="${{ inputs.matrix_artifacts_release_tag }}"
           REPO="${{ inputs.matrix_artifacts_release_repo }}"
           gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
             gh release create "$TAG" --repo "$REPO" \
               --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false
-          IB_FILE="openwrt/release/ib/${{ steps.sdk_ib.outputs.ib_new_name }}"
-          IB_SHA="${IB_FILE}.sha256"
-          gh release upload "$TAG" --repo "$REPO" "$IB_FILE" "$IB_SHA" --clobber
-          echo "📤 IB 已上传到 ${REPO}@${TAG}"
+
+          # ── 当前 target 的 IB 全量上传 ──
+          CURRENT_NAMES=$(cat <<'IB_NAMES_EOF'
+          ${{ steps.sdk_ib.outputs.ib_new_names }}
+          IB_NAMES_EOF
+          )
+          while IFS= read -r IB_NAME; do
+            if [ -z "$IB_NAME" ]; then continue; fi
+            IB_FILE="openwrt/release/ib/${IB_NAME}"
+            gh release upload "$TAG" --repo "$REPO" "$IB_FILE" "${IB_FILE}.sha256" --clobber
+            echo "📤 IB 已上传: ${IB_NAME}"
+          done <<< "$CURRENT_NAMES"
 
           # ── 更新 ib-index.json ──
+          # 与 SDK 相同: 版本索引只记录主文件。
+          PRIMARY="${{ steps.sdk_ib.outputs.ib_primary }}"
+          IB_FILE="openwrt/release/ib/${PRIMARY}"
+          IB_SHA="${IB_FILE}.sha256"
+          SHA256=$(awk '{print $1}' "$IB_SHA")
           mkdir -p /tmp/ib_index
           (cd /tmp/ib_index && gh release download "$TAG" --repo "$REPO" --pattern "ib-index.json" 2>/dev/null) || echo '{}' > /tmp/ib_index/ib-index.json
-          SHA256=$(cat "$IB_SHA" | awk '{print $1}')
           jq --arg v "${{ steps.sdk_ib.outputs.ib_version_key }}" \
-             --arg f "${{ steps.sdk_ib.outputs.ib_new_name }}" \
+             --arg f "$PRIMARY" \
              --arg s "$SHA256" \
              --arg src "${{ steps.clone_packages.outputs.sha_full }}" \
              --arg arch "${{ steps.sdk_ib.outputs.ib_arch }}" \
              --arg ts "$(TZ=$TZ date -Iseconds)" \
              '.[$v] = {file:$f, sha256:$s, source_sha:$src, arch:$arch, built_at:$ts}' \
              /tmp/ib_index/ib-index.json > /tmp/ib_index/ib-index_new.json
-           KEEP=${{ inputs.matrix_artifacts_keep_versions }}
+          KEEP=${{ inputs.matrix_artifacts_keep_versions }}
           jq --argjson n "$KEEP" '
             def vtok: if test("^[0-9]+$") then tonumber
                       elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
@@ -1569,31 +1656,46 @@ jobs:
           ' /tmp/ib_index/ib-index_new.json > /tmp/ib_index/ib-index.json
           gh release upload "$TAG" --repo "$REPO" /tmp/ib_index/ib-index.json --clobber
 
-          # ── 清理旧版本 tarball (同名由 --clobber 替换; 异名按版本号保留最近 KEEP 组) ──
-          NEW_FILE="${{ steps.sdk_ib.outputs.ib_new_name }}"
+          # ── 清理旧版本 tarball: 按产物文件名分组, 每组保留 KEEP 个版本 ──
           gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' \
-            | grep -E "^ib-${IMMWRT_TARGET}-.*\.tar\.(xz|zst)$" > /tmp/ib_files.txt || echo "  (当前无历史 IB tarball, 跳过清理)"
-          KEEP_HEAD=$(jq -Rr --argjson n "$KEEP" '
-            def vtok: if test("^[0-9]+$") then tonumber
-                      elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
-                      elif . == "SNAPSHOT" then -1 else 0 end;
-            [inputs] | sort_by([splits("[._-]") | vtok]) | .[-$n:][]
-          ' /tmp/ib_files.txt)
-          while read -r f; do
-            [ -z "$f" ] && continue
-            [ "$f" = "$NEW_FILE" ] && { echo "  (保留本次上传: $f)"; continue; }
-            if echo "$KEEP_HEAD" | grep -qxF "$f"; then
-              echo "  (保留: $f)"
-            else
-              echo "🗑️ 删除旧版本: $f"
-              gh release delete-asset "$TAG" --repo "$REPO" "$f" --yes || echo "  ⚠️ 删除失败: $f"
-              if gh release delete-asset "$TAG" --repo "$REPO" "$f.sha256" --yes 2>/dev/null; then
-                echo "  🧹 已同步删除 ${f}.sha256"
-              else
-                echo "  (无 ${f}.sha256 伴生文件)"
-              fi
-            fi
+            | grep -E "^ib-${IMMWRT_TARGET}-.*\.tar\.(xz|zst)$" > /tmp/ib_files.txt || :
+          rm -f /tmp/ib_group_*.txt
+          IB_GROUP_LIST=""
+          while IFS= read -r f; do
+            if [ -z "$f" ]; then continue; fi
+            group=$(printf '%s\n' "$f" | sed -nE "s/.*${IMMWRT_TARGET}-([A-Za-z0-9]+)[_.].*/\1/p" | tail -1)
+            if [ -z "$group" ]; then group=default; fi
+            group_file="/tmp/ib_group_${group}.txt"
+            if [ ! -f "$group_file" ]; then IB_GROUP_LIST="${IB_GROUP_LIST}${group}"$'\n'; fi
+            printf '%s\n' "$f" >> "$group_file"
           done < /tmp/ib_files.txt
+          while IFS= read -r group; do
+            if [ -z "$group" ]; then continue; fi
+            group_file="/tmp/ib_group_${group}.txt"
+            KEEP_HEAD=$(jq -Rsr --argjson n "$KEEP" '
+              def vtok: if test("^[0-9]+$") then tonumber
+                        elif test("^[Vv][0-9]+$") then (.[1:] | tonumber)
+                        elif . == "SNAPSHOT" then -1 else 0 end;
+              split("\n") | map(select(length > 0))
+              | sort_by([splits("[._-]") | vtok]) | .[-$n:][]
+            ' "$group_file")
+            while IFS= read -r f; do
+              if [ -z "$f" ]; then continue; fi
+              if printf '%s\n' "$CURRENT_NAMES" | grep -qxF "$f"; then
+                echo "  (保留本次上传: $f)"
+              elif printf '%s\n' "$KEEP_HEAD" | grep -qxF "$f"; then
+                echo "  (保留: $f)"
+              else
+                echo "🗑️ 删除旧版本: $f"
+                gh release delete-asset "$TAG" --repo "$REPO" "$f" --yes || echo "  ⚠️ 删除失败: $f"
+                if gh release delete-asset "$TAG" --repo "$REPO" "$f.sha256" --yes 2>/dev/null; then
+                  echo "  🧹 已同步删除 ${f}.sha256"
+                else
+                  echo "  (无 ${f}.sha256 伴生文件)"
+                fi
+              fi
+            done < "$group_file"
+          done <<< "$IB_GROUP_LIST"
 
       - name: Upload published state
         if: success()

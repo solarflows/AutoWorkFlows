@@ -12,15 +12,18 @@ on:
       matrix_ref:                { required: false, type: string, default: '' }
       matrix_config:             { required: true, type: string }
       matrix_packages_branch:    { required: true, type: string }
+      matrix_target_family:      { required: false, type: string, default: '' }
       matrix_passwall_repo:      { required: true, type: string }
       matrix_passwall_tag:        { required: true, type: string }
       matrix_firmware_release_repo: { required: false, type: string, default: '' }
+      matrix_firmware_release_tag_prefix: { required: false, type: string, default: '' }
       matrix_build_sdk_ib:       { required: false, type: boolean, default: false }
       matrix_artifacts_release_repo: { required: true, type: string }
       matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_sdk_packages:       { required: false, type: string, default: '*' }
       # ── 默认值（workflow 内置）──
       defaults_repo:             { required: false, type: string, default: 'solarflows/AutoWorkflows' }
+      defaults_ref:              { required: false, type: string, default: 'main' }
       packages_feed_repo:        { required: false, type: string, default: 'solarflows/openwrt-packages' }
       packages_feed_name:        { required: false, type: string, default: 'solarflows' }
       # ── 全局上下文 ──
@@ -39,9 +42,9 @@ jobs:
   compile-packages:
     name: Compile ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
-    # qualcommax 首次构建 golang host 工具链耗时显著更长:
+    # Qualcomm family 首次构建 golang host 工具链耗时显著更长:
     # run 31860987009 在 120 分钟时仍处于 haproxy 依赖编译阶段。
-    timeout-minutes: ${{ inputs.matrix_target == 'qualcommax' && 240 || 120 }}
+    timeout-minutes: ${{ inputs.matrix_target_family == 'qualcommax' && 240 || 120 }}
     concurrency:
       group: packages-release-${{ inputs.matrix_target }}-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
       cancel-in-progress: false
@@ -53,6 +56,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ${{ inputs.defaults_repo }}
+          ref: ${{ inputs.defaults_ref }}
           path: AutoWorkFlows
 
       - name: Checkout packages feed repo
@@ -905,6 +909,10 @@ jobs:
           PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
           PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
           PKG_FORMAT="${{ steps.signing_key.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
+          FIRMWARE_RELEASE_TAG="${{ inputs.version }}"
+          if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
+            FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+          fi
           cat > build-info.json <<JSONEOF
           {
             "target": "${IMMWRT_TARGET}",
@@ -919,7 +927,7 @@ jobs:
             "plan_sdk_version": "${{ inputs.sdk_version }}",
             "sdk_file": "${{ steps.resolve.outputs.sdk_file }}",
             "build_mode": "sdk",
-            "release_tag": "${{ inputs.version }}",
+            "release_tag": "${FIRMWARE_RELEASE_TAG}",
             "passwall_repo": "${{ inputs.matrix_passwall_repo }}",
             "passwall_tag": "${{ inputs.matrix_passwall_tag }}",
             "release_repo": "${{ inputs.matrix_passwall_repo }}",
@@ -1127,6 +1135,9 @@ jobs:
           ${SIGN_LINE}
           EOF
           TAG="${{ inputs.version }}"
+          if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
+            TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+          fi
           REPO="${{ inputs.matrix_firmware_release_repo }}"
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$REPO" ib/release/firmware/* --clobber

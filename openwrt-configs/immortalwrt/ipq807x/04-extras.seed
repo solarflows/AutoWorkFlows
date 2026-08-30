@@ -1,0 +1,19 @@
+# ────────────────────────────────────────────────────────────
+# qualcommax — 强制预装的额外后端
+#
+# 策略: =y（安装到固件，但不通过 INCLUDE_* 进入 Depends 链）。
+#       passwall ipk 可跨设备复用——用户只需 sing-box+ssr-libev
+#       即可运行，此固件预装全部后端以减少后续 install 操作。
+# ────────────────────────────────────────────────────────────
+
+CONFIG_PACKAGE_haproxy=y
+CONFIG_PACKAGE_hysteria=y
+CONFIG_PACKAGE_naiveproxy=y
+CONFIG_PACKAGE_shadow-tls=y
+CONFIG_PACKAGE_shadowsocks-rust-sslocal=y
+CONFIG_PACKAGE_shadowsocks-rust-ssserver=y
+CONFIG_PACKAGE_shadowsocksr-libev-ssr-server=y
+CONFIG_PACKAGE_simple-obfs-client=y
+CONFIG_PACKAGE_v2ray-plugin=y
+CONFIG_PACKAGE_xray-core=y
+CONFIG_PACKAGE_xray-plugin=y

@@ -18,6 +18,7 @@ on:
         options:
           - 'mt798x'
           - 'qualcommax'
+          - 'qualcommax-ipq807x'
           - 'both'
       trigger:
         description: '触发模式'
@@ -104,6 +105,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository }}
+          ref: ${{ github.ref }}
           sparse-checkout: openwrt-configs/immortalwrt/targets.json
           path: AutoWorkFlows
 
@@ -312,6 +314,8 @@ jobs:
               packages_feed_repo: (.packages_feed_repo // $pkg_repo),
               packages_feed_name: (.packages_feed_name // $pkg_name),
               release_repo:      (.release_repo      // .repo),
+              target_family:     (.target_family     // .target),
+              firmware_release_tag_prefix: (.firmware_release_tag_prefix // ""),
               passwall_repo:     (.passwall_repo     // $pkg_repo),
               passwall_tag:      (.passwall_tag      // "packages"),
               sdk_packages:      (.sdk_packages      // "*"),
@@ -665,12 +669,14 @@ jobs:
         include: ${{ fromJson(needs.plan.outputs.firmware_matrix_json) }}
     uses: ./.github/workflows/compile-firmware.yml
     with:
+      defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
       matrix_ref:                ${{ matrix.ref }}
       matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       matrix_release_repo:       ${{ matrix.release_repo }}
+      matrix_firmware_release_tag_prefix: ${{ matrix.firmware_release_tag_prefix }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
       matrix_passwall_tag:        ${{ matrix.passwall_tag }}
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
@@ -703,12 +709,15 @@ jobs:
         include: ${{ fromJson(needs.plan.outputs.sdk_ib_matrix_json) }}
     uses: ./.github/workflows/compile-packages.yml
     with:
+      defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
       matrix_ref:                ${{ matrix.ref }}
       matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       matrix_firmware_release_repo: ${{ matrix.release_repo }}
+      matrix_firmware_release_tag_prefix: ${{ matrix.firmware_release_tag_prefix }}
+      matrix_target_family:      ${{ matrix.target_family }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
       matrix_passwall_tag:       ${{ matrix.passwall_tag }}
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
@@ -738,12 +747,15 @@ jobs:
         include: ${{ fromJson(needs.plan.outputs.packages_matrix_json) }}
     uses: ./.github/workflows/compile-packages.yml
     with:
+      defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
       matrix_ref:                ${{ matrix.ref }}
       matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
+      matrix_target_family:      ${{ matrix.target_family }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
+      matrix_firmware_release_tag_prefix: ${{ matrix.firmware_release_tag_prefix }}
       matrix_passwall_tag:       ${{ matrix.passwall_tag }}
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
