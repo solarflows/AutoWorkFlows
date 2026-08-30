@@ -314,7 +314,6 @@ jobs:
               packages_feed_repo: (.packages_feed_repo // $pkg_repo),
               packages_feed_name: (.packages_feed_name // $pkg_name),
               release_repo:      (.release_repo      // .repo),
-              target_family:     (.target_family     // .target),
               firmware_release_tag_prefix: (.firmware_release_tag_prefix // ""),
               passwall_repo:     (.passwall_repo     // $pkg_repo),
               passwall_tag:      (.passwall_tag      // "packages"),
@@ -717,7 +716,6 @@ jobs:
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       matrix_firmware_release_repo: ${{ matrix.release_repo }}
       matrix_firmware_release_tag_prefix: ${{ matrix.firmware_release_tag_prefix }}
-      matrix_target_family:      ${{ matrix.target_family }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
       matrix_passwall_tag:       ${{ matrix.passwall_tag }}
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
@@ -753,7 +751,6 @@ jobs:
       matrix_ref:                ${{ matrix.ref }}
       matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
-      matrix_target_family:      ${{ matrix.target_family }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
       matrix_firmware_release_tag_prefix: ${{ matrix.firmware_release_tag_prefix }}
       matrix_passwall_tag:       ${{ matrix.passwall_tag }}

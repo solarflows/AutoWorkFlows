@@ -67,8 +67,6 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 | `ref` * | string | 源码分支或 tag | `test` |
 | `config` * | string | 种子配置目录名，对应 `openwrt-configs/immortalwrt/{config}/` | `mt798x` |
 
-可选的 `target_family` 用于 executor 的目标家族分类和显式超时路由，例如两个 Qualcomm target 都设置为 `qualcommax`。
-
 ---
 
 ## 可选字段 — 固件发布相关
@@ -216,7 +214,7 @@ Qualcomm 现在是两个独立的逻辑 target。它们复用同一源码仓库�
 |------|-----|
 | Runner | `ubuntu-24.04`（4 vCPU，16G RAM，约 14G 可用 SSD） |
 | 全量编译超时 | 480 分钟（8 小时） |
-| SDK-only / SDK+IB 超时 | `target_family=qualcommax` 时 240 分钟，其余 120 分钟 |
+| SDK-only / SDK+IB 超时 | 统一 240 分钟 |
 | 并发 | 全局固定 `firmware-build-v2`；各 target executor 发布互斥，`cancel-in-progress: false` |
 | 定时触发 | 每周一、六 UTC 00:06 |
 

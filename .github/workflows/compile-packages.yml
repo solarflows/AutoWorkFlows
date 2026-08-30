@@ -12,7 +12,6 @@ on:
       matrix_ref:                { required: false, type: string, default: '' }
       matrix_config:             { required: true, type: string }
       matrix_packages_branch:    { required: true, type: string }
-      matrix_target_family:      { required: false, type: string, default: '' }
       matrix_passwall_repo:      { required: true, type: string }
       matrix_passwall_tag:        { required: true, type: string }
       matrix_firmware_release_repo: { required: false, type: string, default: '' }
@@ -42,9 +41,9 @@ jobs:
   compile-packages:
     name: Compile ${{ inputs.matrix_target }}
     runs-on: ubuntu-24.04
-    # Qualcomm family 首次构建 golang host 工具链耗时显著更长:
+    # 首次构建 golang host 工具链耗时显著更长:
     # run 31860987009 在 120 分钟时仍处于 haproxy 依赖编译阶段。
-    timeout-minutes: ${{ inputs.matrix_target_family == 'qualcommax' && 240 || 120 }}
+    timeout-minutes: 240
     concurrency:
       group: packages-release-${{ inputs.matrix_target }}-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
       cancel-in-progress: false

@@ -13,7 +13,6 @@
     },
     {
       "target": "qualcommax",
-      "target_family": "qualcommax",
       "repo": "solarflows/ImmortalWrt-QualcommAX",
       "ref": "VIKINGYFY-main",
       "config": "qualcommax",
@@ -26,7 +25,6 @@
     },
     {
       "target": "qualcommax-ipq807x",
-      "target_family": "qualcommax",
       "repo": "solarflows/ImmortalWrt-QualcommAX",
       "ref": "VIKINGYFY-main",
       "config": "ipq807x",
