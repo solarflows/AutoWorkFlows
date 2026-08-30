@@ -35,7 +35,6 @@ map(. + {
   packages_feed_repo: (.packages_feed_repo // $pkg_repo),
   packages_feed_name: (.packages_feed_name // $pkg_name),
   release_repo:      (.release_repo      // .repo),
-  target_family:     (.target_family     // .target),
   firmware_release_tag_prefix: (.firmware_release_tag_prefix // ""),
   passwall_repo:     (.passwall_repo     // $pkg_repo),
   passwall_tag:      (.passwall_tag      // "packages"),
@@ -50,7 +49,6 @@ map(. + {
 
 | env 变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `DEFAULTS_REPO` | `solarflows/AutoWorkflows` | 本仓库（默认值仓库 / SDK/IB 发布仓库） |
 | `PACKAGES_FEED_REPO` | `solarflows/openwrt-packages` | 插件 overlay 仓库；标准源码 feed 由各源码仓库的 `feeds.conf.default` 决定 |
 | `PACKAGES_FEED_NAME` | `solarflows` | feed 在源码树中的目录名（`package/<feed_name>`） |
 | `ARTIFACTS_RELEASE_REPO` | `solarflows/AutoWorkflows` | SDK/IB 统一 tarball 发布仓库 |
@@ -150,7 +148,6 @@ ib-<target>-<version>-<arch>.tar.xz
   "packages_branch": "newdevice"
 }
 ```
-}
 
 最少只需 4 个必填字段，其余缺省字段由 `plan` job 从 workflow `env` 注入的默认值自动填充（jq `//` 兜底）。
 

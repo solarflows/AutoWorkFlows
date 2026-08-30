@@ -6,22 +6,14 @@
       "repo": "solarflows/immortalwrt-mt798x",
       "ref": "test",
       "config": "mt798x",
-      "packages_branch": "mt798x",
-      "release_repo": "solarflows/immortalwrt-mt798x",
-      "sdk_container": "aarch64_cortex-a53-21.02.7",
-      "artifacts_release_tag": "artifacts-mt798x"
+      "sdk_container": "aarch64_cortex-a53-21.02.7"
     },
     {
       "target": "qualcommax",
       "repo": "solarflows/ImmortalWrt-QualcommAX",
       "ref": "VIKINGYFY-main",
       "config": "qualcommax",
-      "packages_branch": "qualcommax",
-      "release_repo": "solarflows/ImmortalWrt-QualcommAX",
-      "firmware_release_tag_prefix": "",
-      "passwall_tag": "packages",
-      "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
-      "artifacts_release_tag": "artifacts-qualcommax"
+      "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
     },
     {
       "target": "qualcommax-ipq807x",
@@ -29,11 +21,9 @@
       "ref": "VIKINGYFY-main",
       "config": "ipq807x",
       "packages_branch": "qualcommax",
-      "release_repo": "solarflows/ImmortalWrt-QualcommAX",
       "firmware_release_tag_prefix": "qualcommax-ipq807x",
       "passwall_tag": "packages-qualcommax-ipq807x",
-      "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
-      "artifacts_release_tag": "artifacts-qualcommax-ipq807x"
+      "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
     }
   ]
 }

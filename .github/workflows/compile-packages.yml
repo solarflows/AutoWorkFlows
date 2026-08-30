@@ -8,13 +8,11 @@ on:
     inputs:
       # ── 矩阵 target 完整描述 ──
       matrix_target:             { required: true, type: string }
-      matrix_repo:               { required: false, type: string, default: '' }
-      matrix_ref:                { required: false, type: string, default: '' }
       matrix_config:             { required: true, type: string }
       matrix_packages_branch:    { required: true, type: string }
       matrix_passwall_repo:      { required: true, type: string }
       matrix_passwall_tag:        { required: true, type: string }
-      matrix_firmware_release_repo: { required: false, type: string, default: '' }
+      matrix_release_repo:        { required: false, type: string, default: '' }
       matrix_firmware_release_tag_prefix: { required: false, type: string, default: '' }
       matrix_build_sdk_ib:       { required: false, type: boolean, default: false }
       matrix_artifacts_release_repo: { required: true, type: string }
@@ -27,7 +25,6 @@ on:
       packages_feed_name:        { required: false, type: string, default: 'solarflows' }
       # ── 全局上下文 ──
       version:                   { required: true, type: string }
-      sdk_version:               { required: true, type: string }
       cache_strategy:            { required: false, type: string, default: 'smart' }
     secrets:
       ACCESS_TOKEN:              { required: true }
@@ -81,7 +78,7 @@ jobs:
           }
 
           # index.json 的 key 是源码 VERSION_NUMBER (如 21.02.7 / SNAPSHOT-20260801),
-          # 与本次 run 的 inputs.sdk_version (构建时间戳) 无关,故取 built_at 最新的一条.
+          # 与本次 run 的计划版本无关,故取 built_at 最新的一条.
           VERSION=$(jq -r 'to_entries | sort_by(.value.built_at) | last | .key // empty' /tmp/sdk_index/sdk-index.json)
           SDK_FILE=$(jq -r --arg v "$VERSION" '.[$v].file // empty' /tmp/sdk_index/sdk-index.json)
           if [ -z "$SDK_FILE" ]; then
@@ -734,7 +731,7 @@ jobs:
             echo "### 📌 SDK artifact 版本"
             echo "| 项目 | 版本/文件 |"
             echo "|---|---|"
-            echo "| 计划版本 | \`${{ inputs.version }}\` / SDK plan \`${{ inputs.sdk_version }}\` |"
+            echo "| 计划版本 | \`${{ inputs.version }}\` |"
             echo "| 实际 SDK artifact | \`${SDK_ARTIFACT_VERSION}\` |"
             echo "| SDK 文件 | \`${SDK_ARTIFACT_FILE}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -923,7 +920,6 @@ jobs:
             "packages_format": "${PKG_FORMAT}",
             "sdk_version": "${{ steps.resolve.outputs.sdk_version }}",
             "plan_version": "${{ inputs.version }}",
-            "plan_sdk_version": "${{ inputs.sdk_version }}",
             "sdk_file": "${{ steps.resolve.outputs.sdk_file }}",
             "build_mode": "sdk",
             "release_tag": "${FIRMWARE_RELEASE_TAG}",
@@ -1107,7 +1103,7 @@ jobs:
           retention-days: 7
 
       - name: Publish combined firmware
-        if: success() && inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0 && inputs.matrix_firmware_release_repo != ''
+        if: success() && inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0 && inputs.matrix_release_repo != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -1137,7 +1133,7 @@ jobs:
           if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
             TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
           fi
-          REPO="${{ inputs.matrix_firmware_release_repo }}"
+          REPO="${{ inputs.matrix_release_repo }}"
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$REPO" ib/release/firmware/* --clobber
             gh release edit "$TAG" --repo "$REPO" --notes-file combined-release.md --draft=false

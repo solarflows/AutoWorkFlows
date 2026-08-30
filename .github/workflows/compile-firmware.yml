@@ -26,8 +26,6 @@ on:
       packages_feed_name:   { required: false, type: string, default: 'solarflows' }
       # ── 全局上下文 ──
       version:              { required: true, type: string }
-      sdk_version:          { required: true, type: string }
-      ib_version:           { required: true, type: string }
       cache_strategy:       { required: false, type: string, default: 'smart' }
       free_disk_space:      { required: false, type: boolean, default: false }
       publish_sdk_ib:       { required: false, type: boolean, default: true }

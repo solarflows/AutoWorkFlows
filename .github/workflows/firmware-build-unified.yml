@@ -69,7 +69,6 @@ env:
   # ── 全局默认值（唯一权威来源）──────────────
   # targets.json 不再存放 defaults 块;所有缺省值由这里 + reusable workflow
   # 的 inputs.default 提供.改动默认值只需改本段 + build/*.yml 的 input 定义.
-  DEFAULTS_REPO:       solarflows/AutoWorkflows
   PACKAGES_FEED_REPO:  solarflows/openwrt-packages
   PACKAGES_FEED_NAME:  solarflows
   ARTIFACTS_RELEASE_REPO: solarflows/AutoWorkflows
@@ -82,20 +81,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
-      matrix_json:              ${{ steps.build-matrix.outputs.matrix_json }}
       firmware_matrix_json:     ${{ steps.decision.outputs.firmware_matrix_json }}
       sdk_ib_matrix_json:       ${{ steps.decision.outputs.sdk_ib_matrix_json }}
       packages_matrix_json:     ${{ steps.decision.outputs.packages_matrix_json }}
-      targets_to_build:         ${{ steps.build-matrix.outputs.targets_to_build }}
       version:                  ${{ steps.version.outputs.version }}
-      sdk_version:              ${{ steps.version.outputs.sdk_version }}
-      ib_version:               ${{ steps.version.outputs.ib_version }}
-      target_changes_json:      ${{ steps.load-targets.outputs.target_changes_json }}
-      build_mode:               ${{ steps.decision.outputs.build_mode }}
-      should_build_firmware:    ${{ steps.decision.outputs.should_build_firmware }}
-      should_build_sdk_pkgs:    ${{ steps.decision.outputs.should_build_sdk_pkgs }}
-      should_publish_firmware:  ${{ steps.decision.outputs.should_publish_firmware }}
-      should_publish_pkgs:      ${{ steps.decision.outputs.should_publish_pkgs }}
       has_firmware:             ${{ steps.decision.outputs.has_firmware }}
       has_sdk_ib:               ${{ steps.decision.outputs.has_sdk_ib }}
       has_packages:             ${{ steps.decision.outputs.has_packages }}
@@ -261,10 +250,7 @@ jobs:
         run: |
           NOW=$(TZ=${{ env.TZ }} date +'%Y-%m-%d %H:%M:%S')
           VERSION="V$(echo "$NOW" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s", substr(a[1],3), a[2], a[3]}')"
-          DETAILED="V$(echo "$NOW" | awk '{gsub(/[:-]/," "); split($0,a," "); printf "%s%s%s%s%s", substr(a[1],3), a[2], a[3], a[4], a[5]}')"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "sdk_version=${DETAILED}" >> $GITHUB_OUTPUT
-          echo "ib_version=${DETAILED}" >> $GITHUB_OUTPUT
 
       # ── 恢复构建状态 (跨 run 持久化上次构建 SHA) ──
       # 刻意设计: 用 Repository Variable 单份存储 (替代 v1 的 immwrt-state-* 缓存 key)。
@@ -299,10 +285,9 @@ jobs:
           [ -f "$JSON_FILE" ] || { echo "::error::targets.json 不存在"; exit 1; }
 
           # ── 过滤目标 + 应用 workflow 内置默认值 (jq `//` 兜底所有缺省字段) ──
-          # 默认值来源: 本文件 env (DEFAULTS_REPO / PACKAGES_FEED_REPO / ...)
+          # 默认值来源: 本文件 env (PACKAGES_FEED_REPO / ...)
           # targets.json 不再包含 defaults 块,只存每个 target 的差异化字段.
           FILTERED=$(jq -c --arg t "$TARGET_FILTER" \
-            --arg defaults_repo "${{ env.DEFAULTS_REPO }}" \
             --arg pkg_repo "${{ env.PACKAGES_FEED_REPO }}" \
             --arg pkg_name "${{ env.PACKAGES_FEED_NAME }}" \
             --arg artifacts_repo "${{ env.ARTIFACTS_RELEASE_REPO }}" \
@@ -443,16 +428,6 @@ jobs:
               echo "| \`${t}\` | ${s} | ${p} | ${k} |"
             done < /tmp/change_report.txt
           } >> "$GITHUB_STEP_SUMMARY"
-
-          echo "target_changes_json=$(jq -c . /tmp/target_changes.json)" >> $GITHUB_OUTPUT
-
-      # ── 形成 matrix ──
-      - name: Build matrix
-        id: build-matrix
-        run: |
-          FILTERED=$(cat /tmp/filtered_targets.json)
-          echo "matrix_json=$(echo "$FILTERED" | jq -c '.')" >> $GITHUB_OUTPUT
-          echo "targets_to_build=$(echo "$FILTERED" | jq -r '.[].target' | tr '\n' ' ' | sed 's/ $//')" >> $GITHUB_OUTPUT
 
       # ── 决策信号: 综合 trigger + 变更检测结果 ──
       - name: Decide build mode
@@ -612,22 +587,15 @@ jobs:
           echo "has_firmware=$(echo "$PLAN" | jq -r 'any(.[]; .build_firmware)')" >> $GITHUB_OUTPUT
           echo "has_sdk_ib=$HAS_SDK_IB" >> $GITHUB_OUTPUT
           echo "has_packages=$HAS_PKGS" >> $GITHUB_OUTPUT
-          echo "build_mode=$(echo "$PLAN" | jq -r '[.[].build_mode] | map(select(. != "skip")) | first // "skip"')" >> $GITHUB_OUTPUT
-          echo "should_build_firmware=$(echo "$PLAN" | jq -r 'any(.[]; .build_firmware)')" >> $GITHUB_OUTPUT
-          echo "should_build_sdk_pkgs=$(echo "$PLAN" | jq -r 'any(.[]; .build_sdk_pkgs)')" >> $GITHUB_OUTPUT
-          echo "should_publish_firmware=$(echo "$PLAN" | jq -r 'any(.[]; .publish_firmware)')" >> $GITHUB_OUTPUT
-          echo "should_publish_pkgs=$(echo "$PLAN" | jq -r 'any(.[]; .publish_pkgs)')" >> $GITHUB_OUTPUT
 
-          TARGETS="${{ steps.build-matrix.outputs.targets_to_build }}"
+          TARGETS=$(echo "$FILTERED" | jq -r '.[].target' | tr '\n' ' ' | sed 's/ $//')
           VER="${{ steps.version.outputs.version }}"
-          SDKV="${{ steps.version.outputs.sdk_version }}"
-          IBV="${{ steps.version.outputs.ib_version }}"
           {
             echo "## 🎯 Build Decision"
             echo ""
             echo "**触发**: \`${TRIGGER}\` | **目标**: \`${{ github.event.inputs.target || 'both' }}\` | **缓存**: \`${CACHE_STRATEGY}\`"
             echo ""
-            echo "**版本**: 固件 \`${VER}\` / SDK \`${SDKV}\` / IB \`${IBV}\`"
+            echo "**计划版本**: \`${VER}\`"
             echo ""
             echo "**构建目标**: \`${TARGETS}\`"
             echo ""
@@ -684,11 +652,8 @@ jobs:
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
-      sdk_version:               ${{ needs.plan.outputs.sdk_version }}
-      ib_version:                ${{ needs.plan.outputs.ib_version }}
       cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
-      publish_sdk_ib:            true
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
@@ -710,11 +675,9 @@ jobs:
     with:
       defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
-      matrix_repo:               ${{ matrix.repo }}
-      matrix_ref:                ${{ matrix.ref }}
       matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
-      matrix_firmware_release_repo: ${{ matrix.release_repo }}
+      matrix_release_repo:       ${{ matrix.release_repo }}
       matrix_firmware_release_tag_prefix: ${{ matrix.firmware_release_tag_prefix }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
       matrix_passwall_tag:       ${{ matrix.passwall_tag }}
@@ -724,7 +687,6 @@ jobs:
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
-      sdk_version:               ${{ needs.plan.outputs.sdk_version }}
       cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
@@ -747,8 +709,6 @@ jobs:
     with:
       defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
-      matrix_repo:               ${{ matrix.repo }}
-      matrix_ref:                ${{ matrix.ref }}
       matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       matrix_passwall_repo:      ${{ matrix.passwall_repo }}
@@ -760,7 +720,6 @@ jobs:
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
-      sdk_version:               ${{ needs.plan.outputs.sdk_version }}
       cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
