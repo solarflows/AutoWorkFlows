@@ -511,9 +511,20 @@ jobs:
             echo "✅ 已发现可用的 OpenWrt ccache，将复用工具链 stamp（如有效）"
           fi
 
+          echo "🔨 先单独构建 OpenWrt ccache，避免工具链并行竞态..."
+          make -j1 V=sc tools/ccache/compile 2>&1 | tee toolchain-prebuild.log
+
+          CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
+          if ! ccache_is_usable; then
+            echo "::error::OpenWrt ccache 单独构建失败: ${CCACHE_BIN}"
+            echo "::error::请检查 toolchain-prebuild.log 中的 tools/ccache/compile 输出"
+            exit 1
+          fi
+          echo "✅ OpenWrt ccache 已就绪，开始并行构建其余工具链"
+
           NPROC=$(($(nproc) + 1))
           echo "🔨 执行 OpenWrt tools/compile + toolchain/compile (${NPROC} 线程)..."
-          make -j"${NPROC}" V=sc tools/compile toolchain/compile 2>&1 | tee toolchain-prebuild.log
+          make -j"${NPROC}" V=sc tools/compile toolchain/compile 2>&1 | tee -a toolchain-prebuild.log
 
           CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
           if ! ccache_is_usable; then
