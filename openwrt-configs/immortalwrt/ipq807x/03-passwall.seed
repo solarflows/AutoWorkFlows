@@ -1,12 +1,9 @@
 # ────────────────────────────────────────────────────────────
-# qualcommax — passwall/passwall2 完整配置
+# qualcommax / ipq807x — passwall/passwall2 精简配置
 #
-# 源码: https://github.com/Openwrt-Passwall/openwrt-passwall (v26.7.16)
-#       https://github.com/Openwrt-Passwall/openwrt-passwall2 (v26.7.16)
-#
-# INCLUDE_* 的 Kconfig `select` 不影响 ipk/apk 的 Depends 字段
-# (Depends 仅由 LUCI_DEPENDS 控制)，这里全量启用所有后端。
-# qualcommax: nftables + APK, aarch64
+# 按需求只保留: sing-box + shadowsocks-rust + shadowsocksr-libev (SSR)
+# 其余后端 (hysteria/naiveproxy/shadow-tls/xray) 一律剔除，节省存储。
+# qualcommax-ipq807x: nftables + APK, aarch64
 # ────────────────────────────────────────────────────────────
 
 # ── passwall 核心 ──
@@ -16,36 +13,36 @@ CONFIG_PACKAGE_luci-app-passwall2=y
 # ── 透明代理 ──
 CONFIG_PACKAGE_luci-app-passwall_Nftables_Transparent_Proxy=y
 CONFIG_PACKAGE_luci-app-passwall2_Nftables_Transparent_Proxy=y
-CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_All=y
+CONFIG_PACKAGE_luci-app-passwall2_Basic_Core_SingBox=y
 
 # ════════════════════════════════════════════════════════════
-# INCLUDE_* — 全量启用（Kconfig select 不进 ipk Depends）
+# INCLUDE_* — 仅 sing-box + rust-ss + ssr
 # ════════════════════════════════════════════════════════════
+# passwall (v1)
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Geoview=y
-CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y
-CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Hysteria=y
-CONFIG_PACKAGE_luci-app-passwall_INCLUDE_NaiveProxy=y
-CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadow_TLS=y
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client=y
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Server=y
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client=y
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server=y
-CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs=y
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox=y
 CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geodata=y
-CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin=y
-CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y
-CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray_Plugin=y
 
-CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y
-CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Hysteria=y
-CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_NaiveProxy=y
+# ── 明确禁用未使用的 Xray 后端 ──
+# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set
+# CONFIG_PACKAGE_xray-core is not set
+
+# passwall2
 CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_ShadowsocksR_Libev_Client=y
 CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_ShadowsocksR_Libev_Server=y
 CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Client=y
 CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Server=y
-CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Simple_Obfs=y
-CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_V2ray_Plugin=y
+
+# ════════════════════════════════════════════════════════════
+# 地理数据 / geoview（raw 显式预装，-full 完整版）
+# ════════════════════════════════════════════════════════════
+CONFIG_PACKAGE_geoview=y
+CONFIG_PACKAGE_v2ray-geoip-full=y
+CONFIG_PACKAGE_v2ray-geosite-full=y
 
 # ════════════════════════════════════════════════════════════
 # LUCI_DEPENDS 独立包
@@ -55,9 +52,8 @@ CONFIG_PACKAGE_dns2socks=y
 CONFIG_PACKAGE_ipt2socks=y
 CONFIG_PACKAGE_microsocks=y
 CONFIG_PACKAGE_tcping=y
-CONFIG_PACKAGE_unzip=y
 
-# ── sing-box 子选项 ──
+# ── sing-box 子选项（raw 全量保留）──
 CONFIG_SING_BOX_BUILD_ACME=y
 CONFIG_SING_BOX_BUILD_CLASH_API=y
 CONFIG_SING_BOX_BUILD_GVISOR=y
