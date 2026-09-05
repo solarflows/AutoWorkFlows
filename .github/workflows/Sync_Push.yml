@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE
-          git clone --depth=1 https://github.com/solarflows/lede.git temp_rep
+          git clone --filter=blob:none --no-tags --single-branch https://github.com/solarflows/lede.git temp_rep
           cd temp_rep
 
           index=1
@@ -58,17 +58,17 @@ jobs:
             ((index++))
           done
 
-          git fetch --no-tags --depth=1 lean \
+          git fetch --filter=blob:none --no-tags lean \
             refs/heads/master:refs/remotes/lean/master
-          git fetch --no-tags --depth=1 openwrt-snapshot \
+          git fetch --filter=blob:none --no-tags openwrt-snapshot \
             refs/heads/master:refs/remotes/openwrt-snapshot/master
-          git fetch --no-tags --depth=1 dg741a \
+          git fetch --filter=blob:none --no-tags dg741a \
             refs/heads/master:refs/remotes/dg741a/master
-          git fetch --no-tags --depth=1 immortalwrt \
+          git fetch --filter=blob:none --no-tags immortalwrt \
             refs/heads/master:refs/remotes/immortalwrt/master
           # hanwckf/immortalwrt-mt798x 只有 openwrt-21.02 分支, 没有 master;
           # fetch 必须只请求存在的 ref, 否则 git fetch 对任一缺失 ref 整体失败。
-          git fetch --no-tags --depth=1 hanwckf \
+          git fetch --filter=blob:none --no-tags hanwckf \
             refs/heads/openwrt-21.02:refs/remotes/hanwckf/openwrt-21.02
 
       - name: 拉取上游代码并打补丁
@@ -230,7 +230,7 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE
-          git clone --depth=1 https://github.com/solarflows/luci.git temp_rep
+          git clone --filter=blob:none --no-tags --single-branch https://github.com/solarflows/luci.git temp_rep
           cd temp_rep
 
           index=1
@@ -241,11 +241,11 @@ jobs:
             ((index++))
           done
 
-          git fetch --no-tags --depth=1 lean \
+          git fetch --filter=blob:none --no-tags lean \
             refs/heads/master:refs/remotes/lean/master
-          git fetch --no-tags --depth=1 openwrt \
+          git fetch --filter=blob:none --no-tags openwrt \
             refs/heads/master:refs/remotes/openwrt/master
-          git fetch --no-tags --depth=1 immortalwrt \
+          git fetch --filter=blob:none --no-tags immortalwrt \
             refs/heads/master:refs/remotes/immortalwrt/master \
             refs/heads/openwrt-21.02:refs/remotes/immortalwrt/openwrt-21.02
 
@@ -384,8 +384,6 @@ jobs:
               }
             fi
           done
-          if [ "$overall_patch_failed" = true ]; then exit 1; fi
-
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
@@ -438,10 +436,15 @@ jobs:
             fi
             retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/hanwckf" || {
               echo "::error::推送 hanwckf 失败（已重试）"
-              exit 1
+              overall_patch_failed=true
             }
           else
             echo "::error::hanwckf 补丁应用失败，跳过推送。"
+            overall_patch_failed=true
+          fi
+
+          if [ "$overall_patch_failed" = true ]; then
+            echo "::error::一个或多个 Luci 分支同步失败"
             exit 1
           fi
 
@@ -467,7 +470,7 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE
-          git clone --depth=1 https://github.com/solarflows/packages.git temp_rep
+          git clone --filter=blob:none --no-tags --single-branch https://github.com/solarflows/packages.git temp_rep
           cd temp_rep
 
           for target in $TARGETS; do
@@ -481,11 +484,11 @@ jobs:
             git remote add "$target" "$upstream"
           done
 
-          git fetch --no-tags --depth=1 lean \
+          git fetch --filter=blob:none --no-tags lean \
             refs/heads/master:refs/remotes/lean/master
-          git fetch --no-tags --depth=1 openwrt \
+          git fetch --filter=blob:none --no-tags openwrt \
             refs/heads/master:refs/remotes/openwrt/master
-          git fetch --no-tags --depth=1 immortalwrt \
+          git fetch --filter=blob:none --no-tags immortalwrt \
             refs/heads/master:refs/remotes/immortalwrt/master \
             refs/heads/openwrt-21.02:refs/remotes/immortalwrt/openwrt-21.02
           git update-ref refs/remotes/qualcommax/master refs/remotes/immortalwrt/master
@@ -631,8 +634,6 @@ jobs:
             fi
 
           done
-          if [ "$overall_patch_failed" = true ]; then exit 1; fi
-
           echo "Target: hanwckf"
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
@@ -685,10 +686,15 @@ jobs:
             fi
             retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/hanwckf" || {
               echo "::error::推送 hanwckf 失败（已重试）"
-              exit 1
+              overall_patch_failed=true
             }
           else
             echo "::error::hanwckf 补丁应用失败，跳过推送。"
+            overall_patch_failed=true
+          fi
+
+          if [ "$overall_patch_failed" = true ]; then
+            echo "::error::一个或多个 Packages 分支同步失败"
             exit 1
           fi
 

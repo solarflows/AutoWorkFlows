@@ -134,24 +134,32 @@ jobs:
           echo "|:--------|:---------|:-----|" >> $GITHUB_STEP_SUMMARY
 
           # 解析脚本中的 format_git_clone_output 和 checkout_partial_code 调用
-          grep -E "^\s*(format_git_clone_output|checkout_partial_code)" "$SCRIPT" | while IFS= read -r line; do
-            # 提取仓库 URL
-            repo_url=$(echo "$line" | grep -oP '(?<=-r )https://github.com/[^ ]+' | sed 's/\.git$//')
-            if [ -z "$repo_url" ]; then
+          while IFS= read -r line; do
+            if [[ ! "$line" =~ ^[[:space:]]*(format_git_clone_output|checkout_partial_code) ]]; then
+              continue
+            fi
+
+            if [[ "$line" =~ -r[[:space:]]+(https://github\.com/[^[:space:]]+) ]]; then
+              repo_url="${BASH_REMATCH[1]}"
+              repo_url="${repo_url%.git}"
+            else
               continue
             fi
 
             # 提取分支
-            branch=$(echo "$line" | grep -oP '(?<=-b )\S+' | head -1)
+            branch=""
+            if [[ "$line" =~ -b[[:space:]]+([^[:space:]]+) ]]; then
+              branch="${BASH_REMATCH[1]}"
+            fi
             repo_display=$(echo "$repo_url" | sed 's|https://github.com/||')
 
             # 提取包名（从 checkout_partial_code 的路径参数）
             pkg_name=""
-            if echo "$line" | grep -q "checkout_partial_code"; then
+            if [[ "$line" == *checkout_partial_code* ]]; then
               # 获取 -r 后面的参数（跳过 URL）
               parts=$(echo "$line" | sed 's/.*-r [^ ]* //' | xargs)
               pkg_name=$(echo "$parts" | awk '{print $NF}' | sed 's|.*/||')
-            elif echo "$line" | grep -q "format_git_clone_output"; then
+            elif [[ "$line" == *format_git_clone_output* ]]; then
               # 从 URL 提取仓库名
               pkg_name=$(echo "$repo_url" | sed 's|.*/||')
             fi
@@ -163,7 +171,7 @@ jobs:
                 echo "| \`$pkg_name\` | [$repo_display]($repo_url) | |" >> $GITHUB_STEP_SUMMARY
               fi
             fi
-          done
+          done < "$SCRIPT"
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> 📌 完整插件列表请查看 [README.md](https://github.com/${{github.repository}}#-插件来源)" >> $GITHUB_STEP_SUMMARY
@@ -266,19 +274,26 @@ jobs:
           parse_script() {
             local script="$1"
             local target_branch="$2"
-            grep -E "^\s*(format_git_clone_output|checkout_partial_code)" "$script" | while IFS= read -r line; do
-              repo_url=$(echo "$line" | grep -oP '(?<=-r )https://github.com/[^ ]+' | sed 's/\.git$//')
-              [ -z "$repo_url" ] && continue
+            while IFS= read -r line; do
+              if [[ ! "$line" =~ ^[[:space:]]*(format_git_clone_output|checkout_partial_code) ]]; then
+                continue
+              fi
+              if [[ "$line" =~ -r[[:space:]]+(https://github\.com/[^[:space:]]+) ]]; then
+                repo_url="${BASH_REMATCH[1]}"
+                repo_url="${repo_url%.git}"
+              else
+                continue
+              fi
               repo_display=$(echo "$repo_url" | sed 's|https://github.com/||')
               pkg_name=""
-              if echo "$line" | grep -q "checkout_partial_code"; then
+              if [[ "$line" == *checkout_partial_code* ]]; then
                 parts=$(echo "$line" | sed 's/.*-r [^ ]* //' | xargs)
                 pkg_name=$(echo "$parts" | awk '{print $NF}' | sed 's|.*/||')
               else
                 pkg_name=$(echo "$repo_url" | sed 's|.*/||')
               fi
               [ -n "$pkg_name" ] && [ -n "$repo_display" ] && echo "${pkg_name}|${repo_display}|${repo_url}|${target_branch}"
-            done
+            done < "$script"
           }
 
           # 解析所有分支脚本，合并去重
