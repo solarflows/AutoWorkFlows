@@ -20,7 +20,9 @@
   - run `33971151213`（main，OpenWRT Packages Updater）✅ 成功：main/qt6/mt798x/qualcommax 全部成功。
   - run `33971446715`（main，Sync_Push）✅ 成功：Lede/Luci/Packages/VIKINGYFY/清理旧运行记录全部成功。
   - run `33960716537`（main，v2ray-geodata Updater）✅ 成功。
-  - `fafc2e1` 推送后产生的特性分支 CI 尚待确认。
+  - run `33980285274`（特性分支，OpenWRT Packages Updater）已触发，当前排队中。
+  - run `33980285314`（特性分支，同步并推送）已触发，当前执行中。
+  - `hanwckf` Rust 覆写是否已同步仍待确认。
 
 ---
 
@@ -96,17 +98,17 @@ run `33959795219` 的新架构关键链路**已在真实环境验证通过**：
 
 main 上后续验证运行也已成功：Packages updater run `33971151213` 四个目标全成功；Sync_Push run `33971446715` 五个 job 全成功；geodata run `33960716537` 成功。
 
-**仍待确认**：当前特性分支新增的 `fafc2e1` 推送后 CI，以及该提交是否能将本地 Rust 覆写同步到 `solarflows/packages@hanwckf`。
+**仍待确认**：特性分支 runs `33980285274`、`33980285314` 的最终结果，以及 `fafc2e1` 是否能将本地 Rust 覆写同步到 `solarflows/packages@hanwckf`。
 
 ---
 
 ## 5. 已知风险 / 关注点（接手后优先检查）
 
-1. **特性分支新增 CI 待确认**：`33959795219` 和 main 后续验证运行均已成功；推送 `fafc2e1` 后检查 updater/Sync_Push 是否成功，以及 `hanwckf` Rust 覆写是否生效。
+1. **特性分支新增 CI 待确认**：`33959795219` 和 main 后续验证运行均已成功；当前需检查特性分支 runs `33980285274`、`33980285314`，以及 `hanwckf` Rust 覆写是否生效。
 2. **仓库名不一致**：git remote 是 `solarflows/AutoWorkflows.git`，实际仓库是 `AutoWorkFlows.git`。功能上 GitHub 转发，但建议后续 `git remote set-url origin https://github.com/solarflows/AutoWorkFlows.git`。
 3. **`checkout_partial_code` 硬失败风险**：4 个生成脚本 99 处调用，路径均已抽查存在；新增 `--warn-on-missing` 逃生口，但活跃调用未加该标志。若上游删包/改名，feed 生成 job 会红。
 4. **`v2ray-geodata`**：main 上 run `33960716537` 已成功，固定版本/SHA 校验和资产更新链路已得到真实运行验证。
-5. **`Sync_Push`**：main 上 run `33971446715` 已真实成功；当前分支 `fafc2e1` 的 blobless fetch 和失败传播修改仍需推送后验证。
+5. **`Sync_Push`**：main 上 run `33971446715` 已真实成功；当前分支 run `33980285314` 正在验证 `fafc2e1` 的 blobless fetch 和失败传播修改。
 6. **未合并主线**：当前分支功能提交相对最新 main（`f7750c0`）ahead 4、behind 1，加上本次交接文档提交后分支总计 ahead 5，尚未开 PR/合入。合入前建议再确认 `IMMWRT_BUILD_STATE` 中 qualcommax（旧）与 qualcommax-ipq807x（新）命名空间隔离符合预期。
 7. **Passwall 精简策略**：ipq807x 只保留 sing-box + rust-ss + ssr，剔除 xray/hysteria/naiveproxy/shadow-tls；`sdk.config` 未随 buildinfo 变更（它是独立清单，只列 Makefile 目录级包名）。
 
@@ -150,7 +152,8 @@ git remote set-url origin https://github.com/solarflows/AutoWorkFlows.git
 - [x] 验证 main 上 Packages updater run `33971151213` 四个目标全部成功
 - [x] 验证 main 上 Sync_Push run `33971446715` 全部 job 成功
 - [x] 验证 main 上 v2ray-geodata run `33960716537` 成功
-- [ ] 推送 `fafc2e1` 后检查特性分支 CI，并确认 `solarflows/packages@hanwckf` 的 Rust Makefile 变为 `PKG_RELEASE:=2` 且移除 `--config .../config.toml`
+- [x] 推送 `fafc2e1`（工作流修复）和 `e4c9128`（交接文档）到特性分支，并触发 runs `33980285274`、`33980285314`
+- [ ] 观察特性分支 runs `33980285274`、`33980285314` 至完成，并确认 `solarflows/packages@hanwckf` 的 Rust Makefile 变为 `PKG_RELEASE:=2` 且移除 `--config .../config.toml`
 - [ ] 若特性分支 CI 失败：按 `docs/openwrt-build-pitfalls.md` 诊断，不改动未证实根因
 - [ ] 建议把 remote 改为 `AutoWorkFlows.git`
 - [ ] 与用户确认是否开 PR 合入 main（当前分支功能提交相对最新 main ahead 4、behind 1，含交接文档提交总计 ahead 5）
