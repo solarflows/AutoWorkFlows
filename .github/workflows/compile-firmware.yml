@@ -12,6 +12,8 @@ on:
       matrix_ref:           { required: true, type: string }
       matrix_config:       { required: true, type: string }
       matrix_packages_branch: { required: true, type: string }
+      standard_packages_repo: { required: false, type: string, default: 'solarflows/packages' }
+      standard_packages_branch: { required: false, type: string, default: 'master' }
       matrix_release_repo:  { required: true, type: string }
       matrix_passwall_repo: { required: true, type: string }
       matrix_passwall_tag:  { required: true, type: string }
@@ -68,12 +70,30 @@ jobs:
 
       - name: Get source & clone packages
         id: clone_packages
+        env:
+          STANDARD_PACKAGES_REPO: ${{ inputs.standard_packages_repo }}
+          STANDARD_PACKAGES_BRANCH: ${{ inputs.standard_packages_branch }}
         run: |
+          set -euo pipefail
           cd openwrt
           SHA=$(git rev-parse --short HEAD)
           SHA_FULL=$(git rev-parse HEAD)
           echo "sha=${SHA}" >> $GITHUB_OUTPUT
           echo "sha_full=${SHA_FULL}" >> $GITHUB_OUTPUT
+
+          case "$STANDARD_PACKAGES_REPO" in
+            */*) ;;
+            *) echo "::error::标准 packages 仓库格式无效: $STANDARD_PACKAGES_REPO"; exit 1 ;;
+          esac
+          case "$STANDARD_PACKAGES_BRANCH" in
+            ''|*[!A-Za-z0-9._/-]*) echo "::error::标准 packages 分支名无效: $STANDARD_PACKAGES_BRANCH"; exit 1 ;;
+          esac
+          STANDARD_FEED_URL="https://github.com/${STANDARD_PACKAGES_REPO}.git"
+          if grep -Eq '^src-git[[:space:]]+packages[[:space:]]' feeds.conf.default; then
+            sed -i -E "s|^src-git[[:space:]]+packages[[:space:]].*$|src-git packages ${STANDARD_FEED_URL};${STANDARD_PACKAGES_BRANCH}|" feeds.conf.default
+          else
+            printf '%s\n' "src-git packages ${STANDARD_FEED_URL};${STANDARD_PACKAGES_BRANCH}" >> feeds.conf.default
+          fi
 
           git clone --depth 1 https://github.com/${{ inputs.packages_feed_repo }}.git package/${{ inputs.packages_feed_name }} -b ${{ inputs.matrix_packages_branch }}
           PKG_SHA=$(git -C package/${{ inputs.packages_feed_name }} rev-parse --short HEAD)
@@ -235,10 +255,14 @@ jobs:
 
       # ───────── 更新 feeds（源码 + 软件包索引）─────────
       - name: Update Feeds & Packages
+        id: update-feeds
         run: |
           set -euo pipefail
           cd openwrt
           ./scripts/feeds update -a && ./scripts/feeds install -a
+          STANDARD_PACKAGES_SHA=$(git -C feeds/packages rev-parse HEAD)
+          echo "standard_packages_sha=${STANDARD_PACKAGES_SHA}" >> "$GITHUB_OUTPUT"
+          echo "📌 标准 packages feed 实际版本: ${STANDARD_PACKAGES_SHA}"
 
           # ── 目录树: 各 feed 是否已 install (排除 .git/中间产物) ──
           # 可选诊断展示: 管道失败(如 head 截断触发 SIGPIPE)不阻断构建
@@ -660,6 +684,9 @@ jobs:
           git pull origin ${{ inputs.matrix_ref }} || echo "⚠️ 源码 pull 失败: $? (可能无远端更新或非分支引用)"
           git -C package/${{ inputs.packages_feed_name }} pull origin ${{ inputs.matrix_packages_branch }} || echo "⚠️ packages pull 失败: $?"
           ./scripts/feeds update -a && ./scripts/feeds install -a
+          STANDARD_PACKAGES_SHA=$(git -C feeds/packages rev-parse HEAD)
+          echo "standard_packages_sha=${STANDARD_PACKAGES_SHA}" >> "$GITHUB_OUTPUT"
+          echo "📌 重试后标准 packages feed 实际版本: ${STANDARD_PACKAGES_SHA}"
           START_TIME=$(date +%s)
           RETRY_EXIT=1
           set +o pipefail
@@ -1201,6 +1228,7 @@ jobs:
         if: success()
         id: build-info-step
         run: |
+          set -euo pipefail
           PKG_FORMAT="${{ steps.apply_config.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
           FIRMWARE_RELEASE_TAG="${{ inputs.version }}"
           if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
@@ -1261,6 +1289,9 @@ jobs:
             "packages_repo": "${{ inputs.packages_feed_repo }}",
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${{ steps.clone_packages.outputs.packages_sha_full }}",
+            "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
+            "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
+            "standard_packages_sha": "${{ steps.retry.outputs.standard_packages_sha || steps.update-feeds.outputs.standard_packages_sha }}",
             "feeds_info": ${FEEDS_INFO},
             "feeds_md": ${FEEDS_MD_JSON},
             "duration_sec": "${{ steps.total_duration.outputs.duration }}",

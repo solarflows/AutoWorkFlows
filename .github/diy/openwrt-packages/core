@@ -2,12 +2,50 @@
 # 脚本核心文件
 #
 
+SOURCE_CACHE_ROOT="${OPENWRT_PACKAGES_SOURCE_CACHE:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/openwrt-packages-source-cache}"
+SOURCE_CACHE_DIR=""
+
+ensure_source_cache() {
+  local source_repo_url="$1"
+  local source_branch="${2:-}"
+  local cache_key cache_dir staging_root
+  local clone_args
+
+  mkdir -p "$SOURCE_CACHE_ROOT"
+  cache_key=$(printf '%s\0%s' "$source_repo_url" "$source_branch" | sha256sum | awk '{print $1}')
+  cache_dir="$SOURCE_CACHE_ROOT/$cache_key"
+
+  if [[ -e "$cache_dir" && ! -d "$cache_dir/.git" ]]; then
+    rm -rf -- "$cache_dir"
+  fi
+
+  if [[ ! -d "$cache_dir/.git" ]]; then
+    staging_root=$(mktemp -d "$SOURCE_CACHE_ROOT/.clone.XXXXXX")
+    clone_args=(clone --depth 1 --single-branch --quiet)
+    if [[ -n "$source_branch" ]]; then
+      clone_args+=(--branch "$source_branch")
+    fi
+    clone_args+=("$source_repo_url" "$staging_root/repository")
+
+    if ! git "${clone_args[@]}"; then
+      rm -rf -- "$staging_root"
+      echo "Git clone $source_repo_url 出错，请查看日志信息。" >&2
+      return 1
+    fi
+    mv -- "$staging_root/repository" "$cache_dir"
+    rm -rf -- "$staging_root"
+  fi
+
+  SOURCE_CACHE_DIR="$cache_dir"
+}
+
 # 执行 git clone 命令，并将输出重定向到指定文件
 format_git_clone_output() {
   local repo_url=""
   local branch=""
-  local output_file=$(mktemp)
   local clone_dir=""
+  local destination_dir=""
+  local repo_name=""
 
   # 解析命名参数
   while [[ $# -gt 0 ]]; do
@@ -36,24 +74,27 @@ format_git_clone_output() {
     exit 1
   fi
 
-  # 进入当前目录，并执行 git clone 命令，将输出重定向到临时文件
-  if ! (git clone --depth 1 --quiet ${branch:+--branch "$branch"} "$repo_url" ${clone_dir:+"$clone_dir"} > "$output_file" 2>&1); then
-    cat "$output_file"  # 输出日志信息
-    rm "$output_file"   # 删除临时文件
-    echo "Git clone $repo_url 出错，请查看日志信息。"
-    exit 1  # 退出脚本并返回错误状态码
+  ensure_source_cache "$repo_url" "$branch" || exit 1
+  destination_dir="$clone_dir"
+  if [[ -z "$destination_dir" ]]; then
+    repo_name="${repo_url%/}"
+    repo_name="${repo_name##*/}"
+    destination_dir="${repo_name%.git}"
   fi
 
-  # 输出成功信息
+  if [[ -e "$destination_dir" ]]; then
+    echo "目标目录已存在，无法克隆: $destination_dir" >&2
+    exit 1
+  fi
+  mkdir -p -- "$destination_dir"
+  rsync -a \
+    --exclude='.git' \
+    --exclude='.gitattributes' \
+    --exclude='.svn' \
+    --exclude='.github' \
+    --exclude='.gitignore' \
+    "$SOURCE_CACHE_DIR"/ "$destination_dir"/
   echo "克隆成功：$repo_url"
-
-  rm "$output_file"  # 删除临时文件
-
-  rm -rf ./*/.git
-  rm -f ./*/.gitattributes
-  rm -rf ./*/.svn
-  rm -rf ./*/.github
-  rm -rf ./*/.gitignore
 }
 
 # 使用git检出指定的代码到目标运行目录或当前目录
@@ -61,6 +102,7 @@ checkout_partial_code() {
   local repo_url=""
   local branch=""
   local preserve_links=false
+  local warn_on_missing=false
 
 
   # 解析命令行参数
@@ -68,6 +110,10 @@ checkout_partial_code() {
     case "$1" in
       --preserve-links)
         preserve_links=true
+        shift
+        ;;
+      --warn-on-missing)
+        warn_on_missing=true
         shift
         ;;
       -r | --repo)
@@ -90,13 +136,7 @@ checkout_partial_code() {
     exit 1
   fi
 
-  # 克隆GitHub仓库到临时目录并切换到指定分支（如果提供了分支参数），失败时报错并退出
-  local temp_dir=$(mktemp -d)
-  if ! git clone --depth 1 --quiet ${branch:+--branch "$branch"} "$repo_url" "$temp_dir"; then
-    echo "检出出错：$repo_url"
-    rm -rf "$temp_dir"
-    exit 1
-  fi
+  ensure_source_cache "$repo_url" "$branch" || exit 1
 
   local rsync_link_option="--copy-links"
   local rsync_status=0
@@ -105,27 +145,24 @@ checkout_partial_code() {
   fi
 
   # 提取指定子目录到目标运行目录或当前目录
-  for dir in "${@}"; do
-    if [ "$dir" != "--repo" ] && [ "$dir" != "-r" ] && [ "$dir" != "--branch" ] && [ "$dir" != "-b" ]; then
-        if ! compgen -G "$temp_dir/$dir" > /dev/null; then
-          echo "错误：$dir 文件夹不存在于仓库中" >&2
-          rm -rf "$temp_dir"
-          exit 1
-        fi
+  for partial_path in "${@}"; do
+    if ! compgen -G "$SOURCE_CACHE_DIR/$partial_path" > /dev/null; then
+      if [[ "$warn_on_missing" == true ]]; then
+        echo "::warning::$partial_path 文件夹不存在于仓库中，跳过 (warn-on-missing): $repo_url" >&2
+        continue
+      fi
+      echo "错误：$partial_path 文件夹不存在于仓库中" >&2
+      exit 1
+    fi
 
-        if rsync -av "$rsync_link_option" "$temp_dir"/$dir .; then
-          :
-        else
-          rsync_status=$?
-          echo "错误：从 $repo_url 同步 '$dir' 失败（rsync 退出码 $rsync_status）" >&2
-          rm -rf "$temp_dir"
-          exit "$rsync_status"
-        fi
+    if rsync -av "$rsync_link_option" "$SOURCE_CACHE_DIR"/$partial_path .; then
+      :
+    else
+      rsync_status=$?
+      echo "错误：从 $repo_url 同步 '$partial_path' 失败（rsync 退出码 $rsync_status）" >&2
+      exit "$rsync_status"
     fi
   done
-
-  # 删除临时目录
-  rm -rf "$temp_dir"
 
   echo "检出成功：$repo_url"
 }

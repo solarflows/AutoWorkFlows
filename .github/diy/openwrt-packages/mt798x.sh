@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # 导入core
 CHECK_CORE_FILE() {
     CORE_FILE="$(dirname $0)/core"

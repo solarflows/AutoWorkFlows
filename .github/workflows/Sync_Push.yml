@@ -5,6 +5,9 @@ concurrency:
   group: ${{ github.workflow }}-shared
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 on:
   schedule:
     - cron: '0 */12 * * *'  # 每12小时运行一次
@@ -17,15 +20,12 @@ on:
         - '.github/diy/lede/overwrite/**'
         - '.github/diy/luci/overwrite/**'
         - '.github/diy/packages/overwrite/**'  # 当workflow文件有改变时触发
-  watch:
-    types: [started]
   workflow_dispatch:
   # 手动触发
 
 jobs:
   sync_lede:
     name: 同步 lean 仓库
-    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     runs-on: ubuntu-latest
     env:
       TARGETS: "lean openwrt-snapshot dg741a immortalwrt hanwckf"
@@ -34,15 +34,18 @@ jobs:
     steps:
       - name: 检出仓库
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: 配置环境
         run: |
+          set -euo pipefail
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          sudo timedatectl set-timezone "Asia/Shanghai"
 
       - name: 克隆仓库并设置上游
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/solarflows/lede.git temp_rep
           cd temp_rep
@@ -55,7 +58,18 @@ jobs:
             ((index++))
           done
 
-          git fetch --all --no-tags
+          git fetch --no-tags --depth=1 lean \
+            refs/heads/master:refs/remotes/lean/master
+          git fetch --no-tags --depth=1 openwrt-snapshot \
+            refs/heads/master:refs/remotes/openwrt-snapshot/master
+          git fetch --no-tags --depth=1 dg741a \
+            refs/heads/master:refs/remotes/dg741a/master
+          git fetch --no-tags --depth=1 immortalwrt \
+            refs/heads/master:refs/remotes/immortalwrt/master
+          # hanwckf/immortalwrt-mt798x 只有 openwrt-21.02 分支, 没有 master;
+          # fetch 必须只请求存在的 ref, 否则 git fetch 对任一缺失 ref 整体失败。
+          git fetch --no-tags --depth=1 hanwckf \
+            refs/heads/openwrt-21.02:refs/remotes/hanwckf/openwrt-21.02
 
       - name: 拉取上游代码并打补丁
         env:
@@ -63,6 +77,18 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE/temp_rep
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 lede"; exit 1; }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
 
           # 推送函数：使用远端当前 SHA 建立显式 lease，避免无条件覆盖分支。
           retry_push() {
@@ -162,11 +188,10 @@ jobs:
             # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
             git add -A
             if ! git diff --cached --quiet; then
-              git commit -m "Applying overwrite layer." || {
+              if ! git commit -m "Applying overwrite layer."; then
                 echo "::error::覆写层提交失败: $target"
-                overall_patch_failed=true
-              }
-              git reset -q || true
+                exit 1
+              fi
             fi
 
             if [ -d .github ]; then
@@ -174,7 +199,7 @@ jobs:
                 git add .
                 git commit -m "Removing workflows files."
             fi
-            retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/lede.git" "HEAD:refs/heads/$target" || {
+            retry_push "https://github.com/solarflows/lede.git" "HEAD:refs/heads/$target" || {
               echo "::error::推送 $target 失败（已重试）"
               overall_patch_failed=true
             }
@@ -184,8 +209,6 @@ jobs:
 
   sync_luci:
     name: 同步 Luci 仓库
-    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
-    # if: ${{ false }}
     runs-on: ubuntu-latest
     env:
       TARGETS: "lean openwrt immortalwrt"
@@ -194,15 +217,18 @@ jobs:
     steps:
       - name: 检出仓库
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: 配置环境
         run: |
+          set -euo pipefail
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          sudo timedatectl set-timezone "Asia/Shanghai"
 
       - name: 克隆仓库并设置上游
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/solarflows/luci.git temp_rep
           cd temp_rep
@@ -215,7 +241,13 @@ jobs:
             ((index++))
           done
 
-          git fetch --all --no-tags
+          git fetch --no-tags --depth=1 lean \
+            refs/heads/master:refs/remotes/lean/master
+          git fetch --no-tags --depth=1 openwrt \
+            refs/heads/master:refs/remotes/openwrt/master
+          git fetch --no-tags --depth=1 immortalwrt \
+            refs/heads/master:refs/remotes/immortalwrt/master \
+            refs/heads/openwrt-21.02:refs/remotes/immortalwrt/openwrt-21.02
 
       - name: 拉取上游代码并打补丁
         env:
@@ -223,6 +255,18 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE/temp_rep
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 luci"; exit 1; }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
 
           # 推送函数：使用远端当前 SHA 建立显式 lease，避免无条件覆盖分支。
           retry_push() {
@@ -317,15 +361,14 @@ jobs:
             # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
             git add -A
             if ! git diff --cached --quiet; then
-              git commit -m "Applying overwrite layer." || {
+              if ! git commit -m "Applying overwrite layer."; then
                 echo "::error::覆写层提交失败: $target"
-                overall_patch_failed=true
-              }
-              git reset -q || true
+                exit 1
+              fi
             fi
 
             if [[ $target == "lean" ]]; then
-              retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" "HEAD:refs/heads/master" || {
+              retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/master" || {
                 echo "::error::推送 $target 失败（已重试）"
                 overall_patch_failed=true
               }
@@ -335,7 +378,7 @@ jobs:
                   git add .
                   git commit -m "Removing workflows files."
               fi
-              retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" "HEAD:refs/heads/$target" || {
+              retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/$target" || {
                 echo "::error::推送 $target 失败（已重试）"
                 overall_patch_failed=true
               }
@@ -385,7 +428,6 @@ jobs:
               echo "::error::覆写层提交失败: hanwckf"
               exit 1
             }
-            git reset -q || true
           fi
 
           if [ "$patch_failed" = false ]; then
@@ -394,7 +436,7 @@ jobs:
                 git add .
                 git commit -m "Removing workflows files."
             fi
-            retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/luci.git" "HEAD:refs/heads/hanwckf" || {
+            retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/hanwckf" || {
               echo "::error::推送 hanwckf 失败（已重试）"
               exit 1
             }
@@ -405,8 +447,6 @@ jobs:
 
   sync_packages:
     name: 同步 Packages 仓库
-    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
-    # if: ${{ false }}
     runs-on: ubuntu-latest
     env:
       TARGETS: "lean openwrt immortalwrt qualcommax"
@@ -414,15 +454,18 @@ jobs:
     steps:
       - name: 检出仓库
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: 配置环境
         run: |
+          set -euo pipefail
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          sudo timedatectl set-timezone "Asia/Shanghai"
 
       - name: 克隆仓库并设置上游
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE
           git clone --depth=1 https://github.com/solarflows/packages.git temp_rep
           cd temp_rep
@@ -438,7 +481,14 @@ jobs:
             git remote add "$target" "$upstream"
           done
 
-          git fetch --all --no-tags
+          git fetch --no-tags --depth=1 lean \
+            refs/heads/master:refs/remotes/lean/master
+          git fetch --no-tags --depth=1 openwrt \
+            refs/heads/master:refs/remotes/openwrt/master
+          git fetch --no-tags --depth=1 immortalwrt \
+            refs/heads/master:refs/remotes/immortalwrt/master \
+            refs/heads/openwrt-21.02:refs/remotes/immortalwrt/openwrt-21.02
+          git update-ref refs/remotes/qualcommax/master refs/remotes/immortalwrt/master
 
       - name: 拉取上游代码并打补丁
         env:
@@ -446,6 +496,18 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE/temp_rep
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 packages"; exit 1; }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
 
           # 推送函数：先fetch确保本地ref最新，避免浅克隆导致的 cannot lock ref 错误
           retry_push() {
@@ -514,7 +576,7 @@ jobs:
                   git commit -m "Applying $(basename "$patch_file")."
                 else
                   if [[ "$(basename "$patch_file")" == temp* ]]; then
-                    echo "::warning::临时补丁检查或应用失败 (忽略): $patch_file"
+                    echo "::warning::临时补丁应用失败 (忽略): $patch_file"
                   else
                     echo "::error::应用补丁时出错: $patch_file"
                     patch_failed=true
@@ -545,15 +607,14 @@ jobs:
             # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
             git add -A
             if ! git diff --cached --quiet; then
-              git commit -m "Applying overwrite layer." || {
+              if ! git commit -m "Applying overwrite layer."; then
                 echo "::error::覆写层提交失败: $target"
-                overall_patch_failed=true
-              }
-              git reset -q || true
+                exit 1
+              fi
             fi
 
             if [[ $target == "lean" ]]; then
-              retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" "HEAD:refs/heads/master" || {
+              retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/master" || {
                 echo "::error::推送 $target 失败（已重试）"
                 overall_patch_failed=true
               }
@@ -563,7 +624,7 @@ jobs:
                   git add .
                   git commit -m "Removing workflows files."
               fi
-              retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" "HEAD:refs/heads/$target" || {
+              retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/$target" || {
                 echo "::error::推送 $target 失败（已重试）"
                 overall_patch_failed=true
               }
@@ -614,7 +675,6 @@ jobs:
               echo "::error::覆写层提交失败: hanwckf"
               exit 1
             }
-            git reset -q || true
           fi
 
           if [ "$patch_failed" = false ]; then
@@ -623,7 +683,7 @@ jobs:
                 git add .
                 git commit -m "Removing workflows files."
             fi
-            retry_push "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/packages.git" "HEAD:refs/heads/hanwckf" || {
+            retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/hanwckf" || {
               echo "::error::推送 hanwckf 失败（已重试）"
               exit 1
             }
@@ -634,7 +694,6 @@ jobs:
 
   sync_vikingyfy:
     name: 同步VIKINGYFY仓库
-    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     runs-on: ubuntu-latest
 
     steps:
@@ -644,28 +703,33 @@ jobs:
           repository: solarflows/ImmortalWRT-QualcommAX
           ref: VIKINGYFY-main
           fetch-depth: 0
+          filter: blob:none
           token: ${{ secrets.ACCESS_TOKEN }}
+          persist-credentials: false
 
       - name: 检出自动化仓库
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository }}
           path: AutoWorkFlows
+          persist-credentials: false
 
       - name: 配置环境
         run: |
+          set -euo pipefail
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          sudo timedatectl set-timezone "Asia/Shanghai"
 
       - name: 添加上游仓库并拉取
         run: |
+          set -euo pipefail
           git remote add upstream https://github.com/VIKINGYFY/immortalwrt.git
-          git fetch upstream main
+          git fetch --filter=blob:none --no-tags upstream main
 
       - name: 检测上游是否有更新
         id: check
         run: |
+          set -euo pipefail
           # 获取当前分支 HEAD 的 commit SHA
           CURRENT_COMMIT=$(git rev-parse HEAD)
           # 获取上游 main 分支的最新 commit SHA
@@ -687,6 +751,7 @@ jobs:
         if: steps.check.outputs.has_update == 'true'
         id: rebase
         run: |
+          set -euo pipefail
           echo "::group::尝试将 VIKINGYFY-main 变基到上游 main"
           if git rebase upstream/main; then
             echo "rebase_success=true" >> $GITHUB_OUTPUT
@@ -720,8 +785,22 @@ jobs:
       - name: 推送更新到目标仓库
         if: steps.check.outputs.has_update == 'true' || steps.apply-source-patch.outputs.patch_changed == 'true'
         id: push
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 Qualcomm fork"; exit 1; }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
           retry_push() {
             local remote_url="$1"
             local refspec="$2"
@@ -776,7 +855,6 @@ jobs:
 
   del_runs:
     name: 删除旧运行记录
-    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
     needs: [sync_lede, sync_luci, sync_packages, sync_vikingyfy]
     runs-on: ubuntu-latest
     permissions:
@@ -784,7 +862,7 @@ jobs:
       contents: read
     steps:
       - name: Delete workflow runs
-        uses: Mattraks/delete-workflow-runs@v2
+        uses: Mattraks/delete-workflow-runs@0cf693bc9909e5e867ee8f27b813224ba862939c
         with:
           token: ${{ github.token }}
           repository: ${{ github.repository }}

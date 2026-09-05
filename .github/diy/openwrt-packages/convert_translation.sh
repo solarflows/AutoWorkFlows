@@ -1,9 +1,12 @@
 #!/bin/bash
 
-for e in $(ls -d luci-*/po); do
-	if [[ -d $e/zh-cn && ! -d $e/zh_Hans ]]; then
-		ln -s zh-cn $e/zh_Hans 2>/dev/null
-	elif [[ -d $e/zh_Hans && ! -d $e/zh-cn ]]; then
-		ln -s zh_Hans $e/zh-cn 2>/dev/null
+set -euo pipefail
+shopt -s nullglob
+
+for po_dir in luci-*/po; do
+	if [[ -d "$po_dir/zh-cn" && ! -e "$po_dir/zh_Hans" && ! -L "$po_dir/zh_Hans" ]]; then
+		ln -s zh-cn "$po_dir/zh_Hans"
+	elif [[ -d "$po_dir/zh_Hans" && ! -e "$po_dir/zh-cn" && ! -L "$po_dir/zh-cn" ]]; then
+		ln -s zh_Hans "$po_dir/zh-cn"
 	fi
 done
