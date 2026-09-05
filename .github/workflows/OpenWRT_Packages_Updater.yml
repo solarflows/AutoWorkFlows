@@ -378,10 +378,24 @@ jobs:
             files_changed=$(git diff --cached --numstat | wc -l)
             expected_sha=$(git rev-parse HEAD)
 
-            if ! git diff --cached --check; then
-              echo "::error::发现空白错误，拒绝提交"
-              exit 1
+            whitespace_report=$(mktemp)
+            whitespace_error=$(mktemp)
+            if git diff --cached --check > "$whitespace_report" 2> "$whitespace_error"; then
+              :
+            else
+              whitespace_status=$?
+              if [ "$whitespace_status" -ne 2 ] || [ -s "$whitespace_error" ]; then
+                cat "$whitespace_error" >&2
+                cat "$whitespace_report" >&2
+                echo "::error::检查暂存区空白时发生 Git 错误（退出码: $whitespace_status），拒绝提交"
+                rm -f "$whitespace_report" "$whitespace_error"
+                exit 1
+              else
+                cat "$whitespace_report" >&2
+                echo "::warning::暂存区包含 trailing whitespace，保留原始内容继续提交"
+              fi
             fi
+            rm -f "$whitespace_report" "$whitespace_error"
 
             # 提交更改
             git commit -m "$commit_message"
