@@ -8,7 +8,7 @@
 
 ## 1. 当前状态总览（已核实）
 
-- **当前分支**：`main`（已合并 `fix/maintenance-workflows-safety-speed`，合并提交为 `70ec6ba`；推送后工作区应保持干净）
+- **当前分支**：`main`（已合并 `fix/maintenance-workflows-safety-speed`，合并提交为 `70ec6ba`；最新 handoff 提交为 `9560391`，推送后工作区应保持干净）
 - **最新合并提交**：`70ec6ba` — `merge: 合并维护工作流安全与构建修复`
 - **合并内容**：特性分支功能提交相对合并前 `origin/main=f7750c0` ahead 5、behind 1，连同三次交接文档提交共 8 个提交，已通过 `--no-ff` 合并到 `main`。
 - **当前 main 关系**：合并后的 `main` 已推送；远端随后由 geodata workflow 自动生成提交 `1e68eca`（更新 v2ray geodata 版本/SHA），本地已快进同步到该提交。合并内容包含：
@@ -28,8 +28,8 @@
   - `solarflows/packages@hanwckf` 的 Rust 覆写已同步，`PKG_RELEASE:=2` 且已移除 `--config .../config.toml`。
   - run `33981043502`（特性分支，OpenWRT Packages Updater，HEAD=`73a1dc9`）✅ 成功：main/qt6/mt798x/qualcommax 全部成功。
   - run `34004811190`（main，v2ray-geodata Updater，push 触发）✅ 成功。
-  - run `34004811139`（main，OpenWRT Packages Updater，push 触发）🔵 执行中：mt798x/qualcommax 已成功，main/qt6 仍在运行。
-  - run `34004811219`（main，同步并推送，push 触发）🔵 执行中：Packages/Luci/VIKINGYFY 已成功，Lede/lean 仍在运行。
+  - run `34004811139`（main，OpenWRT Packages Updater，push 触发）✅ 成功：main/qt6/mt798x/qualcommax 全部成功。
+  - run `34004811219`（main，同步并推送，push 触发）✅ 成功：Lede/Luci/Packages/VIKINGYFY/清理旧运行记录全部成功。
 
 ---
 
@@ -121,7 +121,7 @@ main 上后续验证运行也已成功：Packages updater run `33971151213` 四�
 3. **`checkout_partial_code` 硬失败风险**：4 个生成脚本 99 处调用，路径均已抽查存在；新增 `--warn-on-missing` 逃生口，但活跃调用未加该标志。若上游删包/改名，feed 生成 job 会红。
 4. **`v2ray-geodata`**：main 上 run `33960716537` 已成功，固定版本/SHA 校验和资产更新链路已得到真实运行验证。
 5. **`Sync_Push`**：main 上 run `33971446715` 与当前分支 run `33980285314` 均已真实成功；blobless fetch 和失败传播修改已验证。
-6. **已合并主线**：特性分支已通过合并提交 `70ec6ba` 合入 `main` 并推送；远端 geodata 自动提交为 `1e68eca`，主分支 Packages updater 已成功，Sync_Push 的 lean 同步仍待完成。
+6. **已合并主线**：特性分支已通过合并提交 `70ec6ba` 合入 `main` 并推送；远端 geodata 自动提交为 `1e68eca`，主分支 push 触发的 Packages updater 和 Sync_Push 均已成功。
 7. **Passwall 精简策略**：ipq807x 只保留 sing-box + rust-ss + ssr，剔除 xray/hysteria/naiveproxy/shadow-tls；`sdk.config` 未随 buildinfo 变更（它是独立清单，只列 Makefile 目录级包名）。
 
 ---
@@ -172,6 +172,6 @@ git remote set-url origin https://github.com/solarflows/AutoWorkFlows.git
 - [x] 将特性分支合并到本地 `main`，生成合并提交 `70ec6ba`
 - [x] 推送合并后的 `main`；主分支 geodata run `34004811190` 成功，自动提交 `1e68eca` 已同步
 - [x] 观察主分支 Packages Updater run `34004811139` 至完成；四个目标全部成功
-- [ ] 观察主分支 Sync_Push run `34004811219` 至完成
+- [x] 观察主分支 Sync_Push run `34004811219` 至完成；五个 job 全部成功
 - [ ] 建议把 remote 改为 `AutoWorkFlows.git`
 - [ ] 若需触发特性分支的 `Sync_Push`/`v2ray-geodata`，注意这些会推远端分支/写 Release，需用户授权
