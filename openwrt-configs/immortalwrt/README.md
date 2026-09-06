@@ -34,6 +34,8 @@ map(. + {
   packages_branch:   (.packages_branch   // .target),
   packages_feed_repo: (.packages_feed_repo // $pkg_repo),
   packages_feed_name: (.packages_feed_name // $pkg_name),
+  standard_packages_repo: (.standard_packages_repo // "solarflows/packages"),
+  standard_packages_branch: (.standard_packages_branch // "master"),
   release_repo:      (.release_repo      // .repo),
   firmware_release_tag_prefix: (.firmware_release_tag_prefix // ""),
   passwall_repo:     (.passwall_repo     // $pkg_repo),
@@ -49,7 +51,7 @@ map(. + {
 
 | env 变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `PACKAGES_FEED_REPO` | `solarflows/openwrt-packages` | 插件 overlay 仓库；标准源码 feed 由各源码仓库的 `feeds.conf.default` 决定 |
+| `PACKAGES_FEED_REPO` | `solarflows/openwrt-packages` | 插件 overlay 仓库；标准 packages feed 由 target 的 `standard_packages_*` 字段决定 |
 | `PACKAGES_FEED_NAME` | `solarflows` | feed 在源码树中的目录名（`package/<feed_name>`） |
 | `ARTIFACTS_RELEASE_REPO` | `solarflows/AutoWorkflows` | SDK/IB 统一 tarball 发布仓库 |
 | `ARTIFACTS_KEEP_VERSIONS` | `7` | 每个 SDK/IB 索引保留最近 N 个版本 |
@@ -89,6 +91,8 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `packages_branch` | `.target` | feed 仓库分支名（也可不写，见必填字段表） |
+| `standard_packages_repo` | `solarflows/packages` | OpenWrt/ImmortalWrt 标准 packages feed 仓库 |
+| `standard_packages_branch` | `master` | 标准 packages feed 分支；构建前会显式写入 `feeds.conf.default` |
 
 
 两类仓库职责不同：
@@ -96,7 +100,7 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 - `solarflows/packages` 是 OpenWrt/ImmortalWrt 的标准 packages feed。
 - `solarflows/openwrt-packages` 是本项目维护的插件 overlay，仍由 `OpenWRT_Packages_Updater.yml` 更新。
 
-Qualcomm 的 `VIKINGYFY-main` 源码由 `Sync_Push.yml` 持久化使用 `solarflows/packages.git;qualcommax`，该分支同时应用 net-snmp 的 `interface.*` trigger 修复。编译 workflow 只消费已经同步到远端的源码和 feed，不在编译工作树临时改写 feed 内容。
+Qualcomm 的 `VIKINGYFY-main` 源码由 `Sync_Push.yml` 持久化使用 `solarflows/packages.git;qualcommax`，该分支同时应用 net-snmp 的 `interface.*` trigger 修复。编译 workflow 会按 target 的 `standard_packages_repo` 与 `standard_packages_branch` 显式写入 `feeds.conf.default`，再更新并安装标准 feed；插件 overlay 仍单独放在 `package/solarflows`。
 
 mt798x 的 active 源是 `solarflows/immortalwrt-mt798x@test`，其中 `test` 分支由人工维护，不由 `Sync_Push.yml` 自动同步；`solarflows/lede` 仍是 legacy 镜像，不代表 mt798x 当前构建源。
 
@@ -184,11 +188,11 @@ Qualcomm 现在是两个独立的逻辑 target。它们复用同一源码仓库�
 
 两个条目都使用 `solarflows/ImmortalWrt-QualcommAX` 的 `VIKINGYFY-main` 和 `solarflows/packages` 的 `qualcommax` 分支；它们只共享源码与 feed 的来源，不共享构建结果。
 
-旧 `qualcommax` 的 cache/state 只服务 ipq60xx 兼容 target；新 target 不复用或写入旧 cache、state、固件 Release、Passwall Release 或 SDK/IB Release。`both` 会把两个条目作为两个矩阵 target 分别规划和执行，同一源码仓库不会导致产物共享。
+旧 `qualcommax` 的 cache/state 只服务 ipq60xx 兼容 target；新 target 不复用或写入旧 cache、state、固件 Release、Passwall Release 或 SDK/IB Release。`both` 会把 `targets.json` 中全部已配置条目作为独立矩阵 target 分别规划和执行，同一源码仓库不会导致产物共享。
 
 ### 步骤 3：更新 `workflow_dispatch` 的 `target` 选项（可选）
 
-如果需要在手动触发时单独选择新目标，编辑 `firmware-build-unified.yml` 中 `on.workflow_dispatch.inputs.target.options`。当前可选值为 `mt798x`、`qualcommax`、`qualcommax-ipq807x` 和 `both`；`both` 会包含两个 Qualcomm target。
+如果需要在手动触发时单独选择新目标，编辑 `firmware-build-unified.yml` 中 `on.workflow_dispatch.inputs.target.options`。当前可选值为 `mt798x`、`qualcommax`、`qualcommax-ipq807x` 和 `both`；`both` 会包含 `targets.json` 中全部已配置 target。
 
 ---
 

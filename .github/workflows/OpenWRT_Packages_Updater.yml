@@ -12,13 +12,62 @@ on:
       - '.github/diy/openwrt-packages/core'
       - '.github/diy/openwrt-packages/*.sh'
       - '.github/diy/openwrt-packages/readme-template.md'
-  watch:
-    types: started
   workflow_dispatch:
+    inputs:
+      targets:
+        description: '要更新的分支，逗号分隔；all 表示全部分支'
+        required: false
+        default: 'all'
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
+  prepare:
+    name: 准备更新分支
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.resolve.outputs.targets }}
+    steps:
+      - name: 解析目标分支
+        id: resolve
+        env:
+          REQUESTED_TARGETS: ${{ github.event.inputs.targets || 'all' }}
+        run: |
+          set -euo pipefail
+          if [ "$REQUESTED_TARGETS" = "all" ] || [ -z "$REQUESTED_TARGETS" ]; then
+            echo 'targets=["main","qt6","mt798x","qualcommax"]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          declare -A seen=()
+          selected=()
+          IFS=',' read -r -a requested <<< "$REQUESTED_TARGETS"
+          for target in "${requested[@]}"; do
+            target="${target//[[:space:]]/}"
+            case "$target" in
+              main|qt6|mt798x|qualcommax) ;;
+              *)
+                echo "::error::不支持的 packages updater 分支: ${target}"
+                exit 1
+                ;;
+            esac
+            if [ -z "${seen[$target]+x}" ]; then
+              selected+=("$target")
+              seen[$target]=1
+            fi
+          done
+          [ "${#selected[@]}" -gt 0 ] || {
+            echo "::error::没有可更新的 packages updater 分支"
+            exit 1
+          }
+          TARGETS_JSON=$(printf '%s\n' "${selected[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+          echo "targets=${TARGETS_JSON}" >> "$GITHUB_OUTPUT"
+
   update:
-    # if: github.event.repository.owner.id == github.event.sender.id || github.event.sender.type == 'Bot'
+    needs: prepare
+    if: needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     concurrency:
       group: openwrt-packages-updater-${{ matrix.target }}
@@ -27,20 +76,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [main,qt6,mt798x,qualcommax]
+        target: ${{ fromJSON(needs.prepare.outputs.targets) }}
 
     name: 更新 ${{ matrix.target }} 分支
 
     steps:
       - name: 签出代码
-        uses: actions/checkout@main
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: 初始化环境
         run: |
+          set -euo pipefail
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          sudo timedatectl set-timezone "Asia/Shanghai"
-          sudo -E apt-get -qq install rename
 
           # 写入 Job Summary 头部
           echo "# 🔄 OpenWRT Packages Updater" >> $GITHUB_STEP_SUMMARY
@@ -52,18 +102,20 @@ jobs:
 
       - name: 克隆代码
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE
           chmod +x .github/diy/openwrt-packages/*.sh
           # 使用 --single-branch 确保只克隆分支而非同名 release tag
           # 避免当仓库中存在与分支同名的 release (如 qualcommax/mt798x) 时产生歧义
-          git clone --single-branch --branch ${{matrix.target}} https://github.com/solarflows/openwrt-packages.git ${{matrix.target}}
-          cd ${{matrix.target}}
+          git clone --single-branch --branch "${{ matrix.target }}" https://github.com/solarflows/openwrt-packages.git "${{ matrix.target }}"
+          cd "${{ matrix.target }}"
           # 同步清理工作树，保留 .git；不能后台运行 git rm，否则会与生成和 git add 竞争。
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
           bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/${{matrix.target}}.sh
 
       - name: 修改代码
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/convert_translation.sh
           bash $GITHUB_WORKSPACE/.github/diy/openwrt-packages/create_acl_for_luci.sh -a
@@ -72,6 +124,7 @@ jobs:
       - name: 生成插件来源摘要
         if: always()
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE/${{matrix.target}}
           SCRIPT="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/${{matrix.target}}.sh"
 
@@ -81,24 +134,32 @@ jobs:
           echo "|:--------|:---------|:-----|" >> $GITHUB_STEP_SUMMARY
 
           # 解析脚本中的 format_git_clone_output 和 checkout_partial_code 调用
-          grep -E "^\s*(format_git_clone_output|checkout_partial_code)" "$SCRIPT" | while IFS= read -r line; do
-            # 提取仓库 URL
-            repo_url=$(echo "$line" | grep -oP '(?<=-r )https://github.com/[^ ]+' | sed 's/\.git$//')
-            if [ -z "$repo_url" ]; then
+          while IFS= read -r line; do
+            if [[ ! "$line" =~ ^[[:space:]]*(format_git_clone_output|checkout_partial_code) ]]; then
+              continue
+            fi
+
+            if [[ "$line" =~ -r[[:space:]]+(https://github\.com/[^[:space:]]+) ]]; then
+              repo_url="${BASH_REMATCH[1]}"
+              repo_url="${repo_url%.git}"
+            else
               continue
             fi
 
             # 提取分支
-            branch=$(echo "$line" | grep -oP '(?<=-b )\S+' | head -1)
+            branch=""
+            if [[ "$line" =~ -b[[:space:]]+([^[:space:]]+) ]]; then
+              branch="${BASH_REMATCH[1]}"
+            fi
             repo_display=$(echo "$repo_url" | sed 's|https://github.com/||')
 
             # 提取包名（从 checkout_partial_code 的路径参数）
             pkg_name=""
-            if echo "$line" | grep -q "checkout_partial_code"; then
+            if [[ "$line" == *checkout_partial_code* ]]; then
               # 获取 -r 后面的参数（跳过 URL）
               parts=$(echo "$line" | sed 's/.*-r [^ ]* //' | xargs)
               pkg_name=$(echo "$parts" | awk '{print $NF}' | sed 's|.*/||')
-            elif echo "$line" | grep -q "format_git_clone_output"; then
+            elif [[ "$line" == *format_git_clone_output* ]]; then
               # 从 URL 提取仓库名
               pkg_name=$(echo "$repo_url" | sed 's|.*/||')
             fi
@@ -110,13 +171,14 @@ jobs:
                 echo "| \`$pkg_name\` | [$repo_display]($repo_url) | |" >> $GITHUB_STEP_SUMMARY
               fi
             fi
-          done
+          done < "$SCRIPT"
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> 📌 完整插件列表请查看 [README.md](https://github.com/${{github.repository}}#-插件来源)" >> $GITHUB_STEP_SUMMARY
 
       - name: 应用补丁
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 应用补丁（temp* 前缀的补丁失败仅警告，不中断）
@@ -143,6 +205,7 @@ jobs:
 
       - name: 应用全局补丁
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 应用全局补丁（temp* 前缀的补丁失败仅警告，不中断）
@@ -166,6 +229,7 @@ jobs:
 
       - name: 应用覆写层
         run: |
+          set -euo pipefail
           cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 覆写层：将 overwrite 目录中的文件按相对路径直接替换或新增到工作树。
@@ -200,6 +264,7 @@ jobs:
       - name: 生成 README (仅 main 分支)
         if: matrix.target == 'main'
         run: |
+          set -euo pipefail
           TEMPLATE="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/readme-template.md"
           UPDATE_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')
           SCRIPTS_DIR="$GITHUB_WORKSPACE/.github/diy/openwrt-packages"
@@ -209,19 +274,26 @@ jobs:
           parse_script() {
             local script="$1"
             local target_branch="$2"
-            grep -E "^\s*(format_git_clone_output|checkout_partial_code)" "$script" | while IFS= read -r line; do
-              repo_url=$(echo "$line" | grep -oP '(?<=-r )https://github.com/[^ ]+' | sed 's/\.git$//')
-              [ -z "$repo_url" ] && continue
+            while IFS= read -r line; do
+              if [[ ! "$line" =~ ^[[:space:]]*(format_git_clone_output|checkout_partial_code) ]]; then
+                continue
+              fi
+              if [[ "$line" =~ -r[[:space:]]+(https://github\.com/[^[:space:]]+) ]]; then
+                repo_url="${BASH_REMATCH[1]}"
+                repo_url="${repo_url%.git}"
+              else
+                continue
+              fi
               repo_display=$(echo "$repo_url" | sed 's|https://github.com/||')
               pkg_name=""
-              if echo "$line" | grep -q "checkout_partial_code"; then
+              if [[ "$line" == *checkout_partial_code* ]]; then
                 parts=$(echo "$line" | sed 's/.*-r [^ ]* //' | xargs)
                 pkg_name=$(echo "$parts" | awk '{print $NF}' | sed 's|.*/||')
               else
                 pkg_name=$(echo "$repo_url" | sed 's|.*/||')
               fi
               [ -n "$pkg_name" ] && [ -n "$repo_display" ] && echo "${pkg_name}|${repo_display}|${repo_url}|${target_branch}"
-            done
+            done < "$script"
           }
 
           # 解析所有分支脚本，合并去重
@@ -269,7 +341,23 @@ jobs:
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          cd $GITHUB_WORKSPACE/${{matrix.target}}
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/${{ matrix.target }}"
+          [ -n "$ACCESS_TOKEN" ] || {
+            echo "::error::ACCESS_TOKEN 未设置，无法推送 packages feed"
+            exit 1
+          }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
           if [ "${{ github.event_name }}" == "schedule" ]; then
             commit_message="⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
           else
@@ -288,13 +376,64 @@ jobs:
             added=$(git diff --cached --numstat | awk '{s+=$1} END {print s}')
             removed=$(git diff --cached --numstat | awk '{s+=$2} END {print s}')
             files_changed=$(git diff --cached --numstat | wc -l)
+            expected_sha=$(git rev-parse HEAD)
+
+            whitespace_report=$(mktemp)
+            whitespace_error=$(mktemp)
+            if git diff --cached --check > "$whitespace_report" 2> "$whitespace_error"; then
+              :
+            else
+              whitespace_status=$?
+              if [ "$whitespace_status" -ne 2 ] || [ -s "$whitespace_error" ]; then
+                cat "$whitespace_error" >&2
+                cat "$whitespace_report" >&2
+                echo "::error::检查暂存区空白时发生 Git 错误（退出码: $whitespace_status），拒绝提交"
+                rm -f "$whitespace_report" "$whitespace_error"
+                exit 1
+              else
+                cat "$whitespace_report" >&2
+                echo "::warning::暂存区包含 trailing whitespace，保留原始内容继续提交"
+              fi
+            fi
+            rm -f "$whitespace_report" "$whitespace_error"
 
             # 提交更改
             git commit -m "$commit_message"
             echo "Commit successful. Pushing changes to the repository."
-            # 使用 refs/heads/ 前缀明确指定推送到分支，而非同名 release tag
-            # 避免当仓库中存在与分支同名的 release (如 qualcommax/mt798x) 时推送到错误目标
-            git push --quiet "https://${{ secrets.ACCESS_TOKEN }}@github.com/solarflows/openwrt-packages.git" HEAD:refs/heads/${{matrix.target}}
+
+            # 生成型分支仍允许覆盖远端历史，但必须锁定 clone 时的远端 SHA。
+            # 远端在重试期间发生变化时直接失败，避免覆盖人工提交或其他运行结果。
+            retry_push() {
+              local expected="$1"
+              local branch="$2"
+              local push_url="https://github.com/solarflows/openwrt-packages.git"
+              local lease current attempt
+              lease="--force-with-lease=refs/heads/${branch}:${expected}"
+              for attempt in 1 2 3; do
+                if git push --quiet "$push_url" "$lease" "HEAD:refs/heads/${branch}"; then
+                  return 0
+                fi
+                current=$(git ls-remote "$push_url" "refs/heads/${branch}" | awk 'NR == 1 {print $1}') || {
+                  echo "::error::读取远端分支失败，停止推送"
+                  return 1
+                }
+                if [ "$current" = "$(git rev-parse HEAD)" ]; then
+                  echo "✅ 远端已包含本次提交"
+                  return 0
+                fi
+                if [ "$current" != "$expected" ]; then
+                  echo "::error::远端分支已变化，拒绝覆盖: refs/heads/${branch}"
+                  return 1
+                fi
+                if [ "$attempt" -lt 3 ]; then
+                  echo "::warning::推送失败，10 秒后重试 (${attempt}/3)..."
+                  sleep 10
+                fi
+              done
+              return 1
+            }
+
+            retry_push "$expected_sha" "${{matrix.target}}"
 
             # 输出统计到 Summary
             echo "" >> $GITHUB_STEP_SUMMARY

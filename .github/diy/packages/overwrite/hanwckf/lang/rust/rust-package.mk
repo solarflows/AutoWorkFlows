@@ -12,11 +12,12 @@
 #
 #
 # RUST_PKG_LOCKED - Assert that `Cargo.lock` will remain unchanged
-#                    (Enabled by default)
+#                   (Enabled by default)
 #
 #   Disable it if you want to have up-to-date dependencies
 #
 #   e.g. RUST_PKG_LOCKED:=0
+
 
 ifeq ($(origin RUST_INCLUDE_DIR),undefined)
   RUST_INCLUDE_DIR:=$(dir $(lastword $(MAKEFILE_LIST)))

@@ -10,7 +10,7 @@ Subject: [PATCH] add v2ray-geodata.
 
 diff --git a/v2ray-geodata/Makefile b/v2ray-geodata/Makefile
 new file mode 100644
-index 00000000..8f1334c9
+index 00000000..37237be1962659900c2327686ff0b46da6780866
 --- /dev/null
 +++ b/v2ray-geodata/Makefile
 @@ -0,0 +1,138 @@

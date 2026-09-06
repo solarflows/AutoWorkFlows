@@ -10,6 +10,8 @@ on:
       matrix_target:             { required: true, type: string }
       matrix_config:             { required: true, type: string }
       matrix_packages_branch:    { required: true, type: string }
+      standard_packages_repo:    { required: false, type: string, default: 'solarflows/packages' }
+      standard_packages_branch:  { required: false, type: string, default: 'master' }
       matrix_passwall_repo:      { required: true, type: string }
       matrix_passwall_tag:        { required: true, type: string }
       matrix_release_repo:        { required: false, type: string, default: '' }
@@ -429,6 +431,22 @@ jobs:
             exit 1
           }
 
+          STANDARD_PACKAGES_REPO="${{ inputs.standard_packages_repo }}"
+          STANDARD_PACKAGES_BRANCH="${{ inputs.standard_packages_branch }}"
+          case "$STANDARD_PACKAGES_REPO" in
+            */*) ;;
+            *) echo "::error::标准 packages 仓库格式无效: $STANDARD_PACKAGES_REPO"; exit 1 ;;
+          esac
+          case "$STANDARD_PACKAGES_BRANCH" in
+            ''|*[!A-Za-z0-9._/-]*) echo "::error::标准 packages 分支名无效: $STANDARD_PACKAGES_BRANCH"; exit 1 ;;
+          esac
+          STANDARD_FEED_URL="https://github.com/${STANDARD_PACKAGES_REPO}.git"
+          if grep -Eq '^src-git[[:space:]]+packages[[:space:]]' feeds.conf.default; then
+            sed -i -E "s|^src-git[[:space:]]+packages[[:space:]].*$|src-git packages ${STANDARD_FEED_URL};${STANDARD_PACKAGES_BRANCH}|" feeds.conf.default
+          else
+            printf '%s\n' "src-git packages ${STANDARD_FEED_URL};${STANDARD_PACKAGES_BRANCH}" >> feeds.conf.default
+          fi
+
           # 签名: 密钥放在 SDK 根目录 (构建系统读取 ./private-key.pem 或 ./key-build)
           if [ "${{ steps.signing_key.outputs.use_apk }}" = "true" ] && [ -f ../private-key.pem ]; then
             cp ../private-key.pem ./private-key.pem
@@ -452,6 +470,9 @@ jobs:
           echo "::group::📋 Configure feeds (local overlay first)"
           ./scripts/feeds update -a 2>&1
           ./scripts/feeds install -a 2>&1
+          STANDARD_PKG_SHA_FULL=$(git -C feeds/packages rev-parse HEAD)
+          echo "📌 标准 packages feed: ${STANDARD_PACKAGES_REPO}@${STANDARD_PACKAGES_BRANCH} (${STANDARD_PKG_SHA_FULL})"
+          echo "standard_packages_sha=${STANDARD_PKG_SHA_FULL}" >> "$GITHUB_OUTPUT"
 
           # ── ccache: 复用 SDK 原生机制并与全量编译共享 .ccache ──
           # SDK tarball 内置的 host/bin 工具优先于 runner 系统工具；这同时使
@@ -902,6 +923,7 @@ jobs:
       - name: Generate build info
         if: steps.artifacts.outputs.package_count > 0
         run: |
+          set -euo pipefail
           PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
           PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
           PKG_FORMAT="${{ steps.signing_key.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
@@ -917,6 +939,9 @@ jobs:
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${PKG_COMMIT_FULL}",
             "packages_commit": "${PKG_COMMIT}",
+            "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
+            "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
+            "standard_packages_sha": "${{ steps.compile.outputs.standard_packages_sha }}",
             "packages_format": "${PKG_FORMAT}",
             "sdk_version": "${{ steps.resolve.outputs.sdk_version }}",
             "plan_version": "${{ inputs.version }}",

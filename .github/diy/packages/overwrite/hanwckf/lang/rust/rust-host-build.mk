@@ -12,7 +12,7 @@
 #
 #
 # RUST_HOST_LOCKED - Assert that `Cargo.lock` will remain unchanged
-#                     (Enabled by default)
+#                    (Enabled by default)
 #
 #   Disable it if you want to have up-to-date dependencies
 #

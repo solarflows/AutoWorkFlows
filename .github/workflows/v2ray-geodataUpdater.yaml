@@ -1,7 +1,11 @@
 ﻿name: v2ray-geodata Updater
 
+concurrency:
+  group: v2ray-geodata-updater
+  cancel-in-progress: false
+
 permissions:
-  contents: write
+  contents: read
 
 on:
   schedule:
@@ -14,95 +18,147 @@ on:
 
 jobs:
   update:
-    if: github.event.repository.owner.id == github.event.sender.id  || ! github.event.sender.id
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
+    env:
+      GEOVIEW_VERSION: '0.2.6'
+      GEOVIEW_SHA256: 'fbd309ba28f36f72c9f3c6a33b87c43136199164215fb7efbab289329193c722'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
         with:
-          python-version: '3.x'
-
-      - name: Install dependencies
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y jq wget git
+          ref: main
+          persist-credentials: false
 
       - name: Fetch and parse data
         id: geo-data
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # 获取并解析数据（只提取版本号与下载链接，SHA 在下载后计算）
-          JSON=$(curl -sL https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest)
+          WORK_DIR="$RUNNER_TEMP/v2ray-geodata"
+          rm -rf -- "$WORK_DIR"
+          mkdir -p -- "$WORK_DIR/publish" "$WORK_DIR/release"
 
-          # 提取版本号与下载链接
-          VERSION=$(echo "$JSON" | jq -r '.tag_name')
-          GEOIP_URL=$(echo "$JSON" | jq -r '.assets[] | select(.name=="geoip.dat") | .browser_download_url')
-          GEOSITE_URL=$(echo "$JSON" | jq -r '.assets[] | select(.name=="geosite.dat") | .browser_download_url')
+          curl --fail-with-body --show-error --location --retry 3 --retry-delay 2 \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest" \
+            --output "$WORK_DIR/rules-release.json"
+          curl --fail-with-body --show-error --location --retry 3 --retry-delay 2 \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/snowie2000/geoview/releases/tags/${GEOVIEW_VERSION}" \
+            --output "$WORK_DIR/geoview-release.json"
 
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "GEOIP_URL=$GEOIP_URL" >> $GITHUB_ENV
-          echo "GEOSITE_URL=$GEOSITE_URL" >> $GITHUB_ENV
+          jq -e --arg expected '^[0-9]{12}$' '
+            . as $release |
+            ($release.assets | map(select(.name == "geoip.dat" or .name == "geosite.dat"))) as $data_assets |
+            ($release.draft == false and $release.prerelease == false and ($release.tag_name | test($expected))) and
+            ($data_assets | map(.name) | sort == ["geoip.dat", "geosite.dat"]) and
+            (all($data_assets[]; .digest | test("^sha256:[0-9a-f]{64}$"))) and
+            (all($data_assets[];
+              .browser_download_url == ("https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/" + $release.tag_name + "/" + .name)))
+          ' "$WORK_DIR/rules-release.json" >/dev/null
+
+          jq -e --arg expected "$GEOVIEW_VERSION" --arg sha "$GEOVIEW_SHA256" '
+            (.tag_name == $expected and .draft == false and .prerelease == false) and
+            ([.assets[] | select(.name == "geoview-linux-amd64")] | length == 1) and
+            ([.assets[] | select(.name == "geoview-linux-amd64") | .digest] | .[0] == ("sha256:" + $sha)) and
+            ([.assets[] | select(.name == "geoview-linux-amd64") | .browser_download_url] | .[0] == ("https://github.com/snowie2000/geoview/releases/download/" + $expected + "/geoview-linux-amd64"))
+          ' "$WORK_DIR/geoview-release.json" >/dev/null
+
+          VERSION=$(jq -r '.tag_name' "$WORK_DIR/rules-release.json")
+          GEOIP_URL=$(jq -r '.assets[] | select(.name == "geoip.dat") | .browser_download_url' "$WORK_DIR/rules-release.json")
+          GEOSITE_URL=$(jq -r '.assets[] | select(.name == "geosite.dat") | .browser_download_url' "$WORK_DIR/rules-release.json")
+          GEOIP_API_SHA=$(jq -r '.assets[] | select(.name == "geoip.dat") | .digest | sub("^sha256:"; "")' "$WORK_DIR/rules-release.json")
+          GEOSITE_API_SHA=$(jq -r '.assets[] | select(.name == "geosite.dat") | .digest | sub("^sha256:"; "")' "$WORK_DIR/rules-release.json")
+          GEOVIEW_URL="https://github.com/snowie2000/geoview/releases/download/${GEOVIEW_VERSION}/geoview-linux-amd64"
+          printf 'VERSION=%s\nGEOIP_URL=%s\nGEOSITE_URL=%s\nGEOIP_API_SHA=%s\nGEOSITE_API_SHA=%s\nGEOVIEW_URL=%s\nWORK_DIR=%s\n' \
+            "$VERSION" "$GEOIP_URL" "$GEOSITE_URL" "$GEOIP_API_SHA" "$GEOSITE_API_SHA" "$GEOVIEW_URL" "$WORK_DIR" >> "$GITHUB_ENV"
+          printf 'version=%s\ngeoip_api_sha=%s\ngeosite_api_sha=%s\n' "$VERSION" "$GEOIP_API_SHA" "$GEOSITE_API_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Display results
         run: |
-          echo "版本号: ${{ env.VERSION }}"
+          set -euo pipefail
+          echo "版本号: $VERSION"
           echo "GeoIP URL: $GEOIP_URL"
           echo "GeoSite URL: $GEOSITE_URL"
-
-      # （已移动）Update patch files 步骤将会在下载并计算 SHA 后执行
-
-      # 检查与提交补丁的步骤已移动到下载并计算 SHA 之后
 
       - name: Download files and compute SHA
         run: |
           set -euo pipefail
-          # 下载工具与数据，并计算 SHA256
-          rm -rf /tmp/rule || true
-          mkdir -p /tmp/rule/publish /tmp/rule/release
-          wget https://github.com/snowie2000/geoview/releases/latest/download/geoview-linux-amd64 -O /tmp/rule/geoview
-          chmod +x /tmp/rule/geoview
+          curl --fail-with-body --show-error --location --retry 3 --retry-delay 2 "$GEOVIEW_URL" --output "$WORK_DIR/geoview"
+          printf '%s  %s\n' "$GEOVIEW_SHA256" "$WORK_DIR/geoview" | sha256sum -c -
+          chmod 700 "$WORK_DIR/geoview"
 
-          if [ -z "${GEOIP_URL:-}" ] || [ -z "${GEOSITE_URL:-}" ]; then
-            echo "GEOIP_URL or GEOSITE_URL is empty" >&2
-            exit 1
-          fi
-
-          wget -O /tmp/rule/geoip.dat "$GEOIP_URL"
-          wget -O /tmp/rule/geosite.dat "$GEOSITE_URL"
-
-          GEOIP_SHA=$(sha256sum /tmp/rule/geoip.dat | cut -d' ' -f1)
-          GEOSITE_SHA=$(sha256sum /tmp/rule/geosite.dat | cut -d' ' -f1)
-          echo "GEOIP_SHA=$GEOIP_SHA" >> $GITHUB_ENV
-          echo "GEOSITE_SHA=$GEOSITE_SHA" >> $GITHUB_ENV
+          curl --fail-with-body --show-error --location --retry 3 --retry-delay 2 "$GEOIP_URL" --output "$WORK_DIR/geoip.dat"
+          curl --fail-with-body --show-error --location --retry 3 --retry-delay 2 "$GEOSITE_URL" --output "$WORK_DIR/geosite.dat"
+          GEOIP_SHA=$(sha256sum "$WORK_DIR/geoip.dat" | awk '{print $1}')
+          GEOSITE_SHA=$(sha256sum "$WORK_DIR/geosite.dat" | awk '{print $1}')
+          [ "$GEOIP_SHA" = "$GEOIP_API_SHA" ] || { echo "::error::geoip.dat digest mismatch"; exit 1; }
+          [ "$GEOSITE_SHA" = "$GEOSITE_API_SHA" ] || { echo "::error::geosite.dat digest mismatch"; exit 1; }
+          printf 'GEOIP_SHA=%s\nGEOSITE_SHA=%s\n' "$GEOIP_SHA" "$GEOSITE_SHA" >> "$GITHUB_ENV"
           echo "Downloaded GEOIP SHA: $GEOIP_SHA"
           echo "Downloaded GEOSITE SHA: $GEOSITE_SHA"
 
       - name: Update patch files
         run: |
           set -euo pipefail
-          PATCH_PATH=.github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
-          if [ ! -f "$PATCH_PATH" ]; then
-            echo "Patch file not found: $PATCH_PATH" >&2
-            exit 1
-          fi
+          PATCH_PATH="$GITHUB_WORKSPACE/.github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch"
+          [ -f "$PATCH_PATH" ] || { echo "::error::Patch file not found: $PATCH_PATH"; exit 1; }
+          [[ "$VERSION" =~ ^[0-9]{12}$ ]] || { echo "::error::版本格式无效: $VERSION"; exit 1; }
+          [[ "$GEOIP_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::GeoIP SHA 格式无效"; exit 1; }
+          [[ "$GEOSITE_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::GeoSite SHA 格式无效"; exit 1; }
 
           echo "Updating patch: $PATCH_PATH"
           echo "  VERSION    = ${VERSION}"
           echo "  GEOIP_SHA  = ${GEOIP_SHA}"
           echo "  GEOSITE_SHA= ${GEOSITE_SHA}"
 
-          # patch 文件中每行以 + 开头，正则需要匹配 + 前缀
           sed -i -E "s/^(\+GEO_VER:=).*/\1${VERSION}/" "$PATCH_PATH"
           sed -i -E "/^\+define Download\/geoip-full/,/^\+endef/ s/^(\+  HASH:=).*/\1${GEOIP_SHA}/" "$PATCH_PATH"
           sed -i -E "/^\+define Download\/geosite-full/,/^\+endef/ s/^(\+  HASH:=).*/\1${GEOSITE_SHA}/" "$PATCH_PATH"
 
-          echo "Patch file updated successfully."
-          grep -E '^\+(GEO_VER|HASH)' "$PATCH_PATH" || true
+          GEO_VER_COUNT=$(awk '/^\+GEO_VER:=/ { count++ } END { print count + 0 }' "$PATCH_PATH")
+          GEOIP_FULL_HASH=$(awk '
+            /^\+define Download\/geoip-full$/ { in_block=1; next }
+            /^\+endef$/ && in_block { in_block=0 }
+            in_block && /^\+  HASH:=/ { value=$0; sub(/^\+  HASH:=/, "", value); print value }
+          ' "$PATCH_PATH")
+          GEOSITE_FULL_HASH=$(awk '
+            /^\+define Download\/geosite-full$/ { in_block=1; next }
+            /^\+endef$/ && in_block { in_block=0 }
+            in_block && /^\+  HASH:=/ { value=$0; sub(/^\+  HASH:=/, "", value); print value }
+          ' "$PATCH_PATH")
+          [ "$GEO_VER_COUNT" -eq 1 ] || { echo "::error::GEO_VER 字段数量异常: $GEO_VER_COUNT"; exit 1; }
+          [ "$GEOIP_FULL_HASH" = "$GEOIP_SHA" ] || { echo "::error::GeoIP full HASH 更新失败"; exit 1; }
+          [ "$GEOSITE_FULL_HASH" = "$GEOSITE_SHA" ] || { echo "::error::GeoSite full HASH 更新失败"; exit 1; }
+
+          PATCH_FIXTURE="$WORK_DIR/patch-fixture"
+          rm -rf -- "$PATCH_FIXTURE"
+          mkdir -p -- "$PATCH_FIXTURE"
+          git -C "$PATCH_FIXTURE" init -q
+          git -C "$PATCH_FIXTURE" apply --check --whitespace=nowarn "$PATCH_PATH"
+          git -C "$PATCH_FIXTURE" apply --whitespace=nowarn "$PATCH_PATH"
+          MAKEFILE_BLOB=$(git -C "$PATCH_FIXTURE" hash-object v2ray-geodata/Makefile)
+          sed -i -E "s/^index 00000000\.\.[0-9a-f]+$/index 00000000..${MAKEFILE_BLOB}/" "$PATCH_PATH"
+          PATCH_BLOB=$(sed -n -E 's/^index 00000000\.\.([0-9a-f]+)$/\1/p' "$PATCH_PATH")
+          [ "$PATCH_BLOB" = "$MAKEFILE_BLOB" ] || { echo "::error::Makefile blob index 更新失败"; exit 1; }
+
+          SECOND_FIXTURE="$WORK_DIR/patch-fixture-verify"
+          rm -rf -- "$SECOND_FIXTURE"
+          mkdir -p -- "$SECOND_FIXTURE"
+          git -C "$SECOND_FIXTURE" init -q
+          git -C "$SECOND_FIXTURE" apply --check --whitespace=nowarn "$PATCH_PATH"
+          git -C "$SECOND_FIXTURE" apply --whitespace=nowarn "$PATCH_PATH"
+          VERIFY_BLOB=$(git -C "$SECOND_FIXTURE" hash-object v2ray-geodata/Makefile)
+          [ "$VERIFY_BLOB" = "$PATCH_BLOB" ] || { echo "::error::补丁 blob index 二次验证失败"; exit 1; }
+          git diff --check -- "$PATCH_PATH"
 
           cat >> $GITHUB_STEP_SUMMARY <<EOF
           ## 📦 v2ray-geodata Update
@@ -112,238 +168,207 @@ jobs:
           | Version | \`${VERSION}\` |
           | GeoIP SHA256 | \`${GEOIP_SHA}\` |
           | GeoSite SHA256 | \`${GEOSITE_SHA}\` |
+          | Makefile blob | \`${PATCH_BLOB}\` |
           | Patch | \`${PATCH_PATH}\` |
           EOF
 
-      - name: 检查仓库更改
-        id: check_changes
+      - name: Generate and validate assets
+        id: generate_assets
         run: |
           set -euo pipefail
-          # 检测工作树中是否存在任何更改
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "没有检测到文件更改，跳过提交"
-            echo "changes_exist=false" >> $GITHUB_OUTPUT
-          else
-            echo "检测到仓库更改，准备提交:"
-            git diff --stat
-            echo "changes_exist=true" >> $GITHUB_OUTPUT
-            echo "### 📝 Changed Files" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            git diff --stat >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
+          mkdir -p -- "$WORK_DIR/publish" "$WORK_DIR/release" "$WORK_DIR/raw"
 
-      - name: 提交并推送更改
-        if: steps.check_changes.outputs.changes_exist == 'true'
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "openwrt-packages[all-tree]:v2ray-geodata: update version to ${VERSION}."
-          git push
+          generate_rule() {
+            local output_file="$1"
+            local title="$2"
+            local description="$3"
+            local version_line="$4"
+            shift 4
+            : > "$output_file"
+            while (($#)); do
+              local rule_kind="$1"
+              local rule_input="$2"
+              local rule_list="$3"
+              local rule_prefix="$4"
+              shift 4
+              printf '%s\n' "$rule_kind" >> "$output_file"
+              local raw_file="$WORK_DIR/raw/$(basename "$output_file").${RANDOM}"
+              "$WORK_DIR/geoview" -type "$rule_input" -input "$WORK_DIR/${rule_input}.dat" -list "$rule_list" > "$raw_file"
+              test -s "$raw_file"
+              sed "s/^/${rule_prefix}/" "$raw_file" >> "$output_file"
+              printf '\n' >> "$output_file"
+            done
+            printf '[AutoProxy 0.2.9]\n! Title: %s\n! Description: %s\n! Version: %s\n' \
+              "$title" "$description" "$version_line" > "$output_file.header"
+            cat "$output_file.header" "$output_file" > "$output_file.final"
+            printf '%s\n' '!---------------------EOF-----------------------' >> "$output_file.final"
+            mv -- "$output_file.final" "$output_file"
+            rm -f -- "$output_file.header"
+            test -s "$output_file"
+          }
 
-      - name: Generate autoproxy
-        id: generate_autoproxy
-        run: |
-          # 创建或清空 autoproxy 文件
-          output_file="/tmp/rule/publish/autoproxy.txt"
-          > $output_file
+          generate_rule "$WORK_DIR/publish/autoproxy.txt" \
+            'AutoProxy Rules' 'UnCN as primary rules,CN exceptions and IPs' "$VERSION" \
+            '!## UnCN Domains' geosite geolocation-!cn '||' \
+            '!## CN Domain Exceptions' geosite cn '@@||' \
+            '!## CN IP Ranges' geoip cn '@@' \
+            '!## Privite IP Ranges' geoip private '@@'
+          generate_rule "$WORK_DIR/publish/autoproxy_lite.txt" \
+            'AutoProxy Lite Rules' 'GFW as primary rules,geolocation CN exceptions' "$VERSION" \
+            '!## GFW Domains' geosite gfw '||' \
+            '!## Privite IP Ranges' geoip private '@@'
+          generate_rule "$WORK_DIR/publish/whitelist.txt" \
+            'Whitelist Rules' 'Only CN domains and IPs' "$VERSION" \
+            '!## CN Domain Exceptions' geosite cn '||' \
+            '!## CN IP Ranges' geoip cn '' \
+            '!## Privite IP Ranges' geoip private ''
+          generate_rule "$WORK_DIR/publish/whitelist_lite.txt" \
+            'Whitelist Lite Rules' 'Only geolocation CN domains and IPs' "$VERSION" \
+            '!## geolocation CN Domain Exceptions' geosite geolocation-cn '||' \
+            '!## Privite IP Ranges' geoip private ''
+          generate_rule "$WORK_DIR/publish/blacklist.txt" \
+            'Blacklist Rules' 'Only UnCN domains.' "$VERSION" \
+            '!## unCN Domains' geosite geolocation-!cn '||' \
+            '!## Privite IP Ranges' geoip private '@@'
+          generate_rule "$WORK_DIR/publish/blacklist_lite.txt" \
+            'blacklist_lite Rules' 'Only GFWList domains.' "$VERSION" \
+            '!## GFW Domains' geosite gfw '||' \
+            '!## Privite IP Ranges' geoip private '@@'
+          generate_rule "$WORK_DIR/publish/smartproxy_whitelist.txt" \
+            'Whitelist Rules For SmartProxy' 'Only CN domains and IPs' "$VERSION" \
+            '!## CN Domain Exceptions' geosite cn '@@||' \
+            '!## Privite IP Ranges' geoip private '@@'
 
-          # 输出 CN 以外的域名
-          echo "!## UnCN Domains" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
-
-          # 输出 CN 域名
-          echo "" >> $output_file
-          echo "!## CN Domain Exceptions" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@||/' >> $output_file
-
-          # 输出 CN IP 范围
-          echo "" >> $output_file
-          echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn | sed 's/^/@@/' >> $output_file
-
-          # 输出私有 IP 范围
-          echo "" >> $output_file
-          echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
-
-          # 添加标题和描述
-          sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: AutoProxy Rules' $output_file
-          sed -i '3i! Description: UnCN as primary rules,CN exceptions and IPs' $output_file
-          sed -i '4i! Version: ${{ env.VERSION }}' $output_file
-          echo "!---------------------EOF-----------------------" >> $output_file
-
-      - name: Generate autoproxy_lite
-        id: generate_autoproxy_lite
-        run: |
-          # 创建或清空 autoproxy_lite 文件
-          output_file="/tmp/rule/publish/autoproxy_lite.txt"
-          > $output_file
-
-          # 输出 GFW 域名
-          echo "!## GFW Domains" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
-
-          # 输出私有 IP 范围
-          echo "" >> $output_file
-          echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
-
-          # 添加标题和描述
-          sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: AutoProxy Lite Rules' $output_file
-          sed -i '3i! Description: GFW as primary rules,geolocation CN exceptions' $output_file
-          sed -i '4i! Version: ${{ env.VERSION }}' $output_file
-          echo "!---------------------EOF-----------------------" >> $output_file
-
-      - name: Generate whitelist
-        id: generate_whitelist
-        run: |
-          # 创建或清空 Whitelist 文件
-          output_file="/tmp/rule/publish/whitelist.txt"
-          > $output_file
-
-          # 输出 CN 域名
-          echo "" >> $output_file
-          echo "!## CN Domain Exceptions" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/||/' >> $output_file
-
-          # 输出 CN IP 范围
-          echo "" >> $output_file
-          echo "!## CN IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list cn >> $output_file
-
-          # 输出私有 IP 范围
-          echo "" >> $output_file
-          echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
-
-          # 添加标题和描述
-          sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: Whitelist Rules' $output_file
-          sed -i '3i! Description: Only CN domains and IPs' $output_file
-          sed -i '4i! Version: ${{ env.VERSION }}' $output_file
-          echo "!---------------------EOF-----------------------" >> $output_file
-
-      - name: Generate whitelist_lite
-        id: generate_whitelist_lite
-        run: |
-          # 创建或清空 Whitelist 文件
-          output_file="/tmp/rule/publish/whitelist_lite.txt"
-          > $output_file
-
-          # 输出 CN 域名
-          echo "" >> $output_file
-          echo "!## geolocation CN Domain Exceptions" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-cn | sed 's/^/||/' >> $output_file
-
-          # 输出私有 IP 范围
-          echo "" >> $output_file
-          echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private >> $output_file
-
-          # 添加标题和描述
-          sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: Whitelist Lite Rules' $output_file
-          sed -i '3i! Description: Only geolocation CN domains and IPs' $output_file
-          sed -i '4i! Version: ${{ env.VERSION }}' $output_file
-          echo "!---------------------EOF-----------------------" >> $output_file
-
-      - name: Generate blacklist
-        id: generate_blacklist
-        run: |
-          # 创建或清空 Blacklist 文件
-          output_file="/tmp/rule/publish/blacklist.txt"
-          > $output_file
-
-          # 输出 非CN 域名
-          echo "!## unCN Domains" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list geolocation-!cn | sed 's/^/||/' >> $output_file
-
-          # 输出私有 IP 范围
-          echo "" >> $output_file
-          echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
-
-          # 添加标题和描述
-          sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: Blacklist Rules' $output_file
-          sed -i '3i! Description: Only UnCN domains.' $output_file
-          sed -i '4i! Version: ${{ env.VERSION }}' $output_file
-          echo "!---------------------EOF-----------------------" >> $output_file
-
-      - name: Generate blacklist_lite
-        id: generate_blacklist_lite
-        run: |
-          # 创建或清空 blacklist_lite 文件
-          output_file="/tmp/rule/publish/blacklist_lite.txt"
-          > $output_file
-
-          # 输出 gfw 域名
-          echo "!## GFW Domains" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list gfw | sed 's/^/||/' >> $output_file
-
-          # 输出私有 IP 范围
-          echo "" >> $output_file
-          echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
-
-          # 添加标题和描述
-          sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: blacklist_lite Rules' $output_file
-          sed -i '3i! Description: Only GFWList domains.' $output_file
-          sed -i '4i! Version: ${{ env.VERSION }}' $output_file
-          echo "!---------------------EOF-----------------------" >> $output_file
-
-      - name: Generate SmartProxy whitelist
-        id: generate_smartproxy_whitelist
-        run: |
-          # 创建或清空 SmartProxy Whitelist 文件
-          output_file="/tmp/rule/publish/smartproxy_whitelist.txt"
-          > $output_file
-
-          # 输出 CN 域名
-          echo "" >> $output_file
-          echo "!## CN Domain Exceptions" >> $output_file
-          /tmp/rule/geoview -type geosite -input /tmp/rule/geosite.dat -list cn | sed 's/^/@@||/' >> $output_file
-
-          # 输出私有 IP 范围
-          echo "" >> $output_file
-          echo "!## Privite IP Ranges" >> $output_file
-          /tmp/rule/geoview -type geoip -input /tmp/rule/geoip.dat -list private | sed 's/^/@@/' >> $output_file
-
-          # 添加标题和描述
-          sed -i '1i[AutoProxy 0.2.9]' $output_file
-          sed -i '2i! Title: Whitelist Rules For SmartProxy' $output_file
-          sed -i '3i! Description: Only CN domains and IPs' $output_file
-          sed -i '4i! Version: ${{ env.VERSION }}' $output_file
-          echo "!---------------------EOF-----------------------" >> $output_file
+          expected_files=(autoproxy autoproxy_lite whitelist whitelist_lite blacklist blacklist_lite smartproxy_whitelist)
+          for asset in "${expected_files[@]}"; do
+            file="$WORK_DIR/publish/${asset}.txt"
+            test -f "$file" && test -s "$file"
+            grep -Fqx "[AutoProxy 0.2.9]" "$file"
+            grep -Fqx "! Version: $VERSION" "$file"
+            tail -n 1 "$file" | grep -Fqx '!---------------------EOF-----------------------'
+          done
+          mapfile -t text_assets < <(find "$WORK_DIR/publish" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' | sort)
+          expected_text_assets=(autoproxy.txt autoproxy_lite.txt blacklist.txt blacklist_lite.txt smartproxy_whitelist.txt whitelist.txt whitelist_lite.txt)
+          diff -u <(printf '%s\n' "${expected_text_assets[@]}") <(printf '%s\n' "${text_assets[@]}")
+          jq -n \
+            --arg version "$VERSION" \
+            --arg geoip_url "$GEOIP_URL" \
+            --arg geosite_url "$GEOSITE_URL" \
+            --arg geoip_api_sha "$GEOIP_API_SHA" \
+            --arg geosite_api_sha "$GEOSITE_API_SHA" \
+            --arg geoip_sha "$GEOIP_SHA" \
+            --arg geosite_sha "$GEOSITE_SHA" \
+            --arg geoview_version "$GEOVIEW_VERSION" \
+            --arg geoview_sha256 "$GEOVIEW_SHA256" \
+            '{version:$version, geoip_url:$geoip_url, geosite_url:$geosite_url,
+              geoip_api_sha256:$geoip_api_sha, geosite_api_sha256:$geosite_api_sha,
+              geoip_sha256:$geoip_sha, geosite_sha256:$geosite_sha,
+              geoview_version:$geoview_version, geoview_sha256:$geoview_sha256}' \
+            > "$WORK_DIR/publish/source-metadata.json"
+          jq -e --arg version "$VERSION" \
+            '.version == $version and .geoip_sha256 == .geoip_api_sha256 and .geosite_sha256 == .geosite_api_sha256' \
+            "$WORK_DIR/publish/source-metadata.json" >/dev/null
+          test -s "$WORK_DIR/publish/source-metadata.json"
 
       - name: Generate base64 encoded files
         run: |
-          mkdir -vp /tmp/rule/release
-          for file in /tmp/rule/publish/*.txt; do
-            # 获取无扩展名的文件名
+          set -euo pipefail
+          for file in "$WORK_DIR"/publish/*.txt; do
             base_name=$(basename "$file" .txt)
-            # 生成 Base64 编码文件并输出到同一目录
-            base64 "$file" > "/tmp/rule/release/${base_name}"
+            base64 "$file" > "$WORK_DIR/release/${base_name}"
+            test -s "$WORK_DIR/release/${base_name}"
           done
-          cp /tmp/rule/release/* /tmp/rule/publish/
+          cp -- "$WORK_DIR/release"/* "$WORK_DIR/publish/"
+          mapfile -t encoded_assets < <(find "$WORK_DIR/release" -maxdepth 1 -type f -printf '%f\n' | sort)
+          expected_encoded_assets=(autoproxy autoproxy_lite blacklist blacklist_lite smartproxy_whitelist whitelist whitelist_lite)
+          diff -u <(printf '%s\n' "${expected_encoded_assets[@]}") <(printf '%s\n' "${encoded_assets[@]}")
+          mapfile -t publish_assets < <(find "$WORK_DIR/publish" -maxdepth 1 -type f -printf '%f\n' | sort)
+          expected_publish_assets=(autoproxy autoproxy.txt autoproxy_lite autoproxy_lite.txt blacklist blacklist.txt blacklist_lite blacklist_lite.txt smartproxy_whitelist smartproxy_whitelist.txt source-metadata.json whitelist whitelist.txt whitelist_lite whitelist_lite.txt)
+          diff -u <(printf '%s\n' "${expected_publish_assets[@]}") <(printf '%s\n' "${publish_assets[@]}")
 
-      - name: Git push assets to "release" branch
+      - name: Publish release assets
+        env:
+          ACCESS_TOKEN: ${{ github.token }}
         run: |
-          cd /tmp/rule/publish || exit 1
-          git init
+          set -euo pipefail
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::GITHUB_TOKEN 未设置，无法发布 release 分支"; exit 1; }
+          cd "$WORK_DIR/publish"
+          git init -q
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b release
-          git add .
-          git commit -m "${{ env.VERSION }}"
-          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
-          git push -f -u origin release
-          echo "Release branch pushed successfully: ${{ env.VERSION }}"
-          echo "### ✅ Release Published" >> $GITHUB_STEP_SUMMARY
-          echo "Branch: \`release\` → \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          git switch -c release
+          git add -- .
+          git diff --cached --check
+          git commit -m "v2ray-geodata: ${VERSION}"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
+
+          if ! remote_sha=$(git ls-remote origin refs/heads/release); then
+            echo "::error::读取 release 分支当前 SHA 失败"
+            exit 1
+          fi
+          expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+          if [ -n "$expected" ]; then
+            lease="--force-with-lease=refs/heads/release:${expected}"
+          else
+            lease="--force-with-lease=refs/heads/release:"
+          fi
+
+          git push --quiet "$lease" -u origin HEAD:refs/heads/release
+          echo "✅ release 分支已发布: ${VERSION}"
+          echo "### ✅ Release Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "Branch: \`release\` → \`${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit and push main patch
+        env:
+          ACCESS_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          PATCH_PATH=.github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$PATCH_PATH"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "ℹ️ patch 内容未变化，跳过 main 提交"
+            exit 0
+          fi
+          git commit -m "openwrt-packages[all-tree]:v2ray-geodata: update version to ${VERSION}."
+
+          ASKPASS="$RUNNER_TEMP/git-askpass-main.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
+
+          if ! remote_sha=$(git ls-remote origin refs/heads/main); then
+            echo "::error::读取 main 分支当前 SHA 失败"
+            exit 1
+          fi
+          expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+          if [ -n "$expected" ]; then
+            lease="--force-with-lease=refs/heads/main:${expected}"
+          else
+            lease="--force-with-lease=refs/heads/main:"
+          fi
+
+          git push --quiet "$lease" origin HEAD:refs/heads/main
+          echo "✅ main 已推送: ${VERSION}"
