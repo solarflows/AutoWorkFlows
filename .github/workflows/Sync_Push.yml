@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE
-          git clone --filter=blob:none --no-tags --single-branch https://github.com/solarflows/lede.git temp_rep
+          git clone --no-tags --single-branch https://github.com/solarflows/lede.git temp_rep
           cd temp_rep
 
           index=1
@@ -58,17 +58,17 @@ jobs:
             ((index++))
           done
 
-          git fetch --filter=blob:none --no-tags lean \
+          git fetch --no-tags lean \
             refs/heads/master:refs/remotes/lean/master
-          git fetch --filter=blob:none --no-tags openwrt-snapshot \
+          git fetch --no-tags openwrt-snapshot \
             refs/heads/master:refs/remotes/openwrt-snapshot/master
-          git fetch --filter=blob:none --no-tags dg741a \
+          git fetch --no-tags dg741a \
             refs/heads/master:refs/remotes/dg741a/master
-          git fetch --filter=blob:none --no-tags immortalwrt \
+          git fetch --no-tags immortalwrt \
             refs/heads/master:refs/remotes/immortalwrt/master
           # hanwckf/immortalwrt-mt798x 只有 openwrt-21.02 分支, 没有 master;
           # fetch 必须只请求存在的 ref, 否则 git fetch 对任一缺失 ref 整体失败。
-          git fetch --filter=blob:none --no-tags hanwckf \
+          git fetch --no-tags hanwckf \
             refs/heads/openwrt-21.02:refs/remotes/hanwckf/openwrt-21.02
 
       - name: 拉取上游代码并打补丁
@@ -230,7 +230,7 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE
-          git clone --filter=blob:none --no-tags --single-branch https://github.com/solarflows/luci.git temp_rep
+          git clone --no-tags --single-branch https://github.com/solarflows/luci.git temp_rep
           cd temp_rep
 
           index=1
@@ -241,11 +241,11 @@ jobs:
             ((index++))
           done
 
-          git fetch --filter=blob:none --no-tags lean \
+          git fetch --no-tags lean \
             refs/heads/master:refs/remotes/lean/master
-          git fetch --filter=blob:none --no-tags openwrt \
+          git fetch --no-tags openwrt \
             refs/heads/master:refs/remotes/openwrt/master
-          git fetch --filter=blob:none --no-tags immortalwrt \
+          git fetch --no-tags immortalwrt \
             refs/heads/master:refs/remotes/immortalwrt/master \
             refs/heads/openwrt-21.02:refs/remotes/immortalwrt/openwrt-21.02
 
@@ -367,17 +367,18 @@ jobs:
               fi
             fi
 
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+
             if [[ $target == "lean" ]]; then
               retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/master" || {
                 echo "::error::推送 $target 失败（已重试）"
                 overall_patch_failed=true
               }
             else
-              if [ -d .github ]; then
-                  rm -rf .github
-                  git add .
-                  git commit -m "Removing workflows files."
-              fi
               retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/$target" || {
                 echo "::error::推送 $target 失败（已重试）"
                 overall_patch_failed=true
@@ -470,7 +471,7 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE
-          git clone --filter=blob:none --no-tags --single-branch https://github.com/solarflows/packages.git temp_rep
+          git clone --no-tags --single-branch https://github.com/solarflows/packages.git temp_rep
           cd temp_rep
 
           for target in $TARGETS; do
@@ -484,11 +485,11 @@ jobs:
             git remote add "$target" "$upstream"
           done
 
-          git fetch --filter=blob:none --no-tags lean \
+          git fetch --no-tags lean \
             refs/heads/master:refs/remotes/lean/master
-          git fetch --filter=blob:none --no-tags openwrt \
+          git fetch --no-tags openwrt \
             refs/heads/master:refs/remotes/openwrt/master
-          git fetch --filter=blob:none --no-tags immortalwrt \
+          git fetch --no-tags immortalwrt \
             refs/heads/master:refs/remotes/immortalwrt/master \
             refs/heads/openwrt-21.02:refs/remotes/immortalwrt/openwrt-21.02
           git update-ref refs/remotes/qualcommax/master refs/remotes/immortalwrt/master
@@ -616,17 +617,18 @@ jobs:
               fi
             fi
 
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+
             if [[ $target == "lean" ]]; then
               retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/master" || {
                 echo "::error::推送 $target 失败（已重试）"
                 overall_patch_failed=true
               }
             else
-              if [ -d .github ]; then
-                  rm -rf .github
-                  git add .
-                  git commit -m "Removing workflows files."
-              fi
               retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/$target" || {
                 echo "::error::推送 $target 失败（已重试）"
                 overall_patch_failed=true
@@ -709,7 +711,6 @@ jobs:
           repository: solarflows/ImmortalWRT-QualcommAX
           ref: VIKINGYFY-main
           fetch-depth: 0
-          filter: blob:none
           token: ${{ secrets.ACCESS_TOKEN }}
           persist-credentials: false
 
@@ -730,7 +731,7 @@ jobs:
         run: |
           set -euo pipefail
           git remote add upstream https://github.com/VIKINGYFY/immortalwrt.git
-          git fetch --filter=blob:none --no-tags upstream main
+          git fetch --no-tags upstream main
 
       - name: 检测上游是否有更新
         id: check

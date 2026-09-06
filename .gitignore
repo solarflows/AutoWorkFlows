@@ -16,6 +16,7 @@ Thumbs.db
 
 # 本地工具状态（GitHub CLI 等，不入库）
 .local/
+/handoff.md
 
 # 临时对比/工具脚本（不入库）
 /scripts/
