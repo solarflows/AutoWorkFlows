@@ -204,6 +204,56 @@ jobs:
           large-packages: true
           swap-storage: true
 
+      - name: Find exact cache snapshots
+        id: cache-lookup
+        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all'
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -uo pipefail
+          REPO="${{ github.repository }}"
+          CURRENT_REF="${GITHUB_REF:-}"
+          DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null)
+          DEFAULT_REF=""
+          [ -n "$DEFAULT_BRANCH" ] && DEFAULT_REF="refs/heads/${DEFAULT_BRANCH}"
+
+          lookup_cache() {
+            local label="$1" prefix="$2" pattern="$3" fallback="$4"
+            local listing rc selected
+            listing=$(gh cache list --repo "$REPO" --key "$prefix" --limit 100 --json key,ref,createdAt 2>/dev/null)
+            rc=$?
+            selected=""
+            if [ "$rc" -eq 0 ]; then
+              selected=$(printf '%s\n' "$listing" | jq -r \
+                --arg pattern "$pattern" --arg current_ref "$CURRENT_REF" --arg default_ref "$DEFAULT_REF" '
+                [ .[] | select((.key | test($pattern)) and
+                  (.ref == $current_ref or ($default_ref != "" and .ref == $default_ref))) ]
+                | sort_by(.createdAt) | if length == 0 then empty else last.key end
+              ' 2>/dev/null)
+            fi
+            if [ -n "$selected" ]; then
+              echo "✅ 找到 ${label} 精确缓存: ${selected}"
+              printf '%s_key=%s\n' "$label" "$selected" >> "$GITHUB_OUTPUT"
+            else
+              if [ "$rc" -ne 0 ]; then
+                echo "::warning::${label} 缓存 API 查询失败，使用当前 v2 key，不启用模糊回退"
+              else
+                echo "ℹ️ 未找到 ${label} 精确缓存，使用当前 v2 key"
+              fi
+              printf '%s_key=%s\n' "$label" "$fallback" >> "$GITHUB_OUTPUT"
+            fi
+            printf '%s_restore_keys=\n' "$label" >> "$GITHUB_OUTPUT"
+          }
+
+          TOOLCHAIN_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
+          TOOLCHAIN_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
+          CCACHE_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
+          CCACHE_PATTERN="^immwrt-v2-ccache-${IMMWRT_TARGET}-[0-9]+$"
+          lookup_cache toolchain "$TOOLCHAIN_PREFIX" "$TOOLCHAIN_PATTERN" \
+            "${TOOLCHAIN_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
+          lookup_cache ccache "$CCACHE_PREFIX" "$CCACHE_PATTERN" \
+            "${CCACHE_PREFIX}${{ github.run_id }}"
+
       # ───────── 工具链缓存恢复（独立 restore, 仅非 clean 模式）─────────
       # 刻意设计: 拆为独立 restore + save(见 Purge 前) 而非一体式 actions/cache@v5。
       # clean-toolchain/clean-all 时跳过 restore(不下载旧缓存), 实现真正的刷新。
@@ -214,10 +264,8 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-v4-toolchain-${{ env.IMMWRT_TARGET }}.${{ steps.toolchain_hash.outputs.hash }}
-          restore-keys: |
-            immwrt-v4-toolchain-${{ env.IMMWRT_TARGET }}.
-            immwrt-v3-toolchain-${{ env.IMMWRT_TARGET }}--
+          key: ${{ steps.cache-lookup.outputs.toolchain_key }}
+          restore-keys: ${{ steps.cache-lookup.outputs.toolchain_restore_keys }}
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -228,10 +276,8 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-v4-ccache-${{ env.IMMWRT_TARGET }}.${{ github.run_id }}
-          restore-keys: |
-            immwrt-v4-ccache-${{ env.IMMWRT_TARGET }}.
-            immwrt-v3-ccache-${{ env.IMMWRT_TARGET }}--
+          key: ${{ steps.cache-lookup.outputs.ccache_key }}
+          restore-keys: ${{ steps.cache-lookup.outputs.ccache_restore_keys }}
           path: openwrt/.ccache
 
       # ───────── 缓存恢复与状态上报 ─────────
@@ -1093,7 +1139,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v4-toolchain-${{ env.IMMWRT_TARGET }}.${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -1104,7 +1150,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v4-ccache-${{ env.IMMWRT_TARGET }}.${{ github.run_id }}
+          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: openwrt/.ccache
 
       - name: Save SDK hostpkg cache
@@ -1113,7 +1159,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v4-sdk-hostpkg-${{ env.IMMWRT_TARGET }}.${{ github.run_id }}
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: |
             openwrt/staging_dir/hostpkg
             openwrt/staging_dir/target-*/host
@@ -1133,15 +1179,16 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          TC_PREFIX="immwrt-v4-toolchain-${IMMWRT_TARGET}."
+          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
           TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
+          TC_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
           set +e
           TC_LIST=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt)
           TC_RC=$?
           TC_IDS=""
           TC_IDS_RC=0
           if [ "$TC_RC" -eq 0 ]; then
-            TC_IDS=$(echo "$TC_LIST" | jq -r --arg prefix "$TC_PREFIX" --arg current "$TC_CURRENT" '[.[] | select((.key | startswith($prefix)) and .key != $current)] | .[].id')
+            TC_IDS=$(echo "$TC_LIST" | jq -r --arg pattern "$TC_PATTERN" --arg current "$TC_CURRENT" '[.[] | select((.key | test($pattern)) and .key != $current)] | .[].id')
             TC_IDS_RC=$?
           fi
           set -e
@@ -1173,15 +1220,16 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          CC_PREFIX="immwrt-v4-ccache-${IMMWRT_TARGET}."
+          CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
           CC_CURRENT="${CC_PREFIX}${{ github.run_id }}"
+          CC_PATTERN="^immwrt-v2-ccache-${IMMWRT_TARGET}-[0-9]+$"
           set +e
           CC_LIST=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt)
           CC_RC=$?
           CC_IDS=""
           CC_IDS_RC=0
           if [ "$CC_RC" -eq 0 ]; then
-            CC_IDS=$(echo "$CC_LIST" | jq -r --arg prefix "$CC_PREFIX" --arg current "$CC_CURRENT" '[.[] | select((.key | startswith($prefix)) and .key != $current)] | .[].id')
+            CC_IDS=$(echo "$CC_LIST" | jq -r --arg pattern "$CC_PATTERN" --arg current "$CC_CURRENT" '[.[] | select((.key | test($pattern)) and .key != $current)] | .[].id')
             CC_IDS_RC=$?
           fi
           set -e
