@@ -21,6 +21,7 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       GEOVIEW_VERSION: '0.2.6'
       GEOVIEW_SHA256: 'fbd309ba28f36f72c9f3c6a33b87c43136199164215fb7efbab289329193c722'

@@ -536,7 +536,6 @@ jobs:
             SRC_CHANGED=$(echo "$CHANGE" | jq -r '.source_changed')
             PKG_CHANGED=$(echo "$CHANGE" | jq -r '.packages_changed')
             STANDARD_PKG_CHANGED=$(echo "$CHANGE" | jq -r '.standard_packages_changed')
-            HAS_KERNEL=$(echo "$CHANGE" | jq -r '.kernel_changed')
             SDK_READY=true; IB_READY=true
             SHOULD_FW=false; SHOULD_SDK_IB=false; SHOULD_SDK_PKGS=false
             SHOULD_PUB_FW=false; SHOULD_PUB_PKGS=false
@@ -709,6 +708,7 @@ jobs:
       version:                   ${{ needs.plan.outputs.version }}
       cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
+      publish_sdk_ib:             true
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}

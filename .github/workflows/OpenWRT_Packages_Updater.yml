@@ -27,6 +27,7 @@ jobs:
   prepare:
     name: 准备更新分支
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       targets: ${{ steps.resolve.outputs.targets }}
     steps:
@@ -69,6 +70,7 @@ jobs:
     needs: prepare
     if: needs.prepare.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     concurrency:
       group: openwrt-packages-updater-${{ matrix.target }}
       cancel-in-progress: false

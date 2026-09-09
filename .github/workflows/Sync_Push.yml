@@ -27,6 +27,7 @@ jobs:
   sync_lede:
     name: 同步 lean 仓库
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       TARGETS: "lean openwrt-snapshot dg741a immortalwrt hanwckf"
       UPSTREAMS: "https://github.com/coolsnowwolf/lede.git https://github.com/openwrt/openwrt.git https://github.com/dg741a/lede.git https://github.com/immortalwrt/immortalwrt.git https://github.com/hanwckf/immortalwrt-mt798x.git"
@@ -210,6 +211,7 @@ jobs:
   sync_luci:
     name: 同步 Luci 仓库
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       TARGETS: "lean openwrt immortalwrt"
       UPSTREAMS: "https://github.com/coolsnowwolf/luci.git https://github.com/openwrt/luci.git https://github.com/immortalwrt/luci.git"
@@ -452,6 +454,7 @@ jobs:
   sync_packages:
     name: 同步 Packages 仓库
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       TARGETS: "lean openwrt immortalwrt qualcommax"
 
@@ -703,6 +706,7 @@ jobs:
   sync_vikingyfy:
     name: 同步VIKINGYFY仓库
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: 检出目标仓库
@@ -863,7 +867,9 @@ jobs:
   del_runs:
     name: 删除旧运行记录
     needs: [sync_lede, sync_luci, sync_packages, sync_vikingyfy]
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       actions: write
       contents: read
