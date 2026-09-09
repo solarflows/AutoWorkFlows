@@ -6,6 +6,7 @@
       "repo": "solarflows/immortalwrt-mt798x",
       "ref": "test",
       "config": "mt798x",
+      "toolchain_cache_group": "mt798x",
       "standard_packages_repo": "solarflows/packages",
       "standard_packages_branch": "hanwckf",
       "sdk_container": "aarch64_cortex-a53-21.02.7"
@@ -15,6 +16,7 @@
       "repo": "solarflows/ImmortalWrt-QualcommAX",
       "ref": "VIKINGYFY-main",
       "config": "qualcommax",
+      "toolchain_cache_group": "qualcommax",
       "standard_packages_repo": "solarflows/packages",
       "standard_packages_branch": "qualcommax",
       "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
@@ -24,6 +26,7 @@
       "repo": "solarflows/ImmortalWrt-QualcommAX",
       "ref": "VIKINGYFY-main",
       "config": "ipq807x",
+      "toolchain_cache_group": "qualcommax",
       "packages_branch": "qualcommax",
       "standard_packages_repo": "solarflows/packages",
       "standard_packages_branch": "qualcommax",

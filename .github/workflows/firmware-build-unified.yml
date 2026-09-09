@@ -691,6 +691,7 @@ jobs:
     with:
       defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
+      toolchain_cache_group:     ${{ matrix.toolchain_cache_group }}
       matrix_repo:               ${{ matrix.repo }}
       matrix_ref:                ${{ matrix.ref }}
       matrix_config:             ${{ matrix.config }}
@@ -730,6 +731,7 @@ jobs:
     with:
       defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
+      toolchain_cache_group:     ${{ matrix.toolchain_cache_group }}
       matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       standard_packages_repo:     ${{ matrix.standard_packages_repo }}
@@ -766,6 +768,7 @@ jobs:
     with:
       defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
+      toolchain_cache_group:     ${{ matrix.toolchain_cache_group }}
       matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       standard_packages_repo:     ${{ matrix.standard_packages_repo }}

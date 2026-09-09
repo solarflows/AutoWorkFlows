@@ -8,6 +8,7 @@ on:
     inputs:
       # ── 矩阵 target 完整描述 ──
       matrix_target:             { required: true, type: string }
+      toolchain_cache_group:      { required: false, type: string, default: '' }
       matrix_config:             { required: true, type: string }
       matrix_packages_branch:    { required: true, type: string }
       standard_packages_repo:    { required: false, type: string, default: 'solarflows/packages' }
@@ -49,6 +50,7 @@ jobs:
     env:
       # 刻意加前缀: 裸 TARGET/HOST 会被 autoconf 的 AX_ENABLE_BUILDDIR 当作 builddir 名
       IMMWRT_TARGET: ${{ inputs.matrix_target }}
+      IMMWRT_TOOLCHAIN_GROUP: ${{ inputs.toolchain_cache_group || inputs.matrix_target }}
     steps:
       - name: Checkout defaults repo
         uses: actions/checkout@v6
@@ -223,8 +225,8 @@ jobs:
           SDK_PATTERN="^immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-[0-9]+$"
           SDK_CCACHE_PREFIX="immwrt-v2-sdk-ccache-${IMMWRT_TARGET}-"
           SDK_CCACHE_PATTERN="^immwrt-v2-sdk-ccache-${IMMWRT_TARGET}-[0-9]+$"
-          FULL_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
-          FULL_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
+          FULL_PREFIX="immwrt-v2-toolchain-${IMMWRT_TOOLCHAIN_GROUP}-"
+          FULL_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TOOLCHAIN_GROUP}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
           CCACHE_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
           CCACHE_PATTERN="^immwrt-v2-ccache-${IMMWRT_TARGET}-[0-9]+$"
           resolve_cache sdk "$SDK_PREFIX" "$SDK_PATTERN" "${SDK_PREFIX}${GITHUB_RUN_ID}"
