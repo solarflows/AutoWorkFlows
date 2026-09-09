@@ -214,8 +214,9 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-v3-toolchain-${{ env.IMMWRT_TARGET }}--${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v4-toolchain-${{ env.IMMWRT_TARGET }}.${{ steps.toolchain_hash.outputs.hash }}
           restore-keys: |
+            immwrt-v4-toolchain-${{ env.IMMWRT_TARGET }}.
             immwrt-v3-toolchain-${{ env.IMMWRT_TARGET }}--
           path: |
             openwrt/staging_dir/host*
@@ -227,8 +228,9 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-v3-ccache-${{ env.IMMWRT_TARGET }}--${{ github.run_id }}
+          key: immwrt-v4-ccache-${{ env.IMMWRT_TARGET }}.${{ github.run_id }}
           restore-keys: |
+            immwrt-v4-ccache-${{ env.IMMWRT_TARGET }}.
             immwrt-v3-ccache-${{ env.IMMWRT_TARGET }}--
           path: openwrt/.ccache
 
@@ -1091,7 +1093,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v3-toolchain-${{ env.IMMWRT_TARGET }}--${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v4-toolchain-${{ env.IMMWRT_TARGET }}.${{ steps.toolchain_hash.outputs.hash }}
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -1102,7 +1104,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v3-ccache-${{ env.IMMWRT_TARGET }}--${{ github.run_id }}
+          key: immwrt-v4-ccache-${{ env.IMMWRT_TARGET }}.${{ github.run_id }}
           path: openwrt/.ccache
 
       - name: Save SDK hostpkg cache
@@ -1111,7 +1113,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v3-sdk-hostpkg-${{ env.IMMWRT_TARGET }}--${{ github.run_id }}
+          key: immwrt-v4-sdk-hostpkg-${{ env.IMMWRT_TARGET }}.${{ github.run_id }}
           path: |
             openwrt/staging_dir/hostpkg
             openwrt/staging_dir/target-*/host
@@ -1131,7 +1133,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          TC_PREFIX="immwrt-v3-toolchain-${IMMWRT_TARGET}--"
+          TC_PREFIX="immwrt-v4-toolchain-${IMMWRT_TARGET}."
           TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
           set +e
           TC_LIST=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt)
@@ -1171,7 +1173,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          CC_PREFIX="immwrt-v3-ccache-${IMMWRT_TARGET}--"
+          CC_PREFIX="immwrt-v4-ccache-${IMMWRT_TARGET}."
           CC_CURRENT="${CC_PREFIX}${{ github.run_id }}"
           set +e
           CC_LIST=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt)
