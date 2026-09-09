@@ -214,9 +214,9 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v3-toolchain-${{ env.IMMWRT_TARGET }}--${{ steps.toolchain_hash.outputs.hash }}
           restore-keys: |
-            immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-
+            immwrt-v3-toolchain-${{ env.IMMWRT_TARGET }}--
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -227,9 +227,9 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v3-ccache-${{ env.IMMWRT_TARGET }}--${{ github.run_id }}
           restore-keys: |
-            immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
+            immwrt-v3-ccache-${{ env.IMMWRT_TARGET }}--
           path: openwrt/.ccache
 
       # ───────── 缓存恢复与状态上报 ─────────
@@ -1086,32 +1086,32 @@ jobs:
       # SDK producer 与 consumer 必须使用完全相同的 SDK path 列表；SDK
       # executor 独占 SDK 快照的保留和清理，full executor 不删除该 namespace。
       - name: Save toolchain cache
-        if: success() && inputs.cache_strategy != 'no-cache'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success')
         id: cache-tc-save
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v3-toolchain-${{ env.IMMWRT_TARGET }}--${{ steps.toolchain_hash.outputs.hash }}
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
 
       - name: Save ccache
-        if: success() && inputs.cache_strategy != 'no-cache' && steps.build.outputs.ccache_wrapper_valid == 'true'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.build.outputs.ccache_wrapper_valid == 'true'
         id: cache-cc-save
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v3-ccache-${{ env.IMMWRT_TARGET }}--${{ github.run_id }}
           path: openwrt/.ccache
 
       - name: Save SDK hostpkg cache
-        if: success() && inputs.cache_strategy != 'no-cache'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success')
         id: cache-sdk-hostpkg-save
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v3-sdk-hostpkg-${{ env.IMMWRT_TARGET }}--${{ github.run_id }}
           path: |
             openwrt/staging_dir/hostpkg
             openwrt/staging_dir/target-*/host
@@ -1131,7 +1131,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
+          TC_PREFIX="immwrt-v3-toolchain-${IMMWRT_TARGET}--"
           TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
           set +e
           TC_LIST=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt)
@@ -1139,7 +1139,7 @@ jobs:
           TC_IDS=""
           TC_IDS_RC=0
           if [ "$TC_RC" -eq 0 ]; then
-            TC_IDS=$(echo "$TC_LIST" | jq -r --arg current "$TC_CURRENT" '[.[] | select(.key != $current)] | .[].id')
+            TC_IDS=$(echo "$TC_LIST" | jq -r --arg prefix "$TC_PREFIX" --arg current "$TC_CURRENT" '[.[] | select((.key | startswith($prefix)) and .key != $current)] | .[].id')
             TC_IDS_RC=$?
           fi
           set -e
@@ -1171,7 +1171,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
+          CC_PREFIX="immwrt-v3-ccache-${IMMWRT_TARGET}--"
           CC_CURRENT="${CC_PREFIX}${{ github.run_id }}"
           set +e
           CC_LIST=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt)
@@ -1179,7 +1179,7 @@ jobs:
           CC_IDS=""
           CC_IDS_RC=0
           if [ "$CC_RC" -eq 0 ]; then
-            CC_IDS=$(echo "$CC_LIST" | jq -r --arg current "$CC_CURRENT" '[.[] | select(.key != $current)] | .[].id')
+            CC_IDS=$(echo "$CC_LIST" | jq -r --arg prefix "$CC_PREFIX" --arg current "$CC_CURRENT" '[.[] | select((.key | startswith($prefix)) and .key != $current)] | .[].id')
             CC_IDS_RC=$?
           fi
           set -e
@@ -1218,7 +1218,7 @@ jobs:
           mkdir -p release/firmware
           find bin/targets -type f -not -path "*/packages/*" -exec cp {} release/firmware/ \; 2>/dev/null || true
           mkdir -p release/passwall
-          find bin/packages -name "*passwall*.ipk" -o -name "*passwall*.apk" -exec cp {} release/passwall/ \; 2>/dev/null || true
+          find bin/packages \( -name "*passwall*.ipk" -o -name "*passwall*.apk" \) -exec cp {} release/passwall/ \; 2>/dev/null || true
           DEPS=(chinadns-ng dns2socks geoview haproxy hysteria ipt2socks microsocks naiveproxy \
                 shadowsocks-rust-sslocal shadowsocksr-libev simple-obfs shadow-tls sing-box \
                 tcping tuic-client v2ray-geoip v2ray-geosite v2ray-plugin xray-core)

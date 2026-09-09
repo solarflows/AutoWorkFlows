@@ -179,8 +179,8 @@ jobs:
               return 2
             fi
             printf '%s\n' "$cache_json" | jq -r \
-              --arg current "$CURRENT_REF" --arg default_ref "$DEFAULT_REF" '
-                [ .[] | select(.ref == $current or (.ref == $default_ref and $default_ref != "")) ]
+              --arg prefix "$prefix" --arg current "$CURRENT_REF" --arg default_ref "$DEFAULT_REF" '
+                [ .[] | select((.key | startswith($prefix)) and (.ref == $current or (.ref == $default_ref and $default_ref != ""))) ]
                 | sort_by(.createdAt)
                 | if length == 0 then empty else last | [.key, .ref] | @tsv end
               '
@@ -219,10 +219,10 @@ jobs:
             fi
           }
 
-          SDK_PREFIX="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-"
-          SDK_CCACHE_PREFIX="immwrt-v2-sdk-ccache-${IMMWRT_TARGET}-"
-          FULL_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
-          CCACHE_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
+          SDK_PREFIX="immwrt-v3-sdk-hostpkg-${IMMWRT_TARGET}--"
+          SDK_CCACHE_PREFIX="immwrt-v3-sdk-ccache-${IMMWRT_TARGET}--"
+          FULL_PREFIX="immwrt-v3-toolchain-${IMMWRT_TARGET}--"
+          CCACHE_PREFIX="immwrt-v3-ccache-${IMMWRT_TARGET}--"
           resolve_cache sdk "$SDK_PREFIX" "${SDK_PREFIX}${GITHUB_RUN_ID}"
           resolve_cache sdk_ccache "$SDK_CCACHE_PREFIX" "${SDK_CCACHE_PREFIX}${GITHUB_RUN_ID}"
           resolve_cache full "${FULL_PREFIX}" "${FULL_PREFIX}sdk-fallback-${GITHUB_RUN_ID}"
@@ -607,12 +607,12 @@ jobs:
       # key 使用 target + run_id，利用 Actions Cache 不可覆盖的语义发布滚动快照；
       # selected SDK 的 source_sha 仍在 SDK/IB 配对校验中使用；失败或 no-cache 不保存。
       - name: Save SDK hostpkg cache
-        if: success() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success'
         id: cache-hostpkg-save
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v3-sdk-hostpkg-${{ env.IMMWRT_TARGET }}--${{ github.run_id }}
           path: |
             openwrt/staging_dir/hostpkg
             openwrt/staging_dir/target-*/host
@@ -621,28 +621,28 @@ jobs:
             openwrt/tmp/go-build
 
       # SDK 可以保存本次新增的 compiler cache，但必须使用独立的 immutable
-      # run-id key；不得写入或清理 full workflow 维护的 immwrt-v2-ccache-*。
+      # run-id key；不得写入或清理 full workflow 维护的 immwrt-v3-ccache-*。
       - name: Save SDK ccache snapshot
-        if: success() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_wrapper_valid == 'true'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_wrapper_valid == 'true'
         id: cache-sdk-ccache-save
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v2-sdk-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v3-sdk-ccache-${{ env.IMMWRT_TARGET }}--${{ github.run_id }}
           path: openwrt/.ccache
 
       # ───────── 清理远端 SDK hostpkg 缓存（保留最近 N 份）─────────
       # hostpkg 快照按 target + run_id 滚动，显式排除本轮 key，避免依赖 createdAt 排序。
-      # 与全量 immwrt-v2-toolchain-* / immwrt-v2-ccache-* 前缀完全隔离。
+      # 与全量 immwrt-v3-toolchain-* / immwrt-v3-ccache-* 前缀完全隔离。
       - name: Purge stale SDK hostpkg snapshots
         id: hostpkg-purge
-        if: success() && inputs.cache_strategy != 'no-cache' && steps.cache-hostpkg-save.outcome == 'success'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-hostpkg-save.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          PREFIX="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-"
+          PREFIX="immwrt-v3-sdk-hostpkg-${IMMWRT_TARGET}--"
           CURRENT="${PREFIX}${{ github.run_id }}"
           KEEP_TOTAL=3
           KEEP_OLD=$((KEEP_TOTAL - 1))
@@ -656,8 +656,8 @@ jobs:
             # Keep the current snapshot plus at most KEEP_OLD older snapshots.
             # Exclude the current key from deletion even if cache listing is delayed.
             set +e
-            HOSTPKG_IDS=$(echo "$HOSTPKG_LIST" | jq -r --arg current "$CURRENT" --argjson keep "$KEEP_OLD" '
-              [ .[] | select(.key != $current) ]
+            HOSTPKG_IDS=$(echo "$HOSTPKG_LIST" | jq -r --arg prefix "$PREFIX" --arg current "$CURRENT" --argjson keep "$KEEP_OLD" '
+              [ .[] | select((.key | startswith($prefix)) and .key != $current) ]
               | sort_by(.createdAt)
               | if length > $keep then .[0:(length - $keep)] else [] end
               | .[].id
@@ -686,13 +686,13 @@ jobs:
 
       - name: Purge stale SDK ccache snapshots
         id: sdk-ccache-purge
-        if: success() && inputs.cache_strategy != 'no-cache' && steps.cache-sdk-ccache-save.outcome == 'success'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-sdk-ccache-save.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          PREFIX="immwrt-v2-sdk-ccache-${IMMWRT_TARGET}-"
+          PREFIX="immwrt-v3-sdk-ccache-${IMMWRT_TARGET}--"
           CURRENT="${PREFIX}${{ github.run_id }}"
           KEEP_TOTAL=3
           KEEP_OLD=$((KEEP_TOTAL - 1))
@@ -702,8 +702,8 @@ jobs:
           SDK_CCACHE_IDS=""
           SDK_CCACHE_IDS_RC=0
           if [ "$SDK_CCACHE_RC" -eq 0 ]; then
-            SDK_CCACHE_IDS=$(echo "$SDK_CCACHE_LIST" | jq -r --arg current "$CURRENT" --argjson keep "$KEEP_OLD" '
-              [ .[] | select(.key != $current) ]
+            SDK_CCACHE_IDS=$(echo "$SDK_CCACHE_LIST" | jq -r --arg prefix "$PREFIX" --arg current "$CURRENT" --argjson keep "$KEEP_OLD" '
+              [ .[] | select((.key | startswith($prefix)) and .key != $current) ]
               | sort_by(.createdAt)
               | if length > $keep then .[0:(length - $keep)] else [] end
               | .[].id
@@ -792,9 +792,9 @@ jobs:
             FULL_FALLBACK_KEY="未命中"
           fi
           # save action 无 cache-primary-key 输出, 直接展示写入的 key (已知值)
-          SDK_SAVE_KEY="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-${{ github.run_id }}"
+          SDK_SAVE_KEY="immwrt-v3-sdk-hostpkg-${IMMWRT_TARGET}--${{ github.run_id }}"
           SDK_SAVE_STATE="${{ steps.cache-hostpkg-save.outcome == 'success' && '✅ 已保存' || '未保存' }}"
-          SDK_CCACHE_SAVE_KEY="immwrt-v2-sdk-ccache-${IMMWRT_TARGET}-${{ github.run_id }}"
+          SDK_CCACHE_SAVE_KEY="immwrt-v3-sdk-ccache-${IMMWRT_TARGET}--${{ github.run_id }}"
           SDK_CCACHE_SAVE_STATE="${{ steps.cache-sdk-ccache-save.outcome == 'success' && '✅ 已保存' || '未保存' }}"
 
           # Each GitHub Actions step has a fresh shell. Persist the values used by
@@ -876,7 +876,7 @@ jobs:
             echo "| Misses | ${MISSES} |"
             echo "| 缓存大小 | ${CACHE_SIZE_LABEL} (磁盘 ${DISK_USAGE_HUMAN}) |"
             echo "| 恢复来源 | \`${RESTORE_KEY}\` |"
-            echo "| 保存策略 | \`${{ steps.build-log-analysis.outputs.sdk_ccache_save_key || 'immwrt-v2-sdk-ccache-' }}\` (${{ steps.build-log-analysis.outputs.sdk_ccache_save_state || '未保存' }}); SDK 只保存自身快照，不更新 full ccache |"
+            echo "| 保存策略 | \`${{ steps.build-log-analysis.outputs.sdk_ccache_save_key || 'immwrt-v3-sdk-ccache-' }}\` (${{ steps.build-log-analysis.outputs.sdk_ccache_save_state || '未保存' }}); SDK 只保存自身快照，不更新 full ccache |"
             echo "| 包装器接管 | ${{ steps.compile.outputs.ccache_wrapper_valid == 'true' && '✅ 已接管' || '⚠️ 未接管' }} |"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$CCACHE_STATS_AVAILABLE" = false ]; then
