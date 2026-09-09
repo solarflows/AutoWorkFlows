@@ -142,16 +142,38 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt -y purge firefox 2>/dev/null || true
-          sudo -E apt update
-          sudo -E apt -yqq full-upgrade
-          sudo -E apt -yqq autoremove --purge
-          sudo -E apt -yqq autoclean
-          sudo -E apt -yqq clean
-          sudo -E apt -yqq install dos2unix libfuse-dev
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-          sudo -E systemctl daemon-reload
-          sudo timedatectl set-timezone "$TZ"
+          set -euo pipefail
+
+          run_bounded() {
+            local label="$1"
+            local seconds="$2"
+            shift 2
+            echo "▶️ ${label} (超时 ${seconds}s)"
+            if timeout --signal=TERM --kill-after=30s "$seconds" "$@"; then
+              echo "✅ ${label} 完成"
+            else
+              local status=$?
+              if [ "$status" -eq 124 ]; then
+                echo "::error::${label} 超时 (${seconds}s)"
+              else
+                echo "::error::${label} 失败，退出码: ${status}"
+              fi
+              return "$status"
+            fi
+          }
+
+          run_bounded "更新 apt 索引" 600 sudo -E apt-get update
+          run_bounded "安装 runner 基础依赖" 600 sudo -E apt-get -yqq install dos2unix libfuse-dev
+
+          INIT_SCRIPT="$RUNNER_TEMP/init_build_environment.sh"
+          run_bounded "下载 ImmortalWrt 环境初始化脚本" 120 \
+            curl -fsSL --connect-timeout 15 --max-time 120 \
+            https://build-scripts.immortalwrt.org/init_build_environment.sh \
+            -o "$INIT_SCRIPT"
+          test -s "$INIT_SCRIPT"
+
+          run_bounded "执行 ImmortalWrt 环境初始化" 2700 sudo bash "$INIT_SCRIPT"
+          echo "✅ 环境初始化脚本已返回，跳过 systemd reload 和 timedatectl"
 
       # ───────── 磁盘空间监控（第 2 阶段：环境准备后）─────────
       - name: 💽 Disk space · After env prep
