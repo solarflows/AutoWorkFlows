@@ -34,7 +34,6 @@ map(. + {
   packages_branch:   (.packages_branch   // .target),
   packages_feed_repo: (.packages_feed_repo // $pkg_repo),
   packages_feed_name: (.packages_feed_name // $pkg_name),
-  toolchain_cache_group: (.toolchain_cache_group // .target),
   standard_packages_repo: (.standard_packages_repo // "solarflows/packages"),
   standard_packages_branch: (.standard_packages_branch // "master"),
   release_repo:      (.release_repo      // .repo),
@@ -67,8 +66,6 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 | `repo` * | string | 源码仓库（`owner/repo` 格式） | `solarflows/immortalwrt-mt798x` |
 | `ref` * | string | 源码分支或 tag | `test` |
 | `config` * | string | 种子配置目录名，对应 `openwrt-configs/immortalwrt/{config}/` | `mt798x` |
-
-| `toolchain_cache_group` | `target` | 工具链缓存共享组；同组 target 共享 `staging_dir` 工具链，ccache、SDK hostpkg、固件和发布资产仍按 target 隔离 | `qualcommax` |
 
 ---
 
@@ -182,16 +179,16 @@ CONFIG_IB=y
 
 ### Qualcomm target 拆分与缓存边界
 
-Qualcomm 现在是两个独立的逻辑 target。它们复用同一源码仓库、源码 ref 和 `qualcommax` 软件包分支；`toolchain_cache_group` 仅让它们共享源码树相同的 tools/toolchain 缓存，具体 target 的 ccache、SDK hostpkg、编译状态和发布资产仍然隔离。
+Qualcomm 现在是两个独立的逻辑 target。它们复用同一源码仓库、源码 ref 和 `qualcommax` 软件包分支；缓存直接使用现有 target 名作为 key，两个 target 的工具链、ccache、SDK hostpkg、编译状态和发布资产全部独立。
 
 | target | 配置目录 | 设备 | cache/state 命名空间 | 固件 Release | Passwall Release | SDK/IB Release |
 |--------|----------|------|----------------------|--------------|------------------|----------------|
-| `qualcommax` | `qualcommax` | `link_nn6000-v2` | 工具链组 `qualcommax`；ccache/SDK hostpkg 为 `qualcommax` | 保留 `<version>` | `packages` | `artifacts-qualcommax` |
-| `qualcommax-ipq807x` | `ipq807x` | `netgear_rbr750` | 工具链组 `qualcommax`；ccache/SDK hostpkg 为 `qualcommax-ipq807x` | `qualcommax-ipq807x-<version>` | `packages-qualcommax-ipq807x` | `artifacts-qualcommax-ipq807x` |
+| `qualcommax` | `qualcommax` | `link_nn6000-v2` | `qualcommax` | 保留 `<version>` | `packages` | `artifacts-qualcommax` |
+| `qualcommax-ipq807x` | `ipq807x` | `netgear_rbr750` | `qualcommax-ipq807x` | `qualcommax-ipq807x-<version>` | `packages-qualcommax-ipq807x` | `artifacts-qualcommax-ipq807x` |
 
 两个条目都使用 `solarflows/ImmortalWrt-QualcommAX` 的 `VIKINGYFY-main` 和 `solarflows/packages` 的 `qualcommax` 分支；它们只共享源码与 feed 的来源，不共享构建结果。
 
-旧 `qualcommax` 的 cache/state 只服务 ipq60xx 兼容 target；新 target 不复用或写入旧 ccache、SDK hostpkg、state、固件 Release、Passwall Release 或 SDK/IB Release。两者只共享 tools/toolchain cache，因为该缓存由相同源码 ref 和同一工具链树生成。`both` 会把 `targets.json` 中全部已配置条目作为独立矩阵 target 分别规划和执行，同一源码仓库不会导致产物共享。
+旧 `qualcommax` 的 cache/state 只服务 IPQ60xx target；`qualcommax-ipq807x` 使用自己的 target key，不复用或写入 `qualcommax` 的缓存、state、固件 Release、Passwall Release 或 SDK/IB Release。`both` 会把 `targets.json` 中全部已配置条目作为独立矩阵 target 分别规划和执行，同一源码仓库不会导致产物共享。
 
 ### 步骤 3：更新 `workflow_dispatch` 的 `target` 选项（可选）
 

@@ -8,7 +8,6 @@ on:
     inputs:
       # ── 矩阵 target 完整描述（已经合并 defaults 后的对象）──
       matrix_target:        { required: true, type: string }
-      toolchain_cache_group: { required: false, type: string, default: '' }
       matrix_repo:          { required: true, type: string }
       matrix_ref:           { required: true, type: string }
       matrix_config:       { required: true, type: string }
@@ -53,7 +52,6 @@ jobs:
       # 刻意不叫 TARGET/HOST/ARCH: 这些名字会被 autoconf AX_ENABLE_BUILDDIR 等宏读取,
       # 导致 configure 把 build 树建到 ./$TARGET/ 而非 ./$host/ (libffi 因此 InstallDev 失败)
       IMMWRT_TARGET: ${{ inputs.matrix_target }}
-      IMMWRT_TOOLCHAIN_GROUP: ${{ inputs.toolchain_cache_group || inputs.matrix_target }}
     steps:
       - name: Checkout defaults repo (AutoWorkflows)
         uses: actions/checkout@v6
@@ -247,8 +245,8 @@ jobs:
             printf '%s_restore_keys=\n' "$label" >> "$GITHUB_OUTPUT"
           }
 
-          TOOLCHAIN_PREFIX="immwrt-v2-toolchain-${IMMWRT_TOOLCHAIN_GROUP}-"
-          TOOLCHAIN_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TOOLCHAIN_GROUP}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
+          TOOLCHAIN_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
+          TOOLCHAIN_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
           CCACHE_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
           CCACHE_PATTERN="^immwrt-v2-ccache-${IMMWRT_TARGET}-[0-9]+$"
           lookup_cache toolchain "$TOOLCHAIN_PREFIX" "$TOOLCHAIN_PATTERN" \
@@ -1141,7 +1139,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
-          key: immwrt-v2-toolchain-${{ env.IMMWRT_TOOLCHAIN_GROUP }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -1181,9 +1179,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TOOLCHAIN_GROUP}-"
+          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
           TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
-          TC_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TOOLCHAIN_GROUP}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
+          TC_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
           set +e
           TC_LIST=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt)
           TC_RC=$?
