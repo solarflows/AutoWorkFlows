@@ -10,7 +10,7 @@ Subject: [PATCH] add v2ray-geodata.
 
 diff --git a/v2ray-geodata/Makefile b/v2ray-geodata/Makefile
 new file mode 100644
-index 00000000..cc0226299cf07b49fb0ba707605980391d091a2e
+index 00000000..41d9bf8602223fb64414d771d942a07a343a22ef
 --- /dev/null
 +++ b/v2ray-geodata/Makefile
 @@ -0,0 +1,138 @@
@@ -28,7 +28,7 @@ index 00000000..cc0226299cf07b49fb0ba707605980391d091a2e
 +
 +include $(INCLUDE_DIR)/package.mk
 +
-+GEO_VER:=202609112348
++GEO_VER:=202609120852
 +GEOIP_FULL_FILE:=geoip.dat.$(GEO_VER)
 +define Download/geoip-full
 +  URL:=https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/$(GEO_VER)/
@@ -42,7 +42,7 @@ index 00000000..cc0226299cf07b49fb0ba707605980391d091a2e
 +  URL:=https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/$(GEO_VER)/
 +  URL_FILE:=geosite.dat
 +  FILE:=$(GEOSITE_FULL_FILE)
-+  HASH:=9c232ebfa865ef04e303e4f0c8163bffc842d32983bb74ff58e2ce751c82de0c
++  HASH:=13e05b7769f66e18255354e42c81d58b4d22243fe8db9ee77bc806b5e09ddd10
 +endef
 +
 +GEOIP_LITE_FILE:=geoip-lite.dat.$(GEO_VER)
