@@ -17,8 +17,8 @@ on:
         type: choice
         options:
           - 'mt798x'
-          - 'qualcommax'
-          - 'qualcommax-ipq807x'
+          - 'ipq60xx'
+          - 'ipq807x'
           - 'both'
       trigger:
         description: '触发模式'
@@ -692,7 +692,6 @@ jobs:
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
       matrix_ref:                ${{ matrix.ref }}
-      matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       standard_packages_repo:     ${{ matrix.standard_packages_repo }}
       standard_packages_branch:   ${{ matrix.standard_packages_branch }}
@@ -730,7 +729,6 @@ jobs:
     with:
       defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
-      matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       standard_packages_repo:     ${{ matrix.standard_packages_repo }}
       standard_packages_branch:   ${{ matrix.standard_packages_branch }}
@@ -766,7 +764,6 @@ jobs:
     with:
       defaults_ref:               ${{ github.ref }}
       matrix_target:             ${{ matrix.target }}
-      matrix_config:             ${{ matrix.config }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       standard_packages_repo:     ${{ matrix.standard_packages_repo }}
       standard_packages_branch:   ${{ matrix.standard_packages_branch }}

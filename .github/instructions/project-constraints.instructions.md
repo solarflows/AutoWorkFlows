@@ -82,7 +82,7 @@ When diagnosing or inspecting Linux-built SDK/ImageBuilder archives on Windows h
 ### Seed file merge order
 
 - mt798x: `01-base` → `02-pkgs` → `03-mtk` → `04-passwall` → `05-extras`
-- qualcommax: `01-base` → `02-pkgs` → `03-passwall` → `04-extras`
+- ipq60xx / ipq807x: `01-base` → `02-pkgs` → `03-passwall` → `04-extras`
 
 `03-mtk.seed` contains closed-source MTK Wi-Fi drivers and must remain stable.
 
@@ -91,7 +91,7 @@ When diagnosing or inspecting Linux-built SDK/ImageBuilder archives on Windows h
 When citing OpenWrt/ImmortalWrt source code for behavior claims, always verify against the **actual build repository** from `targets.json` (`repo`/`ref`), not the upstream project:
 
 - mt798x builds from `solarflows/immortalwrt-mt798x` (`ref: test`), not upstream `immortalwrt/immortalwrt`.
-- qualcommax builds from `solarflows/ImmortalWrt-QualcommAX` (`ref: VIKINGYFY-main`).
+- ipq60xx and ipq807x build from `solarflows/ImmortalWrt-QualcommAX` (`ref: VIKINGYFY-main`).
 - The packages feed is `solarflows/packages` (branches `mt798x`/`qualcommax`), patched via `Sync_Push.yml` — not upstream `openwrt/packages`.
 
 Upstream and fork frequently diverge (e.g. `CONFIG_IB_STANDALONE` defaults, rust package version, IB tarball compression). A claim based on upstream source without fork verification has caused wrong conclusions (IB preset package scope, PROFILE behavior, rust version).

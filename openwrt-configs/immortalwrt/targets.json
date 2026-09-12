@@ -1,34 +1,34 @@
 {
-  "_comment": "字段说明见同目录 README.md。本文件仅保存每个 target 的差异化配置。SDK 与 IB 统一发布到 artifacts_release_tag；默认值由 unified workflow 和 reusable workflow inputs 提供。",
+  "_comment": "字段说明见同目录 README.md。本文件仅保存每个 target 的差异化配置。SDK 与 IB 统一发布到 artifacts_release_tag；默认值由 unified workflow 和 reusable workflow inputs 提供。种子配置目录名恒等于 target 名，无需 config 字段。",
   "targets": [
     {
       "target": "mt798x",
       "repo": "solarflows/immortalwrt-mt798x",
       "ref": "test",
-      "config": "mt798x",
       "standard_packages_repo": "solarflows/packages",
       "standard_packages_branch": "hanwckf",
       "sdk_container": "aarch64_cortex-a53-21.02.7"
     },
     {
-      "target": "qualcommax",
+      "target": "ipq60xx",
       "repo": "solarflows/ImmortalWrt-QualcommAX",
       "ref": "VIKINGYFY-main",
-      "config": "qualcommax",
-      "standard_packages_repo": "solarflows/packages",
-      "standard_packages_branch": "qualcommax",
-      "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
-    },
-    {
-      "target": "qualcommax-ipq807x",
-      "repo": "solarflows/ImmortalWrt-QualcommAX",
-      "ref": "VIKINGYFY-main",
-      "config": "ipq807x",
       "packages_branch": "qualcommax",
       "standard_packages_repo": "solarflows/packages",
       "standard_packages_branch": "qualcommax",
-      "firmware_release_tag_prefix": "qualcommax-ipq807x",
-      "passwall_tag": "packages-qualcommax-ipq807x",
+      "firmware_release_tag_prefix": "ipq60xx",
+      "passwall_tag": "packages-ipq60xx",
+      "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
+    },
+    {
+      "target": "ipq807x",
+      "repo": "solarflows/ImmortalWrt-QualcommAX",
+      "ref": "VIKINGYFY-main",
+      "packages_branch": "qualcommax",
+      "standard_packages_repo": "solarflows/packages",
+      "standard_packages_branch": "qualcommax",
+      "firmware_release_tag_prefix": "ipq807x",
+      "passwall_tag": "packages-ipq807x",
       "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
     }
   ]

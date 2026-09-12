@@ -7,10 +7,10 @@ on:
   workflow_call:
     inputs:
       # ── 矩阵 target 完整描述（已经合并 defaults 后的对象）──
+      # 种子配置目录名恒等于 matrix_target, 不再单独传递 config。
       matrix_target:        { required: true, type: string }
       matrix_repo:          { required: true, type: string }
       matrix_ref:           { required: true, type: string }
-      matrix_config:       { required: true, type: string }
       matrix_packages_branch: { required: true, type: string }
       standard_packages_repo: { required: false, type: string, default: 'solarflows/packages' }
       standard_packages_branch: { required: false, type: string, default: 'master' }
@@ -161,6 +161,23 @@ jobs:
               return "$status"
             fi
           }
+
+          run_bounded "清理无用预装包与大型运行时" 180 bash -c '
+            set -euo pipefail
+            echo "🧹 禁用 Snap 服务并卸载无用桌面及服务端组件..."
+            sudo systemctl disable --now snapd.service snapd.socket snapd.seeded.service 2>/dev/null || true
+            sudo apt-get remove --purge -y \
+              firefox* snapd* \
+              google-chrome-stable \
+              powershell \
+              "php*" \
+              2>/dev/null || true
+            sudo apt-get autoremove -y 2>/dev/null || true
+            sudo apt-mark hold firefox snapd 2>/dev/null || true
+            sudo rm -rf /var/cache/snapd /snap /var/snap 2>/dev/null || true
+            echo "🧹 清理非必要的大型 SDK 目录 (Android/DotNet/Haskell)..."
+            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup 2>/dev/null || true
+          '
 
           run_bounded "更新 apt 索引" 600 sudo -E apt-get update
           run_bounded "安装 runner 基础依赖" 600 sudo -E apt-get -yqq install dos2unix libfuse-dev
@@ -352,7 +369,7 @@ jobs:
           echo "║  ⚙️ Apply Configuration               ║"
           echo "╚══════════════════════════════════════╝"
           cd openwrt
-          SEED_DIR="../AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}"
+          SEED_DIR="../AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_target }}"
           echo "📄 合并种子配置: $SEED_DIR"
           find "$SEED_DIR" -type f -name '*.seed' | sort | while read -r f; do
             echo "  + $(basename "$f")" >&2
@@ -1354,7 +1371,7 @@ jobs:
           cat > build-info.json <<JSONEOF
           {
             "target": "${IMMWRT_TARGET}",
-            "config": "${{ inputs.matrix_config }}",
+            "config": "${IMMWRT_TARGET}",
             "source_repo": "${{ inputs.matrix_repo }}",
             "source_ref": "${{ inputs.matrix_ref }}",
             "source_sha": "${{ steps.clone_packages.outputs.sha_full }}",

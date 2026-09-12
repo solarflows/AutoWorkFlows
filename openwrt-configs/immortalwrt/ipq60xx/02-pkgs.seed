@@ -1,5 +1,5 @@
 # ────────────────────────────────────────────────────────────
-# qualcommax — 软件包选择
+# ipq60xx (qualcommax) — 软件包选择
 # 来源: make defconfig 后的最终 .config
 # 添加/删除软件包: 直接编辑 CONFIG_PACKAGE_xxx=行
 #   - 启用: CONFIG_PACKAGE_<name>=y

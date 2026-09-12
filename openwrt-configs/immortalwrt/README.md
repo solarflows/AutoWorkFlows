@@ -20,8 +20,7 @@
     {
       "target": "mt798x",
       "repo": "solarflows/immortalwrt-mt798x",
-      "ref": "test",
-      "config": "mt798x"
+      "ref": "test"
     }
   ]
 }
@@ -62,10 +61,11 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 
 | 字段 | 类型 | 说明 | 示例 |
 |------|------|------|------|
-| `target` * | string | 目标标识符，用作构建目录名和 `workflow_dispatch` 过滤关键字 | `mt798x` |
+| `target` * | string | 目标标识符，同时作为**种子配置目录名**、缓存 key 命名空间和 `workflow_dispatch` 过滤关键字 | `mt798x` |
 | `repo` * | string | 源码仓库（`owner/repo` 格式） | `solarflows/immortalwrt-mt798x` |
 | `ref` * | string | 源码分支或 tag | `test` |
-| `config` * | string | 种子配置目录名，对应 `openwrt-configs/immortalwrt/{config}/` | `mt798x` |
+
+> 种子配置目录固定为 `openwrt-configs/immortalwrt/<target>/`，不再有独立的 `config` 字段。改名 target 时须同步重命名目录。
 
 ---
 
@@ -126,8 +126,7 @@ mt798x 的 active 源是 `solarflows/immortalwrt-mt798x@test`，其中 `test` �
 来自 ImmortalWrt `include/version.mk` 的 `VERSION_NUMBER`：
 
 - mt798x (21.02 分支)：`21.02.7` 等点版本
-- qualcommax / ipq60xx 兼容 target (SNAPSHOT)：自动追加日期后缀 → `SNAPSHOT-20260801`
-- qualcommax-ipq807x (SNAPSHOT)：使用独立 target 前缀发布，避免与旧 target 的固件 Release 混写
+- ipq60xx / ipq807x (SNAPSHOT)：自动追加日期后缀 → `SNAPSHOT-20260801`，并按各自 target 前缀发布
 
 文件名格式：
 ```
@@ -148,12 +147,11 @@ ib-<target>-<version>-<arch>.tar.xz
   "target": "newdevice",
   "repo": "solarflows/immortalwrt-newdevice",
   "ref": "main",
-  "config": "newdevice",
   "packages_branch": "newdevice"
 }
 ```
 
-最少只需 4 个必填字段，其余缺省字段由 `plan` job 从 workflow `env` 注入的默认值自动填充（jq `//` 兜底）。
+最少只需 3 个必填字段，其余缺省字段由 `plan` job 从 workflow `env` 注入的默认值自动填充（jq `//` 兜底）。种子目录必须是 `openwrt-configs/immortalwrt/newdevice/`。
 
 ### 步骤 2：创建种子配置目录
 
@@ -179,20 +177,20 @@ CONFIG_IB=y
 
 ### Qualcomm target 拆分与缓存边界
 
-Qualcomm 现在是两个独立的逻辑 target。它们复用同一源码仓库、源码 ref 和 `qualcommax` 软件包分支；缓存直接使用现有 target 名作为 key，两个 target 的工具链、ccache、SDK hostpkg、编译状态和发布资产全部独立。
+Qualcomm 是两个独立的逻辑 target，target 名与种子目录名一致。它们复用同一源码仓库、源码 ref 和 `qualcommax` 软件包分支，但缓存 key、编译状态和发布资产完全独立。
 
 | target | 配置目录 | 设备 | cache/state 命名空间 | 固件 Release | Passwall Release | SDK/IB Release |
 |--------|----------|------|----------------------|--------------|------------------|----------------|
-| `qualcommax` | `qualcommax` | `link_nn6000-v2` | `qualcommax` | 保留 `<version>` | `packages` | `artifacts-qualcommax` |
-| `qualcommax-ipq807x` | `ipq807x` | `netgear_rbr750` | `qualcommax-ipq807x` | `qualcommax-ipq807x-<version>` | `packages-qualcommax-ipq807x` | `artifacts-qualcommax-ipq807x` |
+| `ipq60xx` | `ipq60xx` | `link_nn6000-v2` | `ipq60xx` | `ipq60xx-<version>` | `packages-ipq60xx` | `artifacts-ipq60xx` |
+| `ipq807x` | `ipq807x` | `netgear_rbr750` | `ipq807x` | `ipq807x-<version>` | `packages-ipq807x` | `artifacts-ipq807x` |
 
 两个条目都使用 `solarflows/ImmortalWrt-QualcommAX` 的 `VIKINGYFY-main` 和 `solarflows/packages` 的 `qualcommax` 分支；它们只共享源码与 feed 的来源，不共享构建结果。
 
-旧 `qualcommax` 的 cache/state 只服务 IPQ60xx target；`qualcommax-ipq807x` 使用自己的 target key，不复用或写入 `qualcommax` 的缓存、state、固件 Release、Passwall Release 或 SDK/IB Release。`both` 会把 `targets.json` 中全部已配置条目作为独立矩阵 target 分别规划和执行，同一源码仓库不会导致产物共享。
+两者的缓存 key 形如 `immwrt-v2-{toolchain,ccache,sdk-hostpkg,sdk-ccache}-<target>-<suffix>`，互相独立。`both` 会把 `targets.json` 中全部已配置条目作为独立矩阵 target 分别规划和执行，同一源码仓库不会导致产物共享。
 
 ### 步骤 3：更新 `workflow_dispatch` 的 `target` 选项（可选）
 
-如果需要在手动触发时单独选择新目标，编辑 `firmware-build-unified.yml` 中 `on.workflow_dispatch.inputs.target.options`。当前可选值为 `mt798x`、`qualcommax`、`qualcommax-ipq807x` 和 `both`；`both` 会包含 `targets.json` 中全部已配置 target。
+如果需要在手动触发时单独选择新目标，编辑 `firmware-build-unified.yml` 中 `on.workflow_dispatch.inputs.target.options`。当前可选值为 `mt798x`、`ipq60xx`、`ipq807x` 和 `both`；`both` 会包含 `targets.json` 中全部已配置 target。
 
 ---
 
@@ -247,7 +245,7 @@ Qualcomm 现在是两个独立的逻辑 target。它们复用同一源码仓库�
 
 | 参数 | 说明 |
 |------|------|
-| `target` | 构建目标：`mt798x` / `qualcommax` / `qualcommax-ipq807x` / `both` |
+| `target` | 构建目标：`mt798x` / `ipq60xx` / `ipq807x` / `both` |
 | `trigger` | 触发模式：`smart` / `full` / `sdk-packages` |
 | `cache_strategy` | 缓存策略：`smart` / `clean-toolchain` / `clean-ccache` / `clean-all` / `no-cache` |
 | `skip_upstream` | 跳过上游同步工作流触发（节省时间） |

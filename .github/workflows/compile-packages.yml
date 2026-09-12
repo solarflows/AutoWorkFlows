@@ -7,8 +7,8 @@ on:
   workflow_call:
     inputs:
       # ── 矩阵 target 完整描述 ──
+      # 种子配置目录名恒等于 matrix_target, 不再单独传递 config。
       matrix_target:             { required: true, type: string }
-      matrix_config:             { required: true, type: string }
       matrix_packages_branch:    { required: true, type: string }
       standard_packages_repo:    { required: false, type: string, default: 'solarflows/packages' }
       standard_packages_branch:  { required: false, type: string, default: 'master' }
@@ -391,7 +391,7 @@ jobs:
         run: |
           SDK_PKGS="${{ inputs.matrix_sdk_packages }}"
           if [ "$SDK_PKGS" = "*" ]; then
-            CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}/sdk.config"
+            CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_target }}/sdk.config"
             if [ -f "$CONFIG_FILE" ]; then
               # 只提取小写包名; CONFIG_PACKAGE_ 前缀也覆盖 INCLUDE/Basic_Core
               # 等大写 Kconfig 选择项, 这些选项不是可直接 make 的包目录。
@@ -938,7 +938,7 @@ jobs:
           cat > build-info.json <<JSONEOF
           {
             "target": "${IMMWRT_TARGET}",
-            "config": "${{ inputs.matrix_config }}",
+            "config": "${IMMWRT_TARGET}",
             "packages_repo": "${{ inputs.packages_feed_repo }}",
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${PKG_COMMIT_FULL}",
@@ -1068,7 +1068,7 @@ jobs:
         id: build-ib
         run: |
           set -euo pipefail
-          SEED_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_config }}"
+          SEED_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_target }}"
           PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
             grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
             sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | sort -u | tr '\n' ' ')

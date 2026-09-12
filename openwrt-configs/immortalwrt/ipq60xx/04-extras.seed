@@ -1,5 +1,5 @@
 # ────────────────────────────────────────────────────────────
-# qualcommax — 强制预装的额外后端
+# ipq60xx (qualcommax) — 强制预装的额外后端
 #
 # 策略: =y（安装到固件，但不通过 INCLUDE_* 进入 Depends 链）。
 #       passwall ipk 可跨设备复用——用户只需 sing-box+ssr-libev

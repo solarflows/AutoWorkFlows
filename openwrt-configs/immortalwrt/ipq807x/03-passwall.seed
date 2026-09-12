@@ -1,9 +1,9 @@
 # ────────────────────────────────────────────────────────────
-# qualcommax / ipq807x — passwall/passwall2 精简配置
+# ipq807x (qualcommax) — passwall/passwall2 精简配置
 #
 # 按需求只保留: sing-box + shadowsocks-rust + shadowsocksr-libev (SSR)
 # 其余后端 (hysteria/naiveproxy/shadow-tls/xray) 一律剔除，节省存储。
-# qualcommax-ipq807x: nftables + APK, aarch64
+# ipq807x: nftables + APK, aarch64
 # ────────────────────────────────────────────────────────────
 
 # ── passwall 核心 ──
