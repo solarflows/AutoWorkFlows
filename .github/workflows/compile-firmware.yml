@@ -162,21 +162,13 @@ jobs:
             fi
           }
 
-          run_bounded "清理无用预装包与大型运行时" 180 bash -c '
+          run_bounded "禁用 snap 自动更新与锁定无关包" 30 bash -c '
             set -euo pipefail
-            echo "🧹 禁用 Snap 服务并卸载无用桌面及服务端组件..."
-            sudo systemctl disable --now snapd.service snapd.socket snapd.seeded.service 2>/dev/null || true
-            sudo apt-get remove --purge -y \
-              firefox* snapd* \
-              google-chrome-stable \
-              powershell \
-              "php*" \
-              2>/dev/null || true
-            sudo apt-get autoremove -y 2>/dev/null || true
+            echo "🛑 停止并屏蔽 snapd 守护进程与定时刷新..."
+            sudo snap set system refresh.hold="forever" 2>/dev/null || true
+            sudo systemctl mask --now snapd.service snapd.socket snapd.seeded.service snapd.refresh.timer 2>/dev/null || true
+            echo "🔒 锁定 firefox 与 snapd 包版本，防止 apt full-upgrade 触发 snap 更新..."
             sudo apt-mark hold firefox snapd 2>/dev/null || true
-            sudo rm -rf /var/cache/snapd /snap /var/snap 2>/dev/null || true
-            echo "🧹 清理非必要的大型 SDK 目录 (Android/DotNet/Haskell)..."
-            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup 2>/dev/null || true
           '
 
           run_bounded "更新 apt 索引" 600 sudo -E apt-get update

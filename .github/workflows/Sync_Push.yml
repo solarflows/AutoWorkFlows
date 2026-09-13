@@ -109,6 +109,17 @@ jobs:
             fi
             expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
             if [ -n "$expected" ]; then
+              # 若远端已有该分支，检查其内容树是否与本地 HEAD 完全一致
+              # 若文件树一致（代码内容零差异），跳过推送以避免产生无意义的空提交，防止下游工作流误判变更
+              if git fetch --no-tags --depth=1 "$remote_url" "refs/heads/$branch" 2>/dev/null; then
+                local remote_tree local_tree
+                remote_tree=$(git rev-parse "FETCH_HEAD^{tree}" 2>/dev/null || true)
+                local_tree=$(git rev-parse "HEAD^{tree}" 2>/dev/null || true)
+                if [ -n "$remote_tree" ] && [ "$remote_tree" = "$local_tree" ]; then
+                  echo "🟢 远端分支 $branch 内容树与本地完全一致 (${local_tree:0:7})，跳过推送"
+                  return 0
+                fi
+              fi
               lease="--force-with-lease=refs/heads/$branch:$expected"
             else
               lease="--force-with-lease=refs/heads/$branch:"
@@ -288,6 +299,17 @@ jobs:
             fi
             expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
             if [ -n "$expected" ]; then
+              # 若远端已有该分支，检查其内容树是否与本地 HEAD 完全一致
+              # 若文件树一致（代码内容零差异），跳过推送以避免产生无意义的空提交，防止下游工作流误判变更
+              if git fetch --no-tags --depth=1 "$remote_url" "refs/heads/$branch" 2>/dev/null; then
+                local remote_tree local_tree
+                remote_tree=$(git rev-parse "FETCH_HEAD^{tree}" 2>/dev/null || true)
+                local_tree=$(git rev-parse "HEAD^{tree}" 2>/dev/null || true)
+                if [ -n "$remote_tree" ] && [ "$remote_tree" = "$local_tree" ]; then
+                  echo "🟢 远端分支 $branch 内容树与本地完全一致 (${local_tree:0:7})，跳过推送"
+                  return 0
+                fi
+              fi
               lease="--force-with-lease=refs/heads/$branch:$expected"
             else
               lease="--force-with-lease=refs/heads/$branch:"
@@ -534,6 +556,17 @@ jobs:
             fi
             expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
             if [ -n "$expected" ]; then
+              # 若远端已有该分支，检查其内容树是否与本地 HEAD 完全一致
+              # 若文件树一致（代码内容零差异），跳过推送以避免产生无意义的空提交，防止下游工作流误判变更
+              if git fetch --no-tags --depth=1 "$remote_url" "refs/heads/${branch}" 2>/dev/null; then
+                local remote_tree local_tree
+                remote_tree=$(git rev-parse "FETCH_HEAD^{tree}" 2>/dev/null || true)
+                local_tree=$(git rev-parse "HEAD^{tree}" 2>/dev/null || true)
+                if [ -n "$remote_tree" ] && [ "$remote_tree" = "$local_tree" ]; then
+                  echo "🟢 远端分支 ${branch} 内容树与本地完全一致 (${local_tree:0:7})，跳过推送"
+                  return 0
+                fi
+              fi
               lease="--force-with-lease=refs/heads/${branch}:${expected}"
             else
               lease="--force-with-lease=refs/heads/${branch}:"

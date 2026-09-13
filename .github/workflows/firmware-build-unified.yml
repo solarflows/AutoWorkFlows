@@ -364,9 +364,21 @@ jobs:
               exit 1
             fi
             LAST_SRC=$(jq -r ".\"${MATRIX_TARGET}\".source_sha // empty" build-state.json)
+            SRC_TREE_SAME=false
+            if [ -n "$LAST_SRC" ] && [ "$LAST_SRC" != "$CURR_SRC" ]; then
+              CURR_SRC_TREE=$(gh api "repos/${CURR_REPO}/commits/${CURR_SRC}" --jq '.commit.tree.sha' 2>/dev/null || true)
+              LAST_SRC_TREE=$(gh api "repos/${CURR_REPO}/commits/${LAST_SRC}" --jq '.commit.tree.sha' 2>/dev/null || true)
+              if [ -n "$CURR_SRC_TREE" ] && [ -n "$LAST_SRC_TREE" ] && [ "$CURR_SRC_TREE" = "$LAST_SRC_TREE" ]; then
+                SRC_TREE_SAME=true
+              fi
+            fi
+
             if [ -n "$LAST_SRC" ] && [ "$LAST_SRC" = "$CURR_SRC" ]; then
               echo "  ✅ [${MATRIX_TARGET}] 源码未变更 (${CURR_SRC:0:7})"
               SRC_STATUS="✅ 未变更"
+            elif [ "$SRC_TREE_SAME" = "true" ]; then
+              echo "  ✅ [${MATRIX_TARGET}] 源码仅提交元数据变动，内容树未变更 (${CURR_SRC_TREE:0:7})"
+              SRC_STATUS="✅ 树未变更"
             else
               echo "  🔵 [${MATRIX_TARGET}] 源码变更: ${LAST_SRC:-无} → ${CURR_SRC:0:7}"
               SOURCE_CHANGED=true
@@ -450,9 +462,21 @@ jobs:
               exit 1
             fi
             LAST_STD_PKG=$(jq -r ".\"${MATRIX_TARGET}\".standard_packages_sha // empty" build-state.json)
+            STD_TREE_SAME=false
+            if [ -n "$LAST_STD_PKG" ] && [ "$LAST_STD_PKG" != "$CURR_STD_PKG" ]; then
+              CURR_STD_TREE=$(gh api "repos/${CURR_STD_PKG_REPO}/commits/${CURR_STD_PKG}" --jq '.commit.tree.sha' 2>/dev/null || true)
+              LAST_STD_TREE=$(gh api "repos/${CURR_STD_PKG_REPO}/commits/${LAST_STD_PKG}" --jq '.commit.tree.sha' 2>/dev/null || true)
+              if [ -n "$CURR_STD_TREE" ] && [ -n "$LAST_STD_TREE" ] && [ "$CURR_STD_TREE" = "$LAST_STD_TREE" ]; then
+                STD_TREE_SAME=true
+              fi
+            fi
+
             if [ -n "$LAST_STD_PKG" ] && [ "$LAST_STD_PKG" = "$CURR_STD_PKG" ]; then
               echo "  ✅ [${MATRIX_TARGET}] 标准 packages feed 未变更 (${CURR_STD_PKG:0:7})"
               STD_PKG_STATUS="✅ 未变更"
+            elif [ "$STD_TREE_SAME" = "true" ]; then
+              echo "  ✅ [${MATRIX_TARGET}] 标准 packages feed 仅提交元数据变动，内容树未变更 (${CURR_STD_TREE:0:7})"
+              STD_PKG_STATUS="✅ 树未变更"
             else
               echo "  🟠 [${MATRIX_TARGET}] 标准 packages feed 变更: ${LAST_STD_PKG:-无} → ${CURR_STD_PKG:0:7}"
               STANDARD_PACKAGES_CHANGED=true
