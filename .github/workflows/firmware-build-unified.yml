@@ -51,7 +51,7 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: '6 0 * * 1,6'  # 每周一和周六的 00:06 UTC
+    - cron: '18 22 * * *'  # 每天 22:18 UTC (北京时间 06:18，避开整点与半点调度高峰)
 
 # 全局固定并发组: 任意时刻全仓库只允许一个 unified run 执行, 后续触发自动排队。
 # 防止短时间重复触发两个 run 并行 (会同时写 artifacts-* tag 与 packages tag, 污染远端仓库)。
