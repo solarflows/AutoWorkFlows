@@ -11,15 +11,16 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: '选择构建目标'
+        description: '选择构建目标 (all 表示全部目标)'
         required: true
-        default: 'both'
+        default: 'all'
         type: choice
         options:
+          - 'all'
+          - 'both'
           - 'mt798x'
           - 'ipq60xx'
           - 'ipq807x'
-          - 'both'
       trigger:
         description: '触发模式'
         required: false
@@ -79,7 +80,7 @@ jobs:
   plan:
     name: Plan build
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     outputs:
       firmware_matrix_json:     ${{ steps.decision.outputs.firmware_matrix_json }}
       sdk_ib_matrix_json:       ${{ steps.decision.outputs.sdk_ib_matrix_json }}
@@ -102,9 +103,9 @@ jobs:
         id: updater-targets
         run: |
           set -euo pipefail
-          SELECTED_TARGET="${{ github.event.inputs.target || 'both' }}"
+          SELECTED_TARGET="${{ github.event.inputs.target || 'all' }}"
           TARGETS_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/targets.json"
-          if [ "$SELECTED_TARGET" = "both" ]; then
+          if [ "$SELECTED_TARGET" = "both" ] || [ "$SELECTED_TARGET" = "all" ]; then
             UPDATER_TARGETS=$(jq -r '.targets | map(.packages_branch // .target) | unique | join(",")' "$TARGETS_FILE")
           else
             UPDATER_TARGETS=$(jq -r --arg selected "$SELECTED_TARGET" \
@@ -301,7 +302,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set +e
-          TARGET_FILTER="${{ github.event.inputs.target || 'both' }}"
+          TARGET_FILTER="${{ github.event.inputs.target || 'all' }}"
           JSON_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/targets.json"
           [ -f "$JSON_FILE" ] || { echo "::error::targets.json 不存在"; exit 1; }
 
@@ -313,7 +314,7 @@ jobs:
             --arg pkg_name "${{ env.PACKAGES_FEED_NAME }}" \
             --arg artifacts_repo "${{ env.ARTIFACTS_RELEASE_REPO }}" \
             --argjson artifacts_keep "${{ env.ARTIFACTS_KEEP_VERSIONS }}" '
-            if $t == "both" then .targets
+            if $t == "both" or $t == "all" then .targets
             else [.targets[] | select(.target == $t)] end |
             map(. + {
               packages_branch:   (.packages_branch   // .target),
@@ -669,7 +670,7 @@ jobs:
           {
             echo "## 🎯 Build Decision"
             echo ""
-            echo "**触发**: \`${TRIGGER}\` | **目标**: \`${{ github.event.inputs.target || 'both' }}\` | **缓存**: \`${CACHE_STRATEGY}\`"
+            echo "**触发**: \`${TRIGGER}\` | **目标**: \`${{ github.event.inputs.target || 'all' }}\` | **缓存**: \`${CACHE_STRATEGY}\`"
             echo ""
             echo "**计划版本**: \`${VER}\`"
             echo ""

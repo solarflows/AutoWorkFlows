@@ -40,6 +40,8 @@ checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app
 # PassWall1&2       科学上网
 format_git_clone_output -r https://github.com/Openwrt-Passwall/openwrt-passwall-packages && mvdir openwrt-passwall-packages
 checkout_partial_code -r https://github.com/solarflows/openwrt-passwall -b custom luci-app-passwall
+# 规范化 PKG_RELEASE: APK 规范要求 release 必须为纯整数，防止 1.1 等非整数导致 apk mkpkg 校验失败
+sed -i 's/^PKG_RELEASE:=1\.1/PKG_RELEASE:=2/' luci-app-passwall/Makefile 2>/dev/null || true
 checkout_partial_code -r https://github.com/Openwrt-Passwall/openwrt-passwall2 luci-app-passwall2
 format_git_clone_output -r https://github.com/Zerogiven-OpenWRT-Packages/luci-app-podman
 

@@ -310,15 +310,6 @@ jobs:
           if [ "$CACHE_STRATEGY" != "clean-all" ] && [ "$CACHE_STRATEGY" != "clean-toolchain" ] \
              && [ -d openwrt/staging_dir ] \
              && [ "$(find openwrt/staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | head -1)" ]; then
-            find openwrt/staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | while read -r d; do
-              find "$d" -type f -exec touch {} +
-            done
-            if [ -x openwrt/staging_dir/host/bin/ccache ]; then
-              for cmd in gcc g++ cc c++; do
-                ln -sf ccache "openwrt/staging_dir/host/bin/$cmd" 2>/dev/null || true
-              done
-            fi
-            mkdir -p openwrt/tmp && echo "1" > openwrt/tmp/.build
             TOOLCHAIN_RESTORED=true
           fi
           echo "toolchain_restored=${TOOLCHAIN_RESTORED}" >> $GITHUB_OUTPUT
@@ -587,7 +578,7 @@ jobs:
       # ───────── 工具链预编译（确保 OpenWrt 自带 ccache 可用）─────────
       # 这不是拆分 Job，而是在同一工作区内显式先完成 tools/toolchain 依赖。
       # 冷缓存时正常构建；缓存命中时由 OpenWrt stamp 快速跳过。
-      # 若缓存保留了 stamp 但丢失 host/ccache，先使 host staging 失效，避免 make 误判完成。
+      # 必须在 make defconfig 之后重新刷新 stamp 时间戳，避免 stamp 被 .config 判定过期。
       - name: 🔧 Prepare toolchain & ccache
         id: prepare_toolchain
         run: |
@@ -597,35 +588,55 @@ jobs:
           echo "╚══════════════════════════════════════╝"
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
+          NPROC=$(($(nproc) + 1))
 
           CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
           ccache_is_usable() {
             [ -x "$CCACHE_BIN" ] && "$CCACHE_BIN" --version >/dev/null 2>&1
           }
 
-          # 缓存可能只恢复了 stamp 而没有 ccache 可执行文件。删除 host staging
-          # 会同时移除 tools 完成标记，随后 make tools/compile 会按依赖重新生成它。
-          if ! ccache_is_usable; then
-            echo "⚠️ OpenWrt host ccache 缺失或不可执行，重新准备 staging_dir/host ..."
-            if [ -e staging_dir/host ] || [ -L staging_dir/host ]; then
-              rm -rf staging_dir/host
+          TOOLCHAIN_RESTORED="${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}"
+
+          # 关键修复: make defconfig 在此步骤前执行，其更新的 .config 时间戳晚于早期解压的 stamp。
+          # 若工具链缓存已恢复，必须在 defconfig 后刷新 stamp 与 tmp/.build 时间戳，
+          # 确保 stamp 比 .config 更晚，使 OpenWrt 能真正命中缓存并跳过已完成的工具与工具链。
+          if [ "$TOOLCHAIN_RESTORED" = "true" ] \
+             && [ -d staging_dir ] \
+             && [ "$(find staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | head -1)" ]; then
+            echo "🔄 在 defconfig 后刷新工具链 stamp 时间戳以确保缓存命中生效..."
+            mkdir -p tmp && echo "1" > tmp/.build && touch tmp/.build
+            find staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | while read -r d; do
+              find "$d" -type f -exec touch {} +
+            done
+            if ccache_is_usable; then
+              for cmd in gcc g++ cc c++; do
+                ln -sf ccache "staging_dir/host/bin/$cmd" 2>/dev/null || true
+              done
             fi
-          else
-            echo "✅ 已发现可用的 OpenWrt ccache，将复用工具链 stamp（如有效）"
           fi
 
-          echo "🔨 先单独构建 OpenWrt ccache，避免工具链并行竞态..."
-          make -j1 V=sc tools/ccache/compile 2>&1 | tee toolchain-prebuild.log
+          # 关键修复: 仅当 ccache 缺失或损坏时，重置 ccache 自身目标标记重新构建，
+          # 绝不暴力删除整个 staging_dir/host，避免摧毁缓存中已就绪的其它 host 工具。
+          if ! ccache_is_usable; then
+            echo "⚠️ OpenWrt host ccache 缺失或不可执行，仅重置 ccache 目标标记..."
+            rm -f staging_dir/host/stamp/.*ccache* staging_dir/host/bin/ccache* 2>/dev/null || true
+            rm -rf build_dir/host/ccache* 2>/dev/null || true
+          else
+            echo "✅ 已发现可用的 OpenWrt ccache，将复用工具链 stamp"
+          fi
+
+          # 关键修复: 移除 -j1 串行瓶颈，使用多线程并行构建 ccache 及其依赖。
+          echo "🔨 并行构建 OpenWrt ccache (${NPROC} 线程)..."
+          make -j"${NPROC}" V=sc tools/ccache/compile 2>&1 | tee toolchain-prebuild.log
 
           CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
           if ! ccache_is_usable; then
-            echo "::error::OpenWrt ccache 单独构建失败: ${CCACHE_BIN}"
+            echo "::error::OpenWrt ccache 构建失败: ${CCACHE_BIN}"
             echo "::error::请检查 toolchain-prebuild.log 中的 tools/ccache/compile 输出"
             exit 1
           fi
-          echo "✅ OpenWrt ccache 已就绪，开始并行构建其余工具链"
+          echo "✅ OpenWrt ccache 已就绪，开始并行构建其余工具链 (${NPROC} 线程)"
 
-          NPROC=$(($(nproc) + 1))
           echo "🔨 执行 OpenWrt tools/compile + toolchain/compile (${NPROC} 线程)..."
           make -j"${NPROC}" V=sc tools/compile toolchain/compile 2>&1 | tee -a toolchain-prebuild.log
 

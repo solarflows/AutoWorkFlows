@@ -584,11 +584,23 @@ jobs:
           echo "📌 下方编译循环已用 V=sc (仅摘要+命令), 完整分包日志由 BUILD_LOG=1 写入 logs/<pkg>/compile.txt"
           echo "::endgroup::"
 
+          # 导出下载参数，增强抗网络波动和重试能力
+          export CURL_OPTIONS="--connect-timeout 15 --retry 3 --retry-delay 2 --max-time 300"
+
           FAILED_PACKAGES=""
           # Compile each requested package and fail after collecting diagnostics.
           for pkg in $PACKAGES; do
             echo "::group::📦 Compile $pkg"
-            make package/"$pkg"/download V=sc 2>&1
+            # 软件包源码下载与重试机制 (应对 GitHub 频率限制或网络抖动)
+            echo "📥 下载 $pkg 源码包..."
+            if ! timeout 300 make package/"$pkg"/download V=sc 2>&1; then
+              echo "⚠️ $pkg 首次下载失败，清理残缺文件并等待 5 秒重试..."
+              find dl -size -1024c -exec rm -f {} + 2>/dev/null || true
+              sleep 5
+              timeout 300 make package/"$pkg"/download V=sc 2>&1 || echo "⚠️ $pkg 重试下载结束，尝试继续编译"
+            fi
+            find dl -size -1024c -exec rm -f {} + 2>/dev/null || true
+
             if ! make package/"$pkg"/compile \
               BUILD_LOG=1 V=sc -j$(nproc 2>/dev/null || echo 4) 2>&1; then
               echo "::error::⚠️ $pkg build failed"

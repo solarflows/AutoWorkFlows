@@ -49,6 +49,8 @@ checkout_partial_code -r https://github.com/sbwml/luci-app-mosdns -b v5 luci-app
 # PassWall1&2       科学上网
 format_git_clone_output -r https://github.com/Openwrt-Passwall/openwrt-passwall-packages && mvdir openwrt-passwall-packages
 checkout_partial_code -r https://github.com/solarflows/openwrt-passwall -b custom luci-app-passwall
+# 规范化 PKG_RELEASE: 统一 release 为整数规范
+sed -i 's/^PKG_RELEASE:=1\.1/PKG_RELEASE:=2/' luci-app-passwall/Makefile 2>/dev/null || true
 checkout_partial_code -r https://github.com/Openwrt-Passwall/openwrt-passwall2 luci-app-passwall2
 
 # S
