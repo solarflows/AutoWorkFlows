@@ -625,9 +625,19 @@ jobs:
             echo "✅ 已发现可用的 OpenWrt ccache，将复用工具链 stamp"
           fi
 
-          # 关键修复: 移除 -j1 串行瓶颈，使用多线程并行构建 ccache 及其依赖。
+          # ── 构建 OpenWrt ccache (默认标准多线程，失败则回退到 V=sc 详细输出) ──
           echo "🔨 并行构建 OpenWrt ccache (${NPROC} 线程)..."
-          make -j"${NPROC}" V=sc tools/ccache/compile 2>&1 | tee toolchain-prebuild.log
+          set +o pipefail
+          make -j"${NPROC}" tools/ccache/compile 2>&1 | tee toolchain-prebuild.log
+          CC_PRE_EXIT=${PIPESTATUS[0]}
+          set -o pipefail
+
+          if [ "$CC_PRE_EXIT" -ne 0 ]; then
+            echo "⚠️ ccache 并行构建失败，回退到单线程详细日志重试 (make -j1 V=sc)..."
+            set +o pipefail
+            make -j1 V=sc tools/ccache/compile 2>&1 | tee -a toolchain-prebuild.log
+            set -o pipefail
+          fi
 
           CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
           if ! ccache_is_usable; then
@@ -637,8 +647,25 @@ jobs:
           fi
           echo "✅ OpenWrt ccache 已就绪，开始并行构建其余工具链 (${NPROC} 线程)"
 
+          # ── 构建 tools + toolchain (默认标准并行，失败则回退到 V=sc 详细输出) ──
           echo "🔨 执行 OpenWrt tools/compile + toolchain/compile (${NPROC} 线程)..."
-          make -j"${NPROC}" V=sc tools/compile toolchain/compile 2>&1 | tee -a toolchain-prebuild.log
+          TC_EXIT=0
+          set +o pipefail
+          make -j"${NPROC}" tools/compile toolchain/compile 2>&1 | tee -a toolchain-prebuild.log
+          TC_EXIT=${PIPESTATUS[0]}
+          set -o pipefail
+
+          if [ "$TC_EXIT" -ne 0 ]; then
+            echo "⚠️ 工具链并行构建失败，回退到单线程详细日志重试 (make -j1 V=sc)..."
+            set +o pipefail
+            make -j1 V=sc tools/compile toolchain/compile 2>&1 | tee -a toolchain-prebuild.log
+            TC_EXIT=${PIPESTATUS[0]}
+            set -o pipefail
+            if [ "$TC_EXIT" -ne 0 ]; then
+              echo "::error::工具链构建重试失败，请检查 toolchain-prebuild.log"
+              exit 1
+            fi
+          fi
 
           CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
           if ! ccache_is_usable; then
