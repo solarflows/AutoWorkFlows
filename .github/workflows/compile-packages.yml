@@ -595,11 +595,11 @@ jobs:
             echo "📥 下载 $pkg 源码包..."
             if ! timeout 300 make package/"$pkg"/download V=sc 2>&1; then
               echo "⚠️ $pkg 首次下载失败，清理残缺文件并等待 5 秒重试..."
-              find dl -size -1024c -exec rm -f {} + 2>/dev/null || true
+              find dl -maxdepth 1 -type f -size -1024c -exec rm -f {} + 2>/dev/null || true
               sleep 5
               timeout 300 make package/"$pkg"/download V=sc 2>&1 || echo "⚠️ $pkg 重试下载结束，尝试继续编译"
             fi
-            find dl -size -1024c -exec rm -f {} + 2>/dev/null || true
+            find dl -maxdepth 1 -type f -size -1024c -exec rm -f {} + 2>/dev/null || true
 
             if ! make package/"$pkg"/compile \
               BUILD_LOG=1 V=sc -j$(nproc 2>/dev/null || echo 4) 2>&1; then

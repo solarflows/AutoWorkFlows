@@ -546,7 +546,7 @@ jobs:
             echo "⚠️ make download 并行失败,重试单线程..."
             timeout 3600 make download -j1 || { echo "❌ make download 彻底失败"; exit 1; }
           }
-          find dl -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
+          find dl -maxdepth 1 -type f -size -1024c -print -exec rm -f {} \; 2>/dev/null || true
 
           # ── dl/ 用统计而非树: 文件上千, 展开无意义 ──
           echo ""
@@ -576,9 +576,9 @@ jobs:
           echo "    └─ build_dir/    : $(du -sh openwrt/build_dir 2>/dev/null | cut -f1 || echo 'N/A')"
 
       # ───────── 工具链预编译（确保 OpenWrt 自带 ccache 可用）─────────
-      # 这不是拆分 Job，而是在同一工作区内显式先完成 tools/toolchain 依赖。
-      # 冷缓存时正常构建；缓存命中时由 OpenWrt stamp 快速跳过。
-      # 必须在 make defconfig 之后重新刷新 stamp 时间戳，避免 stamp 被 .config 判定过期。
+      # 刻意设计: 仅当 host ccache 不可用时编译 tools/ccache 以提供 ccache 命令。
+      # 若缓存已命中且 ccache 可用，刷新 stamp 后立即跳过，严禁显式调用
+      # tools/compile toolchain/compile，避免绕过顶层 stamp 导致无 build_dir 全量重编。
       - name: 🔧 Prepare toolchain & ccache
         id: prepare_toolchain
         run: |
@@ -615,64 +615,52 @@ jobs:
             fi
           fi
 
-          # 关键修复: 仅当 ccache 缺失或损坏时，重置 ccache 自身目标标记重新构建，
+          # 关键优化: 若 ccache 已可用且工具链缓存已恢复，跳过预编译直接进入固件构建，
+          # 依赖顶层 Makefile 目标 world 的 stamp 机制秒级跳过工具链。
+          if ccache_is_usable && [ "$TOOLCHAIN_RESTORED" = "true" ]; then
+            echo "✅ 已发现可用的 OpenWrt ccache 且工具链已恢复，完全复用缓存，跳过预编译"
+            echo "🔧 OpenWrt ccache: ${CCACHE_BIN}"
+            "$CCACHE_BIN" --version
+            echo "toolchain_prepared=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 仅当 ccache 缺失或损坏时，重置 ccache 目标标记重新构建 ccache 自身，
           # 绝不暴力删除整个 staging_dir/host，避免摧毁缓存中已就绪的其它 host 工具。
           if ! ccache_is_usable; then
-            echo "⚠️ OpenWrt host ccache 缺失或不可执行，仅重置 ccache 目标标记..."
+            echo "⚠️ OpenWrt host ccache 缺失或不可执行，重置 ccache 目标标记并构建..."
             rm -f staging_dir/host/stamp/.*ccache* staging_dir/host/bin/ccache* 2>/dev/null || true
             rm -rf build_dir/host/ccache* 2>/dev/null || true
-          else
-            echo "✅ 已发现可用的 OpenWrt ccache，将复用工具链 stamp"
-          fi
 
-          # ── 构建 OpenWrt ccache (默认标准多线程，失败则回退到 V=sc 详细输出) ──
-          echo "🔨 并行构建 OpenWrt ccache (${NPROC} 线程)..."
-          set +o pipefail
-          make -j"${NPROC}" tools/ccache/compile 2>&1 | tee toolchain-prebuild.log
-          CC_PRE_EXIT=${PIPESTATUS[0]}
-          set -o pipefail
-
-          if [ "$CC_PRE_EXIT" -ne 0 ]; then
-            echo "⚠️ ccache 并行构建失败，回退到单线程详细日志重试 (make -j1 V=sc)..."
+            # ── 仅构建 OpenWrt ccache 自身提供编译加速 ──
+            echo "🔨 并行构建 OpenWrt ccache (${NPROC} 线程)..."
             set +o pipefail
-            make -j1 V=sc tools/ccache/compile 2>&1 | tee -a toolchain-prebuild.log
+            make -j"${NPROC}" tools/ccache/compile 2>&1 | tee toolchain-prebuild.log
+            CC_PRE_EXIT=${PIPESTATUS[0]}
             set -o pipefail
-          fi
 
-          CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
-          if ! ccache_is_usable; then
-            echo "::error::OpenWrt ccache 构建失败: ${CCACHE_BIN}"
-            echo "::error::请检查 toolchain-prebuild.log 中的 tools/ccache/compile 输出"
-            exit 1
-          fi
-          echo "✅ OpenWrt ccache 已就绪，开始并行构建其余工具链 (${NPROC} 线程)"
+            if [ "$CC_PRE_EXIT" -ne 0 ]; then
+              echo "⚠️ ccache 并行构建失败，回退到单线程详细日志重试 (make -j1 V=sc)..."
+              set +o pipefail
+              make -j1 V=sc tools/ccache/compile 2>&1 | tee -a toolchain-prebuild.log
+              set -o pipefail
+            fi
 
-          # ── 构建 tools + toolchain (默认标准并行，失败则回退到 V=sc 详细输出) ──
-          echo "🔨 执行 OpenWrt tools/compile + toolchain/compile (${NPROC} 线程)..."
-          TC_EXIT=0
-          set +o pipefail
-          make -j"${NPROC}" tools/compile toolchain/compile 2>&1 | tee -a toolchain-prebuild.log
-          TC_EXIT=${PIPESTATUS[0]}
-          set -o pipefail
-
-          if [ "$TC_EXIT" -ne 0 ]; then
-            echo "⚠️ 工具链并行构建失败，回退到单线程详细日志重试 (make -j1 V=sc)..."
-            set +o pipefail
-            make -j1 V=sc tools/compile toolchain/compile 2>&1 | tee -a toolchain-prebuild.log
-            TC_EXIT=${PIPESTATUS[0]}
-            set -o pipefail
-            if [ "$TC_EXIT" -ne 0 ]; then
-              echo "::error::工具链构建重试失败，请检查 toolchain-prebuild.log"
+            CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
+            if ! ccache_is_usable; then
+              echo "::error::OpenWrt ccache 构建失败: ${CCACHE_BIN}"
+              echo "::error::请检查 toolchain-prebuild.log 中的 tools/ccache/compile 输出"
               exit 1
             fi
+            for cmd in gcc g++ cc c++; do
+              ln -sf ccache "staging_dir/host/bin/$cmd" 2>/dev/null || true
+            done
+            echo "✅ OpenWrt ccache 已就绪"
           fi
 
-          CCACHE_BIN="$(pwd)/staging_dir/host/bin/ccache"
-          if ! ccache_is_usable; then
-            echo "::error::工具链预编译完成，但 OpenWrt ccache 仍不可用: ${CCACHE_BIN}"
-            echo "::error::请检查 CONFIG_CCACHE=y、tools/compile 输出以及 toolchain-prebuild.log"
-            exit 1
-          fi
+          # 无论是新编 ccache 还是冷缓存，工具链的主体编译统一交由后续 5. Build Firmware
+          # 中的 make 默认目标 world 执行，由顶层 stamp 守门并受 BUILD_LOG=1 规范记录，
+          # 绝不在此显式调用 tools/compile toolchain/compile 造成绕过 stamp 重新全编译。
           echo "🔧 OpenWrt ccache: ${CCACHE_BIN}"
           "$CCACHE_BIN" --version
           echo "toolchain_prepared=true" >> "$GITHUB_OUTPUT"
