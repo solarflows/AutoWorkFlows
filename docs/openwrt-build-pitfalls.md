@@ -331,3 +331,118 @@ The authoritative failed-package source is `error.txt`:
 ```
 
 Written by make's `ERROR` macro (see `include/verbose.mk`). Extract the package path between `ERROR:` and `failed to build`, strip any ` [host]`-style suffix, and map it to `logs*/<pkg>/compile.txt` / `host-compile.txt` / `download.txt`. Keep the "last line is not `time:`" check only as a fallback for interrupted logs (e.g. OOM kills the wrapper before it prints).
+
+## 工具链缓存命中后仍全量重编 (显式子目标绕过顶层 stamp)
+
+### Symptom
+
+工具链缓存确认命中, 但 `🔧 Prepare toolchain & ccache` 仍然耗时数十分钟, 日志中逐条出现 `make[2] -C tools/... compile` 与 `make[2] -C toolchain/... compile`。warm-cache 与冷启动耗时接近, 缓存几乎没有节省时间。
+
+Evidence (run #34805493661, commit f65f35c):
+
+| Target | 缓存命中 | `Prepare toolchain & ccache` | `5. Build Firmware` |
+|---|---|---|---|
+| mt798x (GCC 11) | ✅ `immwrt-v2-toolchain-mt798x-dcf4ec5a69fea0fa` (538 MB) | 9m 14s | 34m 48s |
+| ipq807x (GCC 14) | ✅ `immwrt-v2-toolchain-ipq807x-488e2adfc91d2d8d` | 40m 28s | — |
+| ipq60xx (GCC 14) | ✅ 同上 key | 44m 15s | — |
+
+对比完全冷缓存的 run #34753810756 (ipq807x `Prepare` 46m 37s): 命中缓存仅节省约 6 分钟。GCC 14 (qualcommax) 自身的 C++ 前端与 libstdc++ 体量远大于 mt798x 的 GCC 11, 因此重编代价差异巨大。
+
+### Verified Root Cause
+
+工具链缓存路径只有编译产物, 没有构建中间目录:
+
+```yaml
+path: |
+  openwrt/staging_dir/host*
+  openwrt/staging_dir/tool*
+```
+
+而 OpenWrt host 工具的构建门禁位于 `build_dir/` (源码依据: fork `include/host-build.mk`):
+
+```makefile
+HOST_STAMP_BUILT:=$(HOST_BUILD_DIR)/.built
+$(_host_target)host-compile: $(HOST_STAMP_BUILT) $(HOST_STAMP_INSTALLED)
+```
+
+顶层 `Makefile` 用 stamp 目标守门整个子树:
+
+```makefile
+world: prepare $(target/stamp-compile) ...
+prepare: .config $(tools/stamp-compile) $(toolchain/stamp-compile)
+$(toolchain/stamp-compile): $(tools/stamp-compile) ...
+```
+
+`include/subdir.mk` 的 `stampfile` 定义让 `$(tools/stamp-compile)` 先跑 `timestamp.pl -n <stamp> tools ...`, stamp 比源目录新时直接成功返回 —— **整个 `tools`/`toolchain` 子树在秒级内被跳过**。
+
+显式在命令行传入子目录目标 `make tools/compile toolchain/compile` 会绕过这层 stamp 守门: make 直接求值子目录目标, 不再经过 `$(tools/stamp-compile)`, `timestamp.pl` 从未运行; 于是每个 host 工具的 `build_dir/host/<pkg>/.built` 依赖被逐个检查, 而 `build_dir` 不在缓存路径内 (干净 Runner 上为空)。make 判定所有工具未构建, 把整套 host 工具与交叉编译器重新全量编译了一遍。
+
+### Fix
+
+commit 273fc79 (`fix(ci): 避免绕过工具链顶层缓存并修复 dl 残损文件递归误删`):
+
+- 严禁显式调用 `make tools/compile toolchain/compile`; 工具链主体编译统一交由 `5. Build Firmware` 的默认目标 `world` 调度, 由顶层 stamp 守门。
+- 工具链缓存已恢复且 `staging_dir/host/bin/ccache` 可用时, `Prepare` 步骤刷新 stamp 时间戳后直接 `exit 0`, 完全复用缓存。
+- 仅当 `ccache` 缺失/不可执行时, 才显式执行 `make tools/ccache/compile` (连同 tar/xz/patch/libdeflate/sed/flock/zstd 依赖约 2 分钟, 失败回退 `make -j1 V=sc`), 以提供 `5. Build Firmware` 需要的 ccache 命令。
+
+### Verification
+
+warm-cache 全量构建中 `🔧 Prepare toolchain & ccache` 应接近 0 秒; `5. Build Firmware` 的日志 (构建以默认 silent 模式运行, `make -C tools/...` 行会照常打印) 不应再出现被缓存覆盖的 host 工具重编。
+
+## `find dl -size -1024c` 递归误删模块缓存 (SDK 编译大面积失败)
+
+### Symptom
+
+SDK+IB 运行中三个 target 全部在 `Build packages via SDK` 失败 (run #34940720655, commit af3e8ff), 失败包集中在 Go/Rust 系:
+
+```text
+mt798x:  hysteria geoview sing-box v2ray-plugin xray-core + package/feeds/packages/rust [host]
+ipq807x: sing-box
+ipq60xx: hysteria sing-box v2ray-plugin xray-core
+```
+
+Go 语言包统一报同一个错误 (以 sing-box 为例):
+
+```text
+../../../../../dl/go-mod-cache/google.golang.org/protobuf@v1.36.11/internal/editiondefaults/defaults.go:11:12: pattern editions_defaults.binpb: no matching files found
+make[2]: *** [Makefile:137: .../sing-box-1.14.1/.built] Error 1
+```
+
+Rust host 包报 checksum 校验失败:
+
+```text
+error: failed to calculate checksum of: .../vendor/cc-1.2.28/Cargo.toml.orig
+Caused by:
+  failed to open file `.../vendor/cc-1.2.28/Cargo.toml.orig`
+Caused by:
+  No such file or directory (os error 2)
+```
+
+### Verified Root Cause
+
+commit 530bb50 为下载重试引入的残损文件清理命令没有限制深度:
+
+```bash
+find dl -size -1024c -exec rm -f {} + 2>/dev/null || true
+```
+
+它递归扫描整个 `dl/`, 而 OpenWrt 把两类模块缓存也放在 `dl/` 下:
+
+- `dl/go-mod-cache/` — Go module 缓存: protobuf 的 `editions_defaults.binpb` 通过 `//go:embed` 编译进二进制, 该文件小于 1KB, 被删除后编译立刻崩溃;
+- `dl/cargo/` — crate 缓存: cargo 依据 `Cargo.toml.orig` 计算/校验 checksum, 文件缺失直接报上表错误。
+
+循环里每个包编译前都执行一次清理, 且是同一份共享的 `dl/go-mod-cache`, 因此破坏是累积且全局的: 任何一个包有一次下载重试或清理即可污染后续全部 Go/Rust 包。
+
+### Fix
+
+commit 273fc79: 两处清理 (编译前 + 下载重试分支) 收窄为只在 `dl/` 根目录删除普通文件:
+
+```bash
+find dl -maxdepth 1 -type f -size -1024c -exec rm -f {} + 2>/dev/null || true
+```
+
+`compile-firmware.yml` 的 `📥 Download Source Packages` 同类清理也已同步收窄 (`.github/archive/workflows/firmware_builder.yml` 中的旧命令为历史参考, 不再维护)。
+
+### Verification
+
+重跑 SDK+IB: Go/Rust 包应正常完成; 可检查 `dl/go-mod-cache/google.golang.org/protobuf@<ver>/internal/editiondefaults/` 下载后包含 `editions_defaults.binpb`。
