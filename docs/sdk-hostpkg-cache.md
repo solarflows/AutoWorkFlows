@@ -72,11 +72,11 @@ path: |
 
 ## ccache sharing boundary
 
-Both executors use the same `openwrt/.ccache` path. Full builds restore/save/purge the shared `immwrt-v2-ccache-<target>-<run_id>` namespace; SDK builds first restore and may save/purge their own `immwrt-v2-sdk-ccache-<target>-<run_id>` compiler snapshot, then fall back to the full namespace when needed. SDK never saves to or purges the full namespace. OpenWrt's `rules.mk` supplies `CCACHE_DIR=$(TOPDIR)/.ccache` and `CCACHE_BASEDIR=$(TOPDIR)`; both workflows use `openwrt` as `TOPDIR`. This makes either snapshot structurally valid, but hit rate still depends on compiler version, target triple, flags, configuration, source, and wrapper form.
+Both executors use the same `openwrt/.ccache` path and 100% share the unified `immwrt-v2-ccache-<target>-<run_id>` namespace. OpenWrt's `rules.mk` supplies `CCACHE_DIR=$(TOPDIR)/.ccache` and `CCACHE_BASEDIR=$(TOPDIR)`; both workflows use `openwrt` as `TOPDIR`. Full builds and SDK incremental builds restore from `immwrt-v2-ccache-<target>-` prefix, write back to `immwrt-v2-ccache-<target>-<run_id>`, and purge older snapshots to retain only the newest 1 snapshot per target. This eliminates duplicate ccache snapshots, frees ~2.2GB of quota, and allows compiler objects to be shared bidirectionally.
 
 ## Verification
 
 - First SDK/IB run after this change: expect an SDK-specific miss followed, only then, by a separate full-toolchain fallback restore; a successful compile saves `immwrt-v2-sdk-hostpkg-<target>-<run_id>`.
 - Subsequent runs for the same target: expect an SDK-specific prefix hit and no repeated cold host-tool bootstrap for cached paths; if a tool is incompatible with the selected SDK, OpenWrt stamps force the affected tool to rebuild.
-- A successful SDK compile with valid wrappers may also save `immwrt-v2-sdk-ccache-<target>-<run_id>`; this snapshot is retained independently and never updates the full-build ccache namespace.
+- A successful compile saves the updated `immwrt-v2-ccache-<target>-<run_id>` into the shared ccache namespace, retaining only the latest single snapshot.
 - A full build may create the SDK snapshot, while retention is performed only by the SDK executor.
