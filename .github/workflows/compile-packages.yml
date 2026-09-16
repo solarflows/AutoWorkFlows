@@ -947,10 +947,15 @@ jobs:
           if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
             FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
           fi
+
+          TARGET_CONFIG_JSON=$(jq -c --arg t "${IMMWRT_TARGET}" '.targets[] | select(.target == $t)' "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/targets.json" 2>/dev/null || echo "")
+          CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
+
           cat > build-info.json <<JSONEOF
           {
             "target": "${IMMWRT_TARGET}",
             "config": "${IMMWRT_TARGET}",
+            "config_sha": "${CONFIG_SHA}",
             "packages_repo": "${{ inputs.packages_feed_repo }}",
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${PKG_COMMIT_FULL}",
@@ -1084,6 +1089,11 @@ jobs:
           PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
             grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
             sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | sort -u | tr '\n' ' ')
+          EXCLUDES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
+            grep -E '^# CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+ is not set$' | \
+            sed -E 's/^# CONFIG_PACKAGE_([^ ]+) is not set$/-\1/' | sort -u | tr '\n' ' ')
+          PACKAGES="${PACKAGES} ${EXCLUDES}"
+          PACKAGES=$(echo "$PACKAGES" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
           # IB 固件签名: 与 SDK 共用同一对密钥 (通过 BUILD_KEY_APK_* 注入 make image)
           # fingerprint=none 表示密钥缺失/无效, IB 固件同样跳过签名
           SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"

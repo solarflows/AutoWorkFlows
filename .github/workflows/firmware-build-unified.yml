@@ -96,7 +96,8 @@ jobs:
         with:
           repository: ${{ github.repository }}
           ref: ${{ github.ref }}
-          sparse-checkout: openwrt-configs/immortalwrt/targets.json
+          sparse-checkout: |
+            openwrt-configs/immortalwrt
           path: AutoWorkFlows
 
       - name: Resolve packages updater targets
@@ -483,23 +484,44 @@ jobs:
               STANDARD_PACKAGES_CHANGED=true
               STD_PKG_STATUS="🟠 变更"
             fi
+
+            # ── 目标配置文件变更检测 (seed 种子目录 + targets.json 配置定义) ──
+            CURR_TARGET_CFG=$(jq -c --arg t "$MATRIX_TARGET" '.[] | select(.target == $t)' /tmp/filtered_targets.json 2>/dev/null || echo "")
+            CURR_CFG=$( (echo "$CURR_TARGET_CFG"; find "AutoWorkFlows/openwrt-configs/immortalwrt/${MATRIX_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 )
+            LAST_CFG=$(jq -r ".\"${MATRIX_TARGET}\".config_sha // empty" build-state.json)
+            CONFIG_CHANGED=false
+            if [ -n "$LAST_CFG" ] && [ "$LAST_CFG" = "$CURR_CFG" ]; then
+              echo "  ✅ [${MATRIX_TARGET}] 目标配置未变更 (${CURR_CFG:0:7})"
+              CFG_STATUS="✅ 未变更"
+            elif [ -n "$LAST_CFG" ]; then
+              echo "  🟣 [${MATRIX_TARGET}] 目标配置变更: ${LAST_CFG:0:7} → ${CURR_CFG:0:7}"
+              CONFIG_CHANGED=true
+              CFG_STATUS="🟣 变更"
+            else
+              echo "  🟣 [${MATRIX_TARGET}] 目标配置无历史指纹 (${CURR_CFG:0:7})，确立基准走全量"
+              CONFIG_CHANGED=true
+              CFG_STATUS="🟣 无基准"
+            fi
+
             jq --arg t "$MATRIX_TARGET" --arg src "$CURR_SRC" --arg pkg "$CURR_PKG" --arg std_pkg "$CURR_STD_PKG" \
+              --arg cfg "$CURR_CFG" \
               --argjson src_changed "$SOURCE_CHANGED" --argjson pkg_changed "$PACKAGES_CHANGED" \
               --argjson standard_packages_changed "$STANDARD_PACKAGES_CHANGED" \
               --argjson kernel_changed "$KERNEL_CHANGED" \
-              '. + [{target:$t, current_source_sha:$src, current_packages_sha:$pkg, current_standard_packages_sha:$std_pkg, source_changed:$src_changed, packages_changed:$pkg_changed, standard_packages_changed:$standard_packages_changed, kernel_changed:$kernel_changed}]' \
+              --argjson config_changed "$CONFIG_CHANGED" \
+              '. + [{target:$t, current_source_sha:$src, current_packages_sha:$pkg, current_standard_packages_sha:$std_pkg, current_config_sha:$cfg, source_changed:$src_changed, packages_changed:$pkg_changed, standard_packages_changed:$standard_packages_changed, kernel_changed:$kernel_changed, config_changed:$config_changed}]' \
               /tmp/target_changes.json > /tmp/target_changes.new
             mv /tmp/target_changes.new /tmp/target_changes.json
-            echo "${MATRIX_TARGET}|${SRC_STATUS}|${PKG_STATUS}|${STD_PKG_STATUS}|${KERNEL_STATUS}" >> /tmp/change_report.txt
+            echo "${MATRIX_TARGET}|${SRC_STATUS}|${PKG_STATUS}|${STD_PKG_STATUS}|${KERNEL_STATUS}|${CFG_STATUS}" >> /tmp/change_report.txt
           done
 
           {
             echo "### 🔍 变更检测（per-target）"
             echo ""
-            echo "| 目标 | 源码 | 插件 feed | 标准 packages | 内核/Toolchain |"
-            echo "|---|---|---|---|---|"
-            while IFS='|' read -r t s p sp k; do
-              echo "| \`${t}\` | ${s} | ${p} | ${sp} | ${k} |"
+            echo "| 目标 | 源码 | 插件 feed | 标准 packages | 内核/Toolchain | 目标配置 |"
+            echo "|---|---|---|---|---|---|"
+            while IFS='|' read -r t s p sp k c; do
+              echo "| \`${t}\` | ${s} | ${p} | ${sp} | ${k} | ${c} |"
             done < /tmp/change_report.txt
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -561,6 +583,7 @@ jobs:
             SRC_CHANGED=$(echo "$CHANGE" | jq -r '.source_changed')
             PKG_CHANGED=$(echo "$CHANGE" | jq -r '.packages_changed')
             STANDARD_PKG_CHANGED=$(echo "$CHANGE" | jq -r '.standard_packages_changed')
+            CONFIG_CHANGED=$(echo "$CHANGE" | jq -r '.config_changed // false')
             SDK_READY=true; IB_READY=true
             SHOULD_FW=false; SHOULD_SDK_IB=false; SHOULD_SDK_PKGS=false
             SHOULD_PUB_FW=false; SHOULD_PUB_PKGS=false
@@ -578,7 +601,7 @@ jobs:
               if [ "$TRIGGER" = "sdk-packages" ] && [ "$STANDARD_PKG_CHANGED" = "false" ]; then
                 need_sdk=true
               elif [ "$TRIGGER" = "smart" ]; then
-                if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ] && [ "$STANDARD_PKG_CHANGED" = "false" ]; then
+                if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ] && [ "$STANDARD_PKG_CHANGED" = "false" ] && [ "$CONFIG_CHANGED" = "false" ]; then
                   # Package-only changes use the existing SDK and IB together.
                   need_sdk=true
                   need_ib=true
@@ -612,6 +635,9 @@ jobs:
               SHOULD_FW=true; SHOULD_PUB_FW=true
             elif [ "$STANDARD_PKG_CHANGED" = "true" ]; then
               echo "🟠 [${MATRIX_TARGET}] 标准 packages feed 已变更,强制全量编译"
+              SHOULD_FW=true; SHOULD_PUB_FW=true
+            elif [ "$CONFIG_CHANGED" = "true" ] && [ "$TRIGGER" = "smart" ]; then
+              echo "🟣 [${MATRIX_TARGET}] 目标配置文件已更新，smart 模式触发全量编译"
               SHOULD_FW=true; SHOULD_PUB_FW=true
             elif [ "$TRIGGER" = "sdk-packages" ]; then
               if [ "$SDK_READY" = "true" ]; then
@@ -858,10 +884,12 @@ jobs:
             STD_PKG_REPO=$(jq -r '.standard_packages_repo // empty' "$info" 2>/dev/null)
             STD_PKG_BRANCH=$(jq -r '.standard_packages_branch // empty' "$info" 2>/dev/null)
             STD_PKG_SHA=$(jq -r '.standard_packages_sha // empty' "$info" 2>/dev/null)
+            CFG_SHA=$(jq -r '.config_sha // empty' "$info" 2>/dev/null)
             [ -z "$STATE_TARGET" ] && continue
             echo "ℹ️ 合并状态来自 $(basename "$(dirname "$info")") → ${STATE_TARGET}"
             jq --arg target "$STATE_TARGET" --arg src "$SRC_SHA" --arg pkg "$PKG_SHA" \
               --arg std_pkg_repo "$STD_PKG_REPO" --arg std_pkg_branch "$STD_PKG_BRANCH" --arg std_pkg_sha "$STD_PKG_SHA" \
+              --arg cfg "$CFG_SHA" \
               --arg mode "$(jq -r '.build_mode // "unknown"' "$info" 2>/dev/null)" \
               --arg now "$(date +'%Y-%m-%d %H:%M:%S')" \
               '.[$target] = ((.[$target] // {})
@@ -870,6 +898,7 @@ jobs:
                 + (if $std_pkg_repo != "" then {standard_packages_repo:$std_pkg_repo} else {} end)
                 + (if $std_pkg_branch != "" then {standard_packages_branch:$std_pkg_branch} else {} end)
                 + (if $std_pkg_sha != "" then {standard_packages_sha:$std_pkg_sha} else {} end)
+                + (if $cfg != "" then {config_sha:$cfg} else {} end)
                 + {last_build:$now, last_mode:$mode})' \
               build-state.json > build-state.new
             mv build-state.new build-state.json

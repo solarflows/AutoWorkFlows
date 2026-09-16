@@ -808,23 +808,29 @@ jobs:
           fi
           echo "::endgroup::"
 
-      - name: 应用 Qualcomm feed 源补丁
+      - name: 应用 Qualcomm 源码补丁
         if: steps.check.outputs.has_update == 'true' || steps.check.outputs.has_update == 'false'
         id: apply-source-patch
         run: |
           set -euo pipefail
-          PATCH_FILE="$GITHUB_WORKSPACE/AutoWorkFlows/.github/diy/lede/patches/qualcommax/0001-use-solarflows-packages-feed.patch"
-          [ -f "$PATCH_FILE" ] || { echo "::error::缺少 Qualcomm feed 源补丁: $PATCH_FILE"; exit 1; }
-          if git grep -qF 'src-git packages https://github.com/solarflows/packages.git;qualcommax' -- feeds.conf.default; then
-            echo "✅ Qualcomm packages feed 源已存在"
-            echo "patch_changed=false" >> "$GITHUB_OUTPUT"
-          else
-            git apply --check --whitespace=nowarn "$PATCH_FILE"
-            git apply --whitespace=nowarn "$PATCH_FILE"
-            git add feeds.conf.default
-            git commit -m "qualcommax: use solarflows packages feed"
-            echo "patch_changed=true" >> "$GITHUB_OUTPUT"
+          PATCH_DIR="$GITHUB_WORKSPACE/AutoWorkFlows/.github/diy/lede/patches/qualcommax"
+          patch_applied=false
+          if [ -d "$PATCH_DIR" ]; then
+            while IFS= read -r -d '' patch_file; do
+              patch_name=$(basename "$patch_file")
+              echo "检查补丁: $patch_name"
+              if git apply --check --whitespace=nowarn "$patch_file" 2>/dev/null; then
+                git apply --whitespace=nowarn "$patch_file"
+                git add .
+                git commit -m "qualcommax: apply $patch_name"
+                echo "✅ 成功应用补丁: $patch_name"
+                patch_applied=true
+              else
+                echo "ℹ️ 补丁已应用或无需应用: $patch_name"
+              fi
+            done < <(find "$PATCH_DIR" -type f -name '*.patch' -print0 | sort -z)
           fi
+          echo "patch_changed=${patch_applied}" >> "$GITHUB_OUTPUT"
 
       - name: 推送更新到目标仓库
         if: steps.check.outputs.has_update == 'true' || steps.apply-source-patch.outputs.patch_changed == 'true'

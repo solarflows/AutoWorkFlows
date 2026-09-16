@@ -18,4 +18,3 @@ Subject: [PATCH] Update xz2 and use it static
  
  # Dependencies needed by the build-metrics feature
  sysinfo = { version = "0.38.4", default-features = false, optional = true, features = ["system"] }
- 

@@ -1386,10 +1386,14 @@ jobs:
             FEEDS_MD_JSON=$(echo "$FEEDS_MD_RAW" | jq -Rs '.')
           fi
 
+          TARGET_CONFIG_JSON=$(jq -c --arg t "${IMMWRT_TARGET}" '.targets[] | select(.target == $t)' "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/targets.json" 2>/dev/null || echo "")
+          CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
+
           cat > build-info.json <<JSONEOF
           {
             "target": "${IMMWRT_TARGET}",
             "config": "${IMMWRT_TARGET}",
+            "config_sha": "${CONFIG_SHA}",
             "source_repo": "${{ inputs.matrix_repo }}",
             "source_ref": "${{ inputs.matrix_ref }}",
             "source_sha": "${{ steps.clone_packages.outputs.sha_full }}",

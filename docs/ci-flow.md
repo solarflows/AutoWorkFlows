@@ -101,6 +101,7 @@ flowchart TD
 | `source_sha` | `git ls-remote <repo> <ref>` | 源码分支 HEAD |
 | `packages_sha` | `git ls-remote <feed_repo> <packages_branch>` | 插件 feed HEAD |
 | `standard_packages_sha` | `git ls-remote <std_repo> <std_branch>` | 标准 packages feed HEAD |
+| `config_sha` | `targets.json` 目标定义 + `openwrt-configs/immortalwrt/<target>/*` 文件的 SHA256 聚合 | 目标配置/种子指纹 |
 | `kernel_changed` | compare API → 本地浅克隆 diff 兜底 | 命中 `target/linux`、`toolchain`、`config/`、`include/`、`rules.mk`、`make.mk`、`package/kernel/` |
 
 变更范围检测的降级链：**compare API → 本地 `git diff` → 保守视为 kernel 变更（走全量）**。
@@ -115,7 +116,9 @@ flowchart TD
     TR -->|"full"| FULL
     TR -->|"其他"| STD{"标准 packages<br/>已变更?"}
     STD -->|"是"| FULL
-    STD -->|"否"| TR2{"trigger<br/>== sdk-packages?"}
+    STD -->|"否"| CFG{"目标配置<br/>已变更?"}
+    CFG -->|"是"| FULL
+    CFG -->|"否"| TR2{"trigger<br/>== sdk-packages?"}
     TR2 -->|"是"| SDKOK{"SDK 就绪?"}
     SDKOK -->|"是"| PKGONLY["仅 packages<br/>SHOULD_SDK_PKGS=true"]
     SDKOK -->|"否"| FULL
