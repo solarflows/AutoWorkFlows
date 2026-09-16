@@ -664,7 +664,7 @@ jobs:
           REPO="${{ github.repository }}"
           PREFIX="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-"
           CURRENT="${PREFIX}${{ github.run_id }}"
-          KEEP_TOTAL=3
+          KEEP_TOTAL=1
           KEEP_OLD=$((KEEP_TOTAL - 1))
           set +e
           HOSTPKG_LIST=$(gh cache list --repo "$REPO" --key "$PREFIX" --limit 100 --json id,key,createdAt)
@@ -714,7 +714,7 @@ jobs:
           REPO="${{ github.repository }}"
           PREFIX="immwrt-v2-sdk-ccache-${IMMWRT_TARGET}-"
           CURRENT="${PREFIX}${{ github.run_id }}"
-          KEEP_TOTAL=3
+          KEEP_TOTAL=1
           KEEP_OLD=$((KEEP_TOTAL - 1))
           set +e
           SDK_CCACHE_LIST=$(gh cache list --repo "$REPO" --key "$PREFIX" --limit 100 --json id,key,createdAt)
