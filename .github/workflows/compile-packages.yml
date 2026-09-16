@@ -203,19 +203,19 @@ jobs:
               echo "${label}_key=" >> "$GITHUB_OUTPUT"
               echo "${label}_ref=" >> "$GITHUB_OUTPUT"
               echo "${label}_restore_key=$fallback_key" >> "$GITHUB_OUTPUT"
-              echo "${label}_restore_keys=" >> "$GITHUB_OUTPUT"
+              echo "${label}_restore_keys=$prefix" >> "$GITHUB_OUTPUT"
               echo "${label}_lookup=failed" >> "$GITHUB_OUTPUT"
-              echo "::warning title=${label} cache lookup::查询 ${label} 缓存失败，不使用模糊 restore-keys"
-              printf '%s\n' "- ${label} 缓存 API 查询失败，本次仅使用当前 run 的精确 key，不使用模糊回退。" >> "$ANNOTATIONS_FILE"
+              echo "::warning title=${label} cache lookup::查询 ${label} 缓存失败，回退到前缀模糊匹配"
+              printf '%s\n' "- ${label} 缓存 API 查询失败，回退到前缀模糊匹配。" >> "$ANNOTATIONS_FILE"
             else
               echo "${label}_found=false" >> "$GITHUB_OUTPUT"
               echo "${label}_key=" >> "$GITHUB_OUTPUT"
               echo "${label}_ref=" >> "$GITHUB_OUTPUT"
               echo "${label}_restore_key=$fallback_key" >> "$GITHUB_OUTPUT"
-              echo "${label}_restore_keys=" >> "$GITHUB_OUTPUT"
+              echo "${label}_restore_keys=$prefix" >> "$GITHUB_OUTPUT"
               echo "${label}_lookup=miss" >> "$GITHUB_OUTPUT"
-              echo "::notice title=${label} cache lookup::未找到可访问的 ${label} 缓存，将按回退路径继续"
-              printf '%s\n' "- 未找到可访问的 ${label} 缓存，已按回退路径继续。" >> "$ANNOTATIONS_FILE"
+              echo "::notice title=${label} cache lookup::未找到精确 ${label} 缓存，回退到前缀模糊匹配"
+              printf '%s\n' "- 未找到精确 ${label} 缓存，回退到前缀模糊匹配。" >> "$ANNOTATIONS_FILE"
             fi
           }
 
@@ -266,7 +266,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           key: ${{ steps.sdk-cache-lookup.outputs.full_restore_key }}
-          restore-keys: ${{ steps.sdk-cache-lookup.outputs.full_restore_keys }}
+          restore-keys: |
+            ${{ steps.sdk-cache-lookup.outputs.full_restore_keys }}
+            immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -282,7 +284,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           key: ${{ steps.sdk-cache-lookup.outputs.ccache_restore_key }}
-          restore-keys: ${{ steps.sdk-cache-lookup.outputs.ccache_restore_keys }}
+          restore-keys: |
+            ${{ steps.sdk-cache-lookup.outputs.ccache_restore_keys }}
+            immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
           path: openwrt/.ccache
 
       - name: Setup Signing Key
