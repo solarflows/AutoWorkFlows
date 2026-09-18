@@ -1253,7 +1253,11 @@ jobs:
           echo "║  📦 Package firmware artifacts        ║"
           echo "╚══════════════════════════════════════╝"
           mkdir -p release/firmware
-          find bin/targets -type f -not -path "*/packages/*" -exec cp {} release/firmware/ \; 2>/dev/null || true
+          find bin/targets -type f \
+            -not -path "*/packages/*" \
+            -not -name "*-sdk-*" \
+            -not -name "*-imagebuilder-*" \
+            -exec cp {} release/firmware/ \; 2>/dev/null || true
           mkdir -p release/passwall
           find bin/packages \( -name "*passwall*.ipk" -o -name "*passwall*.apk" \) -exec cp {} release/passwall/ \; 2>/dev/null || true
           DEPS=(chinadns-ng dns2socks geoview haproxy hysteria ipt2socks microsocks naiveproxy \
@@ -1465,15 +1469,42 @@ jobs:
             echo "::error::固件目录为空，拒绝创建空 Release"
             exit 1
           }
-          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" --repo "$RELEASE_REPO" "$FIRMWARE_DIR"/* --clobber
-            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" \
-              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md --draft=false
-          else
+
+          upload_asset_retry() {
+            local tag="$1"
+            local repo="$2"
+            shift 2
+            local uploaded=false
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
+                uploaded=true
+                break
+              fi
+              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
+              sleep $((attempt * 5))
+            done
+            if [ "$uploaded" != "true" ]; then
+              echo "::error::资产上传失败，已达最大重试次数: $*"
+              return 1
+            fi
+          }
+
+          if ! gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            echo "📦 创建 Release: ${RELEASE_TAG} (repo: ${RELEASE_REPO})"
             gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" \
               --target "${{ steps.clone_packages.outputs.sha_full }}" \
-              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md "$FIRMWARE_DIR"/*
+              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md
+          else
+            echo "📝 更新已有 Release: ${RELEASE_TAG} (repo: ${RELEASE_REPO})"
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" \
+              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md --draft=false
           fi
+
+          # ── 逐文件上传固件资产 (带重试机制应对 GitHub API/存储端 500/502/超时抖动) ──
+          while IFS= read -r file; do
+            [ -f "$file" ] || continue
+            upload_asset_retry "$RELEASE_TAG" "$RELEASE_REPO" "$file"
+          done < <(find "$FIRMWARE_DIR" -maxdepth 1 -type f | LC_ALL=C sort)
 
       - name: Publish Passwall packages
         if: success()
@@ -1489,12 +1520,34 @@ jobs:
           fi
           PACKAGE_REPO="${{ inputs.matrix_passwall_repo }}"
           PACKAGE_TAG="${{ inputs.matrix_passwall_tag }}"
-          if gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
-            gh release upload "$PACKAGE_TAG" --repo "$PACKAGE_REPO" "${PACKAGE_FILES[@]}" --clobber
-          else
+
+          upload_asset_retry() {
+            local tag="$1"
+            local repo="$2"
+            shift 2
+            local uploaded=false
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
+                uploaded=true
+                break
+              fi
+              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
+              sleep $((attempt * 5))
+            done
+            if [ "$uploaded" != "true" ]; then
+              echo "::error::资产上传失败，已达最大重试次数: $*"
+              return 1
+            fi
+          }
+
+          if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
             gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
-              --notes "Multi-target passwall packages" --latest=false "${PACKAGE_FILES[@]}"
+              --notes "Multi-target passwall packages" --latest=false
           fi
+          for file in "${PACKAGE_FILES[@]}"; do
+            [ -f "$file" ] || continue
+            upload_asset_retry "$PACKAGE_TAG" "$PACKAGE_REPO" "$file"
+          done
 
       # ════════ SDK / IB 打包与发布 ════════
       # SDK and IB share one per-target release tag. Their indexes stay separate
@@ -1630,6 +1683,25 @@ jobs:
             gh release create "$TAG" --repo "$REPO" \
               --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false
 
+          upload_asset_retry() {
+            local tag="$1"
+            local repo="$2"
+            shift 2
+            local uploaded=false
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
+                uploaded=true
+                break
+              fi
+              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
+              sleep $((attempt * 5))
+            done
+            if [ "$uploaded" != "true" ]; then
+              echo "::error::资产上传失败，已达最大重试次数: $*"
+              return 1
+            fi
+          }
+
           # ── 当前 target 的 SDK 全量上传 ──
           CURRENT_NAMES=$(cat <<'SDK_NAMES_EOF'
           ${{ steps.sdk_ib.outputs.sdk_new_names }}
@@ -1638,7 +1710,7 @@ jobs:
           while IFS= read -r SDK_NAME; do
             if [ -z "$SDK_NAME" ]; then continue; fi
             SDK_FILE="openwrt/release/sdk/${SDK_NAME}"
-            gh release upload "$TAG" --repo "$REPO" "$SDK_FILE" "${SDK_FILE}.sha256" --clobber
+            upload_asset_retry "$TAG" "$REPO" "$SDK_FILE" "${SDK_FILE}.sha256"
             echo "📤 SDK 已上传: ${SDK_NAME}"
           done <<< "$CURRENT_NAMES"
 
@@ -1666,7 +1738,7 @@ jobs:
                       elif . == "SNAPSHOT" then -1 else 0 end;
             to_entries | sort_by([.key | splits("[.-]") | vtok]) | .[-$n:] | from_entries
           ' /tmp/sdk_index/sdk-index_new.json > /tmp/sdk_index/sdk-index.json
-          gh release upload "$TAG" --repo "$REPO" /tmp/sdk_index/sdk-index.json --clobber
+          upload_asset_retry "$TAG" "$REPO" /tmp/sdk_index/sdk-index.json
 
           # ── 清理旧版本 tarball: 按产物文件名分组, 每组保留 KEEP 个版本 ──
           # 无法从文件名解析分组时归 default 组。
@@ -1722,6 +1794,25 @@ jobs:
             gh release create "$TAG" --repo "$REPO" \
               --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false
 
+          upload_asset_retry() {
+            local tag="$1"
+            local repo="$2"
+            shift 2
+            local uploaded=false
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
+                uploaded=true
+                break
+              fi
+              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
+              sleep $((attempt * 5))
+            done
+            if [ "$uploaded" != "true" ]; then
+              echo "::error::资产上传失败，已达最大重试次数: $*"
+              return 1
+            fi
+          }
+
           # ── 当前 target 的 IB 全量上传 ──
           CURRENT_NAMES=$(cat <<'IB_NAMES_EOF'
           ${{ steps.sdk_ib.outputs.ib_new_names }}
@@ -1730,7 +1821,7 @@ jobs:
           while IFS= read -r IB_NAME; do
             if [ -z "$IB_NAME" ]; then continue; fi
             IB_FILE="openwrt/release/ib/${IB_NAME}"
-            gh release upload "$TAG" --repo "$REPO" "$IB_FILE" "${IB_FILE}.sha256" --clobber
+            upload_asset_retry "$TAG" "$REPO" "$IB_FILE" "${IB_FILE}.sha256"
             echo "📤 IB 已上传: ${IB_NAME}"
           done <<< "$CURRENT_NAMES"
 
@@ -1757,7 +1848,7 @@ jobs:
                       elif . == "SNAPSHOT" then -1 else 0 end;
             to_entries | sort_by([.key | splits("[.-]") | vtok]) | .[-$n:] | from_entries
           ' /tmp/ib_index/ib-index_new.json > /tmp/ib_index/ib-index.json
-          gh release upload "$TAG" --repo "$REPO" /tmp/ib_index/ib-index.json --clobber
+          upload_asset_retry "$TAG" "$REPO" /tmp/ib_index/ib-index.json
 
           # ── 清理旧版本 tarball: 按产物文件名分组, 每组保留 KEEP 个版本 ──
           gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' \

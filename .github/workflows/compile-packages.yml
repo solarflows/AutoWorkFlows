@@ -1115,7 +1115,11 @@ jobs:
             fi
             echo "::endgroup::"
           done
-          find bin/targets -type f -not -path '*/packages/*' -exec cp {} release/firmware/ \;
+          find bin/targets -type f \
+            -not -path '*/packages/*' \
+            -not -name '*-sdk-*' \
+            -not -name '*-imagebuilder-*' \
+            -exec cp {} release/firmware/ \;
           test -n "$(find release/firmware -type f -print -quit)" || {
             echo "::error::IB 未生成固件"
             exit 1
@@ -1161,13 +1165,37 @@ jobs:
             TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
           fi
           REPO="${{ inputs.matrix_release_repo }}"
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release upload "$TAG" --repo "$REPO" ib/release/firmware/* --clobber
-            gh release edit "$TAG" --repo "$REPO" --notes-file combined-release.md --draft=false
-          else
+
+          upload_asset_retry() {
+            local tag="$1"
+            local repo="$2"
+            shift 2
+            local uploaded=false
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
+                uploaded=true
+                break
+              fi
+              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
+              sleep $((attempt * 5))
+            done
+            if [ "$uploaded" != "true" ]; then
+              echo "::error::资产上传失败，已达最大重试次数: $*"
+              return 1
+            fi
+          }
+
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" --title "${{ inputs.matrix_target }} Build $TAG (IB 增量)" \
-              --notes-file combined-release.md ib/release/firmware/*
+              --notes-file combined-release.md
+          else
+            gh release edit "$TAG" --repo "$REPO" --notes-file combined-release.md --draft=false
           fi
+
+          while IFS= read -r file; do
+            [ -f "$file" ] || continue
+            upload_asset_retry "$TAG" "$REPO" "$file"
+          done < <(find ib/release/firmware -maxdepth 1 -type f | LC_ALL=C sort)
 
       - name: Publish SDK packages
         if: steps.artifacts.outputs.package_count > 0
@@ -1182,39 +1210,52 @@ jobs:
           PACKAGE_COMMIT=$(jq -r '.packages_commit' build-info.json)
           PACKAGE_SHA=$(jq -r '.packages_sha' build-info.json)
           PACKAGE_FORMAT=$(jq -r '.packages_format' build-info.json)
-          if gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
-            gh release upload "$PACKAGE_TAG" --repo "$PACKAGE_REPO" "${PACKAGE_FILES[@]}" --clobber
-            EXISTING=$(gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json body --jq '.body // ""')
-            SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
-            SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
-            if [ "$SIGN_MODE" = "apk" ]; then
-              SIGN_TEXT="✅ APK 已签名 (指纹 ${SIGN_FP:0:16}...)"
-            elif [ "$SIGN_MODE" = "usign" ]; then
-              SIGN_TEXT="✅ usign 已签名 (指纹 ${SIGN_FP:0:16}...)"
-            elif [ "$SIGN_MODE" = "random" ]; then
-              SIGN_TEXT="⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
-            else
-              SIGN_TEXT="❌ 未签名"
-            fi
-            printf '%b\n' "${EXISTING}\n\n---\n### 📦 ${IMMWRT_TARGET} - SDK 增量构建 (.${PACKAGE_FORMAT})\n- **构建类型**: ⚡ 自建 SDK 独立编译 (增量编译插件)\n- **commit**: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')\n- **签名**: ${SIGN_TEXT}" > release-notes.md
-            gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md
+          SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
+          SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
+          if [ "$SIGN_MODE" = "apk" ]; then
+            SIGN_TEXT="✅ APK 已签名 (指纹 ${SIGN_FP:0:16}...)"
+          elif [ "$SIGN_MODE" = "usign" ]; then
+            SIGN_TEXT="✅ usign 已签名 (指纹 ${SIGN_FP:0:16}...)"
+          elif [ "$SIGN_MODE" = "random" ]; then
+            SIGN_TEXT="⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
           else
-            SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
-            SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
-            if [ "$SIGN_MODE" = "apk" ]; then
-              SIGN_TEXT="✅ APK 已签名 (指纹 ${SIGN_FP:0:16}...)"
-            elif [ "$SIGN_MODE" = "usign" ]; then
-              SIGN_TEXT="✅ usign 已签名 (指纹 ${SIGN_FP:0:16}...)"
-            elif [ "$SIGN_MODE" = "random" ]; then
-              SIGN_TEXT="⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
-            else
-              SIGN_TEXT="❌ 未签名"
+            SIGN_TEXT="❌ 未签名"
+          fi
+
+          upload_asset_retry() {
+            local tag="$1"
+            local repo="$2"
+            shift 2
+            local uploaded=false
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
+                uploaded=true
+                break
+              fi
+              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
+              sleep $((attempt * 5))
+            done
+            if [ "$uploaded" != "true" ]; then
+              echo "::error::资产上传失败，已达最大重试次数: $*"
+              return 1
             fi
+          }
+
+          if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
             printf '## Passwall Packages\n\n- **%s**: ⚡ SDK 增量构建 (.%s), commit [`%s`](%s/commit/%s)\n- **签名**: %s\n' \
               "$IMMWRT_TARGET" "$PACKAGE_FORMAT" "$PACKAGE_COMMIT" "$PACKAGE_REPO" "$PACKAGE_SHA" "$SIGN_TEXT" > release-notes.md
             gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
-              --notes-file release-notes.md --latest=false "${PACKAGE_FILES[@]}"
+              --notes-file release-notes.md --latest=false
+          else
+            EXISTING=$(gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json body --jq '.body // ""')
+            printf '%b\n' "${EXISTING}\n\n---\n### 📦 ${IMMWRT_TARGET} - SDK 增量构建 (.${PACKAGE_FORMAT})\n- **构建类型**: ⚡ 自建 SDK 独立编译 (增量编译插件)\n- **commit**: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')\n- **签名**: ${SIGN_TEXT}" > release-notes.md
+            gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md
           fi
+
+          for file in "${PACKAGE_FILES[@]}"; do
+            [ -f "$file" ] || continue
+            upload_asset_retry "$PACKAGE_TAG" "$PACKAGE_REPO" "$file"
+          done
 
       - name: Upload published state
         if: success() && steps.artifacts.outputs.package_count > 0
