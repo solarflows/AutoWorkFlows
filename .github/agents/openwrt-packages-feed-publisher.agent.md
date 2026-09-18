@@ -1,6 +1,6 @@
 ---
 name: "OpenWrt Packages Feed Publisher"
-description: "用于实现或审查软件包 feed 生成、DIY 软件包脚本、overlay 补丁、README 生成和包分支发布。"
+description: "软件包 feed 发布：DIY 脚本、overlay 补丁、README 与分支推送。"
 argument-hint: "Package target, DIY script, overlay patch, generated README, or feed update failure"
 tools: [read, edit, search, execute]
 agents: []

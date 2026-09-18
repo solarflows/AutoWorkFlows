@@ -15,7 +15,7 @@ Use scoped alternatives:
 
 Verification: When a build fails, check `logs/package/<pkg>/compile.txt` for `checking host system type` or `checking target system type`. If output contains workflow variable values, environment leakage occurred.
 
-Reference: [docs/openwrt-build-pitfalls.md](../docs/openwrt-build-pitfalls.md) § TARGET 环境变量泄漏
+Reference: [docs/openwrt-build-pitfalls.md](../../docs/openwrt-build-pitfalls.md) § TARGET 环境变量泄漏
 
 ## Known Package Build Traps
 
@@ -28,7 +28,7 @@ Mitigation:
 - Ensure no forbidden environment variables are exported in workflows
 - Use `make -j1 V=sc` retry for complete diagnostic output
 
-Reference: [docs/openwrt-build-pitfalls.md](../docs/openwrt-build-pitfalls.md) § libffi 构建失败
+Reference: [docs/openwrt-build-pitfalls.md](../../docs/openwrt-build-pitfalls.md) § libffi 构建失败
 
 ## Build System Behavior
 
@@ -58,11 +58,15 @@ Use the fixed global concurrency group `firmware-build-v2` for compatibility wit
 - `secrets.ACCESS_TOKEN`: GitHub PAT for repository variable writes and cross-repo operations
 - `GH_TOKEN` env var: Set via `env: GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}` for `gh` CLI
 
+### Remote push race
+
+The remote advances on its own via cron commits. When a push is rejected, diff first to confirm there is no file conflict, then rebase onto the remote head and push again. Never force push.
+
 ## Diagnostic Workflow
 
 On build failure, follow this investigation sequence:
 
-1. Check [docs/openwrt-build-pitfalls.md](../docs/openwrt-build-pitfalls.md) for known failure signatures
+1. Check [docs/openwrt-build-pitfalls.md](../../docs/openwrt-build-pitfalls.md) for known failure signatures
 2. Run `openwrt-build-diagnostics` skill for read-only analysis
 3. Check `logs/package/error.txt` and `logs.1/package/error.txt`
 4. Check `logs.1/<pkg>/compile.txt` for complete single-thread retry output
@@ -101,5 +105,7 @@ Upstream and fork frequently diverge (e.g. `CONFIG_IB_STANDALONE` defaults, rust
 - [.github/instructions/openwrt-build.instructions.md](openwrt-build.instructions.md) — Workflow architecture and diagnostic requirements
 - [.github/instructions/openwrt-config.instructions.md](openwrt-config.instructions.md) — Configuration file format and constraints
 - [.github/instructions/build-artifacts.instructions.md](build-artifacts.instructions.md) — Artifact naming and release management
-- [docs/openwrt-build-pitfalls.md](../docs/openwrt-build-pitfalls.md) — Verified failure patterns and root cause analysis
+- [.github/instructions/version-extraction.instructions.md](version-extraction.instructions.md) — Version parsing order and `patched_version` usage
+- [.github/instructions/workflow-agent-common.instructions.md](workflow-agent-common.instructions.md) — Shared workflow/agent editing and secret-safety rules
+- [docs/openwrt-build-pitfalls.md](../../docs/openwrt-build-pitfalls.md) — Verified failure patterns and root cause analysis
 - [.github/skills/openwrt-build-diagnostics/SKILL.md](../skills/openwrt-build-diagnostics/SKILL.md) — Diagnostic skill definition

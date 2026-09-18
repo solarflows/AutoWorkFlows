@@ -1,6 +1,6 @@
 ---
 name: "Geodata Release Publisher"
-description: "用于实现或审查 v2ray geodata 更新、版本和 SHA256 校验、补丁生成、发布资产及 release 分支安全。"
+description: "geodata 发布：版本与 SHA256 校验、补丁替换与 release 资产。"
 argument-hint: "Geodata update, upstream release, checksum, patch replacement, or release failure"
 tools: [read, edit, search, execute]
 agents: []

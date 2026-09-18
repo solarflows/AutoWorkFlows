@@ -1,6 +1,6 @@
 ---
 description: "ImmortalWrt/OpenWrt 版本号提取约束。修改 version.mk、SDK/IB 命名、patch_version、source_version 或 CI 版本解析逻辑时必读。"
-applyTo: ["**/*.yml", "**/version.mk", "**/include/version.mk", "openwrt-configs/**"]
+applyTo: [".github/workflows/**", "**/version.mk", "openwrt-configs/**"]
 ---
 
 # Version Extraction Pitfalls (ImmortalWrt/OpenWrt)
@@ -77,7 +77,7 @@ Example: `21.02` + build id `V260805` → `patched_version=21.02-V260805`.
 
 ## Evidence & References
 
-- Complete root cause and shell expansion evidence: [docs/openwrt-build-pitfalls.md](../docs/openwrt-build-pitfalls.md) § Make expression version injection into shell
+- Complete root cause and shell expansion evidence: [docs/openwrt-build-pitfalls.md](../../docs/openwrt-build-pitfalls.md) § Make expression version injection into shell
 - Current implementation: [.github/workflows/compile-firmware.yml](https://github.com/solarflows/AutoWorkflows/blob/main/.github/workflows/compile-firmware.yml) (Apply Configuration step)
 - Related consumers: `compile-firmware.yml`, `compile-packages.yml`; archived consumers remain under `.github/archive/workflows/` for historical reference.
 

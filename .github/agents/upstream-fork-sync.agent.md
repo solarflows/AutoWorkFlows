@@ -1,6 +1,6 @@
 ---
 name: "Upstream Fork Sync"
-description: "用于实现或审查源码 fork 同步、补丁应用、rebase、分支保护、force-with-lease 推送和同步失败处理。"
+description: "上游 fork 同步：rebase、补丁应用、overwrite 层与 force-with-lease。"
 argument-hint: "Sync workflow, source fork, patch path, branch, rebase conflict, or push safety"
 tools: [read, edit, search, execute]
 agents: []

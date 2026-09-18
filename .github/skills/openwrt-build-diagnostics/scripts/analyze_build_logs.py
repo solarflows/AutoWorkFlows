@@ -145,11 +145,19 @@ def analyze_file(path: Path, root: Path) -> FileFinding:
     )
 
 
-def logical_compile_path(path: str) -> str:
+def split_round_component(path: str) -> tuple[str | None, str | None]:
+    """Split a compile-log path into its log round and a round-independent key.
+
+    The `logs` / `logs.1` component is matched at any depth so that both flat
+    (`logs/...`) and nested (`artifacts/<name>/logs.1/...`) layouts pair up.
+    """
     parts = Path(path).parts
-    if parts and parts[0].lower() in {"logs", "logs.1"}:
-        parts = parts[1:]
-    return Path(*parts).as_posix()
+    for index, part in enumerate(parts):
+        lowered = part.lower()
+        if lowered in {"logs", "logs.1"}:
+            remainder = Path(*parts[:index], *parts[index + 1:]).as_posix()
+            return lowered, remainder
+    return None, None
 
 
 def find_retry_pairs(findings: list[FileFinding]) -> list[dict[str, object]]:
@@ -158,11 +166,12 @@ def find_retry_pairs(findings: list[FileFinding]) -> list[dict[str, object]]:
     for finding in findings:
         if finding.kind != "compile-log":
             continue
-        normalized = logical_compile_path(finding.path)
-        first_component = Path(finding.path).parts[0].lower()
-        if first_component == "logs.1":
+        round_name, normalized = split_round_component(finding.path)
+        if round_name is None or normalized is None:
+            continue
+        if round_name == "logs.1":
             first_pass[normalized] = finding
-        elif first_component == "logs":
+        elif round_name == "logs":
             retries[normalized] = finding
 
     pairs = []
