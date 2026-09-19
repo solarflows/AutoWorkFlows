@@ -202,9 +202,27 @@ Why ccache survived while toolchain did not: ccache uses the combined `actions/c
 Why v1 did not exhibit this — **save ordering, not hash stability**. Both v1 and v2 check out the same `targets.json` refs (`test` / `VIKINGYFY-main`, rolling branches), so their toolchain hashes are equally unstable. The real difference is where the save runs relative to the purge:
 
 - v1 uses the combined `actions/cache@v5`, whose save runs as a **post action after all main steps** — i.e. after the Purge step. Chain: miss → compile → Purge deletes old caches (the just-built result is not yet saved, so it is untouchable) → post-action save writes the fresh cache → next run's `restore-keys` prefix hits it → stamps are touched → `tools/*` is skipped. The cache accumulates one entry per run.
-- v2 splits restore and save; save becomes an explicit main step placed **before** the Purge step. Chain: miss → compile → save (now saved) → Purge's miss branch deletes every cache including the just-saved one → zero caches remain → next run misses again → full `tools/*` rebuild forever.
+- v2 splits restore and save; save becomes an explicit main step placed **before** the Purge step. Chain: miss → compile → save (now saved) → Purge's miss branch deletes every cache including the just-saved one → zero caches remain → next run misses again → `tools/*` rebuild repeats every run.
+
+### Fix (已修复)
+
+The purge no longer keys off the restore result at all. It selects by anchored regex on the key itself and excludes the current key, so the snapshot written moments earlier can never be its target:
+
+```bash
+TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
+TC_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
+# purge: keep TC_CURRENT, delete the rest under this target's prefix only
+```
+
+The same structure now guards ccache and the SDK hostpkg namespace. 2026-09-18 补充:内容寻址的 key(同一源码树哈希)已存在时,save 会被新的预检步骤跳过(见 `## GitHub Actions Cache Quota and Eviction`);purge 条件同时接受 "save 成功" 与 "快照已存在",因此清理不会因跳过 save 而连带失效。
+
+### Verification
+
+后续运行中 `Restore toolchain cache` 稳定出现 `Cache hit for: immwrt-v2-toolchain-<target>-<hash>`(run 35313768877 三个 target 全部精确命中),`🔧 Prepare toolchain & ccache` 在 ccache 可用且工具链已恢复时接近 0 秒(`✅ 已发现可用的 OpenWrt ccache 且工具链已恢复，完全复用缓存，跳过预编译`)。
 
 ## v2 Cache Lifecycle
+
+ccache remains a **cumulative** cache: every compile adds objects and its invalidation factors cannot be represented by one content hash. It therefore keeps a per-run `run_id` key and restores from the target prefix, so every successful build can publish a fresh snapshot; `ccache --max-size 10G` bounds the contents of one snapshot, not the number of remote snapshots.
 
 The v2 firmware executor keeps toolchain and ccache snapshots separate per target. Both snapshots are saved only after the build job remains successful. The current key is saved first, then older entries under the same v2 target prefix are deleted while the current key is explicitly excluded.
 
@@ -215,7 +233,49 @@ This ordering means:
 - a purge/API failure may temporarily leave more than one entry, but cannot delete the current result;
 - `ccache --max-size 10G` manages the contents of one ccache snapshot; ccache's internal compression and Actions Cache archive compression are separate controls, so workflows do not force a compression mode;
 - the v2 workflow no longer performs a monthly full flush, and does not remove v1 or unrelated workflow caches;
-- full builds may produce `immwrt-v2-sdk-hostpkg-*` snapshots, but only the SDK executor retains and purges that namespace.
+- every namespace converges to the newest single snapshot per target. Both executors write the `immwrt-v2-sdk-hostpkg-<target>-<run_id>` namespace (the full build seeds it so the SDK path starts warm) and both purge it to their own newest snapshot; the full executor used to write it without any purge, so a full-build-only period grew the namespace by 0.5–1.7GB per target per run with no reader ever refreshing it (see `## GitHub Actions Cache Quota and Eviction`);
+- the toolchain snapshot key is content-addressed, so an already-present key makes `actions/cache/save` fail with `Unable to reserve cache ...`; a pre-check step skips that save and the purge proceeds on "snapshot already exists" instead of requiring the save step's outcome.
+
+## GitHub Actions Cache Quota and Eviction (平台行为, 已核查)
+
+### Verified Platform Behavior
+
+官方 caching reference (`Usage limits and eviction policy`):
+
+- 默认每仓库 10 GB;超限时**新缓存仍会保存成功**,随后按 `last access date` 从旧到新驱逐,直到总量低于上限;
+- 超过 7 天未被访问的条目无条件删除(与配额无关)。
+
+### Evidence (run 35313768877, 2026-09-18)
+
+三个 target 的全量构建,按保存时刻还原配额变化 (GiB;上限 10 GB ≈ 9.31 GiB):
+
+| 时刻 | 事件 | 保存后累计 | 越限 | 平台驱逐 |
+|---|---|---|---|---|
+| 起始 | toolchain×3 = 1.48,上一代 ccache 3.31,上一代 sdk-hostpkg 3.10 | 7.89 | — | — |
+| 06:58 | mt798x save ccache 0.56 / hostpkg 0.46;purge 释放旧 ccache 0.56 | 8.35 | 否 | — |
+| 07:36 | ipq807x save ccache 1.05 | 9.40 | **+0.09** | 上一代 hostpkg (mt798x) 0.46 |
+| 07:37 | ipq807x purge 释放旧 ccache 1.05;save hostpkg 1.02 | 8.92 | 否 | — |
+| 08:11 | ipq60xx save ccache 1.73 | 10.65 | **+1.33** | 上一代 hostpkg (ipq807x) 1.02 → 仍超 → 上一代 hostpkg (ipq60xx) 1.61 |
+| 08:11 | ipq60xx save hostpkg 1.61 | 7.92 | 否 | — |
+
+被驱逐的三条恰好是上一代、创建后从未被读取的 `immwrt-v2-sdk-hostpkg-*`(合计 3.10 GiB),与"每 target 仅留最新 1 份"策略要删的集合完全一致;`immwrt-v2-toolchain-*` 的 `last_access` 在本轮开头被 restore 刷新过,因此未被波及。
+
+### Rules Derived From This Evidence
+
+- 平台驱逐**不是乱删**:它按 `last-access` 有序进行,稳定状态下等价于"每命名空间每 target 只留最新 1 代",因此可以依赖它作为兜底,但不能把它当保留策略。
+- `last-access` 只反映"谁最近被读过",不反映"谁可以重建":全量执行器只写不读 sdk-hostpkg 种子快照,其 `last_access` 永远等于创建时间,配额紧张时它必然是第一顺位受害者(本轮如此,除非写入方自己清理)。
+- 尾部风险:当陈旧代不足以吸收本轮增量、或根本不存在(例如 7 天过期后、只有部分 target 构建)时,下一批候选就是 `toolchain` 快照(代价 40 分钟全量重编),并可能引发 cache thrashing。因此写入方仍必须自约束保留量。
+- 峰值的主导因素是"每个滚动 namespace 的两代并存":稳态 7.92 GiB,理论峰值(稳态 + 全量上一代 6.41 GiB)14.33 GiB,本轮实际观测峰值 10.65 GiB(save 与 purge 交错执行)。压缩峰值只能靠减小单代体量或提高仓库配额,而不是取消清理。
+
+### Content-Addressed Key Cannot Be Re-Saved
+
+`immwrt-v2-toolchain-<target>-<hash>` 的 key 由 `tools`/`toolchain` 源码树哈希决定,同一源码修订只对应同一 key。Actions Cache 的 key 不可覆盖,重复 save 必然以如下信息结束(run 35313768877 三个 target 均出现):
+
+```text
+Failed to save: Unable to reserve cache with key immwrt-v2-toolchain-mt798x-dcf4ec5a69fea0fa, another job may be creating this cache.
+```
+
+这是"缓存已存在"的正常表现,与配额、并发均无关。修复:save 前用 `gh cache list --key <exact>` 预检,精确命中则跳过 save;purge 条件同时接受 "save 成功" 或 "快照已存在",避免清理被连带跳过。查询失败时按未命中处理并继续保存(不静默降级)。
 
 ## Make 表达式版本号注入 Shell (SDK/IB 打包崩溃)
 
@@ -281,21 +341,6 @@ IB_ORIG_VER="$(callqstrip,$(CONFIG_VERSION_NUMBER))"
 
 SDK/IB 打包步骤对注入的版本号加防御检查: 若含 `$(` 残留 make 表达式, 显式 `::error::` 报错并退出, 避免静默污染文件名与 index.json key。
 
-
-### v2 ccache and cache lifecycle
-
-ccache remains a **cumulative** cache: every compile adds objects and its invalidation factors cannot be represented by one content hash. It therefore keeps a per-run `run_id` key and restores from the target prefix, so every successful build can publish a fresh snapshot.
-
-The v2 executor uses explicit `actions/cache/restore@v5` and `actions/cache/save@v5` for both toolchain and ccache. The save steps run only after the build and diagnostics have succeeded. The current snapshot is saved first; the purge then deletes older entries under the same target prefix while excluding the current key.
-
-This gives the following guarantees:
-
-- a compile or diagnostic failure skips save and purge, so an existing cache is not replaced;
-- a save failure prevents purge, so an existing cache remains available;
-- a purge/API failure may temporarily leave older entries, but cannot delete the current result;
-- `ccache --max-size 10G` and compression bound the contents of one ccache snapshot, not the number of remote snapshots;
-- v2 no longer performs a monthly full flush and does not remove v1 or unrelated workflow caches.
-
 ### Diagnostic Notes
 
 - Tools recompilation is not an architecture bug. First check whether a toolchain cache exists at all.
@@ -305,6 +350,36 @@ This gives the following guarantees:
 ## SDK and ImageBuilder Retention
 
 SDK and ImageBuilder archives are stored under `sdk-<target>` and `ib-<target>` release tags with an `index.json`. Replace files for the same version with `--clobber`. For different versions, retain the configured number of version groups. Sorting must compare numeric fields numerically, map SNAPSHOT to a stable sentinel, and parse `V<n>` as a number.
+
+## Release 资产上传失败 (HTTP 500/502) 与固件目录误含 SDK/IB
+
+### Symptom
+
+`Publish firmware release` 以 exit 1 结束,mt798x 与 ipq60xx 各报一次服务端错误 (run 35264715561):
+
+```text
+HTTP 500: Error creating asset temp dir (https://uploads.github.com/repos/solarflows/immortalwrt-mt798x/releases/391031423/assets?label=&name=immortalwrt-21.02-v260918-...-initramfs-kernel.bin)
+```
+
+```text
+HTTP 502: Error uploading (https://uploads.github.com/repos/solarflows/ImmortalWrt-QualcommAX/releases/391075016/assets?label=&name=immortalwrt-sdk-qualcommax-ipq60xx_gcc-14.4.0_musl.Linux-x86_64.tar.zst)
+```
+
+### Verified Root Cause
+
+两个独立缺陷叠加:
+
+1. 固件打包用 `find bin/targets -type f -not -path "*/packages/*"` 收集产物,未排除 `*-sdk-*` / `*-imagebuilder-*`。种子开启 `CONFIG_SDK=y` / `CONFIG_IB=y` 时,约 130 MB 的 SDK 与 ImageBuilder 归档会被一并复制进 `release/firmware/`,再由 `gh release create/upload "$FIRMWARE_DIR"/*` 一次性批量上传。ipq60xx 的 SDK 归档上传持续约 43 分钟后被网关以 HTTP 502 断开;mt798x 则在创建资产临时目录时收到 HTTP 500。
+2. 批量上传没有重试:`set -euo pipefail` 下单个资产的 500/502 直接终止整个步骤,后续 SDK/IB 发布全部被跳过。
+
+### Fix
+
+- 两处收集命令增加 `-not -name "*-sdk-*" -not -name "*-imagebuilder-*"`;SDK/IB 归档仍由专门的 `artifacts-<target>` 通道发布,不再混入固件 Release。
+- Release 改为"先确保 Release 存在(create 或 edit),再逐文件上传",每个文件带 3 次重试(5/10/15 秒退避)与 `--clobber`;SDK/IB 的 index.json 上传同样使用该重试封装。
+
+### Verification
+
+下一次全量构建:`release/firmware` 与 `release/` 目录树中不应再出现 `*-sdk-*` / `*-imagebuilder-*`(mt798x 的固件文件数应从 16 回到 14,大小约 514M);`Publish firmware release` 遇到瞬时失败时应先打印 `⚠️ 资产上传失败 [尝试 n/3]` 并最终成功,而不是直接 exit 1。
 
 ## `time:` Line Cannot Identify Failed Packages
 

@@ -186,7 +186,7 @@ Qualcomm 是两个独立的逻辑 target，target 名与种子目录名一致。
 
 两个条目都使用 `solarflows/ImmortalWrt-QualcommAX` 的 `VIKINGYFY-main` 和 `solarflows/packages` 的 `qualcommax` 分支；它们只共享源码与 feed 的来源，不共享构建结果。
 
-两者的缓存 key 形如 `immwrt-v2-{toolchain,ccache,sdk-hostpkg,sdk-ccache}-<target>-<suffix>`，互相独立。`both` 会把 `targets.json` 中全部已配置条目作为独立矩阵 target 分别规划和执行，同一源码仓库不会导致产物共享。
+两者的缓存 key 形如 `immwrt-v2-{toolchain,ccache,sdk-hostpkg}-<target>-<suffix>`，互相独立；ccache 命名空间由全量与 SDK 两条路径共享（各自写入自己的 `run_id` 快照并清理旧代，仅保留最新 1 份）。`both` 会把 `targets.json` 中全部已配置条目作为独立矩阵 target 分别规划和执行，同一源码仓库不会导致产物共享。
 
 ### 步骤 3：更新 `workflow_dispatch` 的 `target` 选项（可选）
 

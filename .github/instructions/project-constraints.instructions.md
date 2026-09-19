@@ -4,6 +4,10 @@ description: "AutoWorkflows 项目特有的约束、已知陷阱和经验教训�
 
 # AutoWorkflows Project Constraints
 
+## Status Ledger (read before re-litigating anything)
+
+`docs/todo.md` is the single source of truth for what is implemented, partially implemented, rejected, or still undecided, with run/commit/file evidence per row. Read it before asserting that something is broken or un-implemented, and update the affected row in the same commit as any mechanism change. `handoff.md` was a one-time handoff document and was removed on 2026-09-19 after all its items completed — do not recreate it; route new knowledge to `docs/todo.md` (status), `docs/ci-flow.md` (structure), or `docs/openwrt-build-pitfalls.md` (failure archive).
+
 ## Environment Variable Restrictions
 
 Never export variables named `TARGET`, `HOST`, or `BUILD` in GitHub Actions workflows. They leak into the OpenWrt build environment and break package compilation (particularly libffi and other autoconf-based packages).
@@ -107,5 +111,6 @@ Upstream and fork frequently diverge (e.g. `CONFIG_IB_STANDALONE` defaults, rust
 - [.github/instructions/build-artifacts.instructions.md](build-artifacts.instructions.md) — Artifact naming and release management
 - [.github/instructions/version-extraction.instructions.md](version-extraction.instructions.md) — Version parsing order and `patched_version` usage
 - [.github/instructions/workflow-agent-common.instructions.md](workflow-agent-common.instructions.md) — Shared workflow/agent editing and secret-safety rules
+- [docs/todo.md](../../docs/todo.md) — Feature/implementation status ledger (single source of truth)
 - [docs/openwrt-build-pitfalls.md](../../docs/openwrt-build-pitfalls.md) — Verified failure patterns and root cause analysis
 - [.github/skills/openwrt-build-diagnostics/SKILL.md](../skills/openwrt-build-diagnostics/SKILL.md) — Diagnostic skill definition

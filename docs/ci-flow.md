@@ -160,22 +160,21 @@ flowchart TD
     B --> C["Compute toolchain hash<br/>tools/toolchain tree sha256[:16]"]
     C --> D["Prepare Environment<br/>apt + ImmortalWrt 初始化脚本<br/>（均有 timeout）"]
     D --> E["💽 磁盘阶段②"]
-    E --> F["Find exact cache snapshots<br/>gh cache list + 锚定正则"]
-    F --> G["Restore toolchain / ccache<br/>（按 cache_strategy 分支）"]
+    E --> G["Restore toolchain / ccache<br/>actions/cache 原生 restore-keys 前缀回退<br/>（按 cache_strategy 分支）"]
     G --> H["Update Feeds & Packages"]
     H --> I["Apply Configuration<br/>合并 seed → defconfig → 版本解析 → 签名探测"]
     I --> J["Setup Signing Key<br/>APK(PEM) / usign(Ed25519)"]
     J --> K["📥 make download"]
     K --> L["💽 磁盘阶段③"]
-    L --> M["🔧 Prepare toolchain & ccache<br/>先 tools/ccache/compile 再 tools+toolchain"]
+    L --> M["🔧 Prepare toolchain & ccache<br/>缓存命中则刷新 stamp 后直接 exit 0<br/>仅 ccache 缺失时 make tools/ccache/compile"]
     M --> N["🔨 Build Firmware<br/>make -j(nproc+1) -k"]
     N --> O{"make_exit == 0?"}
     O -->|"否"| P["🔁 Retry build<br/>git pull → logs→logs.1 → -j → -j1 V=sc"]
     O -->|"是"| Q
     P --> Q["💽 磁盘阶段④ + 总耗时"]
     Q --> R["📊 Build Log Analysis / 📈 ccache Stats"]
-    R --> S["Save toolchain / ccache / SDK-hostpkg"]
-    S --> T["Purge stale（各自独立，排除当前 key）"]
+    R --> S["预检 toolchain 快照是否已存在 → Save toolchain(命中则跳过) / ccache / SDK-hostpkg"]
+    S --> T["Purge stale ×3（toolchain / ccache / SDK hostpkg，各自独立，排除当前 key）"]
     T --> U["📦 打包 release/{firmware,passwall}"]
     U --> V["Publish firmware / Passwall"]
     V --> W["📦 Package SDK & IB → artifacts-<target>"]
@@ -199,12 +198,13 @@ flowchart TD
 
 | key 形态 | 生产者 | 消费者 | 保留策略 |
 |---|---|---|---|
-| `immwrt-v2-toolchain-<target>-<hash>` | full | full / SDK 回退 | 仅最新（purge 其余） |
-| `immwrt-v2-ccache-<target>-<run_id>` | full | full / SDK 回退 | 仅最新 |
-| `immwrt-v2-sdk-hostpkg-<target>-<run_id>` | full + SDK | SDK | SDK 保留 3 份 |
-| `immwrt-v2-sdk-ccache-<target>-<run_id>` | SDK | SDK | SDK 保留 3 份 |
+| `immwrt-v2-toolchain-<target>-<hash>` | full | full / SDK 回退 | 仅最新（purge 其余；key 已存在时跳过重复 save） |
+| `immwrt-v2-ccache-<target>-<run_id>` | full + SDK（共享） | full / SDK | 仅最新 |
+| `immwrt-v2-sdk-hostpkg-<target>-<run_id>` | full + SDK | SDK | 仅最新（两条写入路径各自收敛） |
 
 > 锚定正则（`^immwrt-v2-toolchain-<target>-(...)$`）确保 `ipq60xx` 与 `ipq807x` 前缀互不串扰；`gh cache list --key` 的前缀语义靠正则收口。
+>
+> 每个 namespace 由写入方自约束保留量；配额与平台驱逐行为见 `openwrt-build-pitfalls.md` § GitHub Actions Cache Quota and Eviction。
 
 ### 3.3 失败诊断链
 
@@ -238,7 +238,7 @@ flowchart TD
     E4 --> F
     F --> G["Resolve SDK packages<br/>读 sdk.config → 包名清单"]
     G --> H["Build packages via SDK"]
-    H --> I["Save SDK hostpkg / SDK ccache<br/>+ 各自 purge 保留 3 份"]
+    H --> I["Save SDK hostpkg + 共享 ccache<br/>+ purge 保留最新 1 份"]
     I --> J["Collect artifacts → 发布 packages-<target>"]
     J --> K{"matrix_build_sdk_ib?"}
     K -->|"是"| L["Resolve + 下载 IB"]
@@ -251,7 +251,8 @@ flowchart TD
 **关键设计**：
 
 - SDK 解压到 `openwrt/`（与全量同构），使 `rules.mk` 原生导出的 `CCACHE_DIR=$(TOPDIR)/.ccache` 在两套工作流指向同一路径。
-- SDK 独占自己的 hostpkg / ccache 命名空间，**绝不写入或清理** full 的 `immwrt-v2-ccache-*`。
+- ccache 命名空间已合并共享：SDK 与全量都读写 `immwrt-v2-ccache-<target>-*`，各自保存自己的 `run_id` 快照并把旧代清理到最新 1 份（早前的 "SDK 专用 ccache" 命名空间已不存在）。
+- `immwrt-v2-sdk-hostpkg-<target>-<run_id>` 由两条路径共同生产、各自清理：全量构建写入种子快照（供 SDK 路径恢复），SDK 路径恢复/写回，两边都以最新 1 份为保留上限；SDK 路径在 SDK 快照未命中时才回退全量 `immwrt-v2-toolchain-*`。
 - IB 必须逐设备传 `PROFILE`（不传时 `USER_PROFILE ?= $(firstword $(PROFILE_NAMES))` 只构建首个设备）。
 
 ---
@@ -362,17 +363,14 @@ sequenceDiagram
 | 禁用变量 `TARGET`/`HOST`/`BUILD` 未导出 | ✅ |
 | `git diff --check` | ✅ |
 
-### 7.2 观察到的风险点（建议关注，本次未修改）
+### 7.2 观察到的风险点（建议关注）
 
 | 优先级 | 位置 | 问题 | 影响 |
 |---|---|---|---|
-| 中 | `OpenWRT_Packages_Updater.yml` `prepare`/`update` | 无 `timeout-minutes` | 卡死时占用 runner 至默认 6h |
-| 中 | `Sync_Push.yml` 5 个 job | 无 `timeout-minutes` | 同上 |
-| 中 | `v2ray-geodataUpdater.yaml` `update` | 无 `timeout-minutes` | 同上 |
-| 低 | `firmware-build-unified.yml` | `HAS_KERNEL` 变量被赋值但未参与路由（决策实际只看 `source_changed`，kernel 变更已包含在 source 变更内） | 无害的冗余，易误读 |
 | 低 | `firmware-build-unified.yml` | `PUB_FW`/`PUB_PKGS` 仅用于 summary 文案，实际发布由 executor 内 `if: success()` 控制 | 语义重复，非缺陷 |
-| 低 | `compile-firmware.yml` | `publish_sdk_ib` 输入由调用方传 `true`，但 unified 未显式传值，依赖默认值 | 契约隐式，建议显式 |
 | 低 | `compile-packages.yml` | 无 `matrix_artifacts_keep_versions` 输入，SDK/IB 保留数只在 full 侧生效 | 设计如此（SDK 不发布 artifacts） |
+
+> 已处理（2026-09-18 核对）：原先列出的三个"无 `timeout-minutes`"项已补齐（`OpenWRT_Packages_Updater` 5/15、`Sync_Push` 20/20/15/15/10、`v2ray-geodataUpdater` 30）；`HAS_KERNEL` 冗余变量已移除；`publish_sdk_ib` 已由 unified 显式传 `true`。
 
 ### 7.3 已知的刻意为之处（勿误改）
 
