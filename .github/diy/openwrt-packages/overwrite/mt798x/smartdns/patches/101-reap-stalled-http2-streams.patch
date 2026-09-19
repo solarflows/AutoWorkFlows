@@ -1,0 +1,74 @@
+diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
+index f6f121c..2d60d64 100644
+--- a/src/dns_client/client_http2.c
++++ b/src/dns_client/client_http2.c
+@@ -168,6 +168,12 @@ static int _dns_client_send_http2_stream(struct dns_server_info *server_info, st
+ 		if (errno == ENOSPC) {
+ 			tlog(TLOG_WARN, "http2 peer stream limit reached, reset connection, server=%s:%d",
+ 				 server_info->ip, server_info->port);
++			/* Report the saturated connection as a reset one: the caller
++			 * tears the socket down and reconnects immediately on
++			 * ECONNRESET, while a bare ENOSPC would only mark the server
++			 * prohibited for up to 60 seconds (dns_client.c default
++			 * branch) and keep the zombie connection around. */
++			errno = ECONNRESET;
+ 			http2_ctx_put(http2_ctx);
+ 			return DNS_CLIENT_HTTP2_STREAM_SEND_CONN_ERROR;
+ 		}
+diff --git a/src/http_parse/http2.c b/src/http_parse/http2.c
+index a005547..732359d 100644
+--- a/src/http_parse/http2.c
++++ b/src/http_parse/http2.c
+@@ -102,6 +102,10 @@ const char *http2_error_to_string(int ret)
+ #define HTTP2_CONNECTION_PREFACE "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+ #define HTTP2_CONNECTION_PREFACE_LEN 24
+ #define HTTP2_MAX_STREAM_ID UINT32_C(0x7fffffff) /* RFC 9113 Section 5.1.1 */
++/* Grace period for a stream whose close was deferred until its pending body was
++ * sent. When the send window never opens again, nothing else would ever reclaim
++ * the stream and the concurrency slot it holds. */
++#define HTTP2_STREAM_CLOSE_DEFER_TIMEOUT_MS 5000
+ 
+ /* Stream states */
+ typedef enum {
+@@ -140,6 +144,7 @@ struct http2_stream {
+ 	int pending_send_body_offset;
+ 	int pending_send_end_stream;
+ 	int close_after_send;
++	unsigned long close_defer_tick; /* tick when the close was deferred */
+ 	void *ex_data;
+ 	struct hlist_node hash_node;
+ 	struct list_head node;
+@@ -1127,6 +1132,23 @@ static void _http2_ctx_flush_pending_send_bodies(struct http2_ctx *ctx)
+ 
+ 		if (!_http2_stream_has_pending_send(stream) && stream->close_after_send) {
+ 			_http2_remove_stream(stream, 1);
++			continue;
++		}
++
++		/* A deferred close can stall forever when the send window never opens
++		 * again (peer stopped sending WINDOW_UPDATE, or a window dump that
++		 * leaves no room for the remaining body). The stream would then keep
++		 * its active_local_streams slot for the lifetime of the connection, so
++		 * every new request fails with ENOSPC and the upstream looks hung
++		 * while the process stays alive. Give the flush a bounded grace
++		 * period, then drop the stream so the concurrency slot is reclaimed.
++		 * Any late frame the peer sends for this stream id is answered with
++		 * RST_STREAM via _http2_stream_id_was_seen(). */
++		if (stream->close_after_send && stream->close_defer_tick != 0 &&
++			get_tick_count() - stream->close_defer_tick >= HTTP2_STREAM_CLOSE_DEFER_TIMEOUT_MS) {
++			tlog(TLOG_WARN, "http2 stream %u closed without sending pending data, drop it.", stream->stream_id);
++			_http2_stream_clear_pending_send(stream);
++			_http2_remove_stream(stream, 1);
+ 		}
+ 	}
+ }
+@@ -2303,6 +2325,9 @@ void http2_stream_close(struct http2_stream *stream)
+ 		if (_http2_stream_has_pending_send(stream) && ctx->status >= 0) {
+ 			stream->close_after_send = 1;
+ 			stream->ex_data = NULL;
++			if (stream->close_defer_tick == 0) {
++				stream->close_defer_tick = get_tick_count();
++			}
+ 			if (_http2_stream_flush_pending_send(stream) < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+ 				stream->state = HTTP2_STREAM_CLOSED;
+ 			}

@@ -59,6 +59,8 @@
 | U2 | `OpenWRT_Packages_Updater` 提交前 `diff --cached --check` | ✅ | `OpenWRT_Packages_Updater.yml` | trailing whitespace 仅 warning |
 | U3 | `checkout_partial_code` 缺失路径硬失败 | 🚫 | `openwrt-packages/core` | 刻意为：硬失败才能让上游删包立刻暴露，不要改成告警 |
 | U4 | geodata 固定 geoview 版本 + SHA256 校验 | ✅ | `v2ray-geodataUpdater.yaml` | `latest` 不可复现 |
+| U5 | smartdns H2 补丁（qualcommax）+ 101 流槽位回收 | 🟨 | `packages/overwrite/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch`（已同步，feed blob `79b8a106` 与本地逐字节一致）、新增 `101-reap-stalled-http2-streams.patch`（本地 GNU patch 在 48.4 源树 100→101 依次应用通过） | 101 修两处：① `http2_stream_close` 延迟关闭加 5s 时限（发送窗口永不恢复时回收 `active_local_streams` 槽位）；② 饱和连接以 `ECONNRESET` 返回，走 `_dns_client_send_one_packet` 的立即重建分支（裸 `ENOSPC` 只会 `prohibit=1` 屏蔽上游 60s）。上游 master 未修（开放 PR #2458/#2422 均未合），待真实构建验证 |
+| U6 | mt798x smartdns bump 48.4 + 同补丁 | 🟨 | `openwrt-packages/patches/mt798x/0009-smartdns-bump-48.4.patch`（git→tarball 48.4，`PKG_HASH=b07abba9…`，与 qualcommax 同源同版本）、`openwrt-packages/overwrite/mt798x/smartdns/patches/{100,101}`（与 qualcommax 版逐字节一致）；已失效的 `temp-fix-smartdns-hash.patch` 移入 `patches_remove` | mt798x 的 smartdns 来自 `package/solarflows/smartdns`（pymumu 源，core 包不被 feeds 覆盖），此前停在 48.2 且无补丁——48.3 才引入流上限强制（`6f9da63`）故旧版症状隐蔽。**版本升级为手动控制**：唯一控制点 = 编辑 `0009` 的版本/哈希字段（mt798x 分支每轮被脚本全量重生成，直接改分支持久不了）；已验证 100/101 对 48.2 与 48.4 基线均可应用（GNU patch 行号偏移自动适配），故升级版本不阻塞补丁；pymumu Makefile 的 `Build/Prepare` 调用 `Default`，`smartdns/patches/` 会被构建系统自动应用。待真实构建验证 |
 
 ## E. 文档体系
 
