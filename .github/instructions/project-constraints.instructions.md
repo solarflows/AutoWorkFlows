@@ -4,9 +4,10 @@ description: "AutoWorkflows 项目特有的约束、已知陷阱和经验教训�
 
 # AutoWorkflows Project Constraints
 
-## Status Ledger (read before re-litigating anything)
+## Status Ledger
 
-`docs/todo.md` is the single source of truth for what is implemented, partially implemented, rejected, or still undecided, with run/commit/file evidence per row. Read it before asserting that something is broken or un-implemented, and update the affected row in the same commit as any mechanism change. `handoff.md` was a one-time handoff document and was removed on 2026-09-19 after all its items completed — do not recreate it; route new knowledge to `docs/todo.md` (status), `docs/ci-flow.md` (structure), or `docs/openwrt-build-pitfalls.md` (failure archive).
+Status rules live in `AGENTS.md` § Project Status (always loaded). Knowledge routing:
+`docs/todo.md` (status) · `docs/ci-flow.md` (structure) · `docs/openwrt-build-pitfalls.md` (failure archive).
 
 ## Environment Variable Restrictions
 

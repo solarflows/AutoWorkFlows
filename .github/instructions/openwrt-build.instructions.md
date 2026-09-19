@@ -54,7 +54,7 @@ applyTo: [".github/workflows/compile-*.yml", ".github/workflows/firmware-build-u
 - Keep the `make -j1 V=sc -k` retry for complete configure and compiler diagnostics.
 - Preserve ccache statistics and cleanup, release-root listings, and diagnostic verification steps that intentionally use `continue-on-error`.
 - Keep feed updates fail-fast with `set -euo pipefail`.
-- Optional diagnostic pipelines (directory trees, listing probes) must end with `|| true` when placed inside `set -euo pipefail` steps: a `find | head -N` pipe returns SIGPIPE 141 when head truncates, and `set -e` would then fail the build step.
+- Optional diagnostic pipelines inside `set -euo pipefail` steps must end with `|| true` (SIGPIPE 141 when `head` truncates). Rationale, correct/wrong examples: `project-constraints.instructions.md` § Optional diagnostic pipelines.
 - Cache cleanup is an observable operation: do not silence `gh cache list` / `gh cache delete` failures with `2>/dev/null` or bare `|| true`. Capture the list command's exit status, report failures on stderr, and skip deletion on list failure (an empty result is a normal rc=0 not-found, distinct from an execution error). Report delete failures explicitly.
 - Preserve the established numbered step names and diagnostic heading format unless the workflow presentation is intentionally redesigned.
 

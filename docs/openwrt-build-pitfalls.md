@@ -521,3 +521,34 @@ find dl -maxdepth 1 -type f -size -1024c -exec rm -f {} + 2>/dev/null || true
 ### Verification
 
 重跑 SDK+IB: Go/Rust 包应正常完成; 可检查 `dl/go-mod-cache/google.golang.org/protobuf@<ver>/internal/editiondefaults/` 下载后包含 `editions_defaults.binpb`。
+
+## smartdns HTTP/2 流槽位泄漏 (DoH 假死, 进程存活但解析停滞)
+
+### Symptom
+
+ipq60xx / ipq807x 上 smartdns 进程存活、CPU 正常, 但 DoH 上游解析持续无响应; `logread` 可见 `http2 peer stream limit reached` 或 `send http2 stream failed, connection is unavailable.` 反复出现。
+
+### Verified Root Cause
+
+`http2_stream_close()` 对仍有 pending body 的流走"延迟关闭"路径 (`ex_data = NULL; close_after_send = 1`), 只有在 `_http2_stream_flush_pending_send()` 成功后才 `_http2_remove_stream()`。该 flush 在 `send_window_size <= 0 || ctx->send_conn_window_size <= 0` 时永远返回 `EAGAIN`, 只能靠对端 WINDOW_UPDATE 重试; 一旦对端不再补窗口, 流就永久留在 `ctx->streams`, **持续占用 `active_local_streams` 槽位**。
+
+配套的两处放大效应:
+
+- `_http2_ctx_poll()` 中 `conn_stream == NULL` 分支只 `http2_stream_put()` 不移除, 而该流因 `state == CLOSED && !end_stream_read_handled` 每轮都被判定 readable → 既泄漏槽位又挤占 `poll_items[128]`;
+- 槽位耗尽后 `_http2_create_stream()` 返回 `errno = ENOSPC`, 而 `_dns_client_send_one_packet()` 的 default 分支只置 `prohibit = 1` (窗口 60s/5s) 并 `shutdown` 套接字, **不重建连接**, 于是僵尸连接一直存活。
+
+版本分水岭: `6f9da63` ("enforce directional HTTP2 stream limits", 首个含它的 tag 为 Release48.3) 引入 `active_local_streams` / `peer_max_concurrent_streams`; 48.2 用混合计数 `active_streams` 且未收到对端 SETTINGS 前不受限, 故旧版症状隐蔽但机制同样存在。
+
+### Fix
+
+- `packages/overwrite/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch` (已随 `solarflows/packages@qualcommax` 生效): `ctx->status < 0` 时不再延迟关闭, 并把 ENOSPC 上报为连接错误。
+- `packages/overwrite/qualcommax/net/smartdns/patches/101-reap-stalled-http2-streams.patch` (commit bebecee): ① 延迟关闭增加 `close_defer_tick` + `HTTP2_STREAM_CLOSE_DEFER_TIMEOUT_MS` (5s), 超时即清 pending 并 `_http2_remove_stream(stream, 1)` 回收槽位; ② ENOSPC 分支置 `errno = ECONNRESET`, 命中 `case ECONNRESET` 走立即重建而非 60s prohibit。
+- mt798x 同补丁走 openwrt-packages 链路: `.github/diy/openwrt-packages/overwrite/mt798x/smartdns/patches/{100,101}` + `patches/mt798x/0009-smartdns-bump-48.4.patch` (该 target 的 smartdns 来自 `package/solarflows/smartdns` core 包, feeds 同名包不生效)。
+
+### Verification
+
+两补丁对 48.2 (`2b2b31f1`) 与 48.4 源码基线均可用 GNU `patch -p1` 干净应用 (行号 offset 自动适配), 版本升级与补丁互不阻塞; 0009 模拟 CI 顺序 `0007 → 0009 → overwrite` 全通过。真机侧观察 `logread` 是否出现 `http2 stream ... closed without sending pending data, drop it.`。
+
+### Diagnostic Notes
+
+上游 48.4 之后 master 未修此泄漏 (仅 b59606e HTTP2/QUIC 轮询内重入 close 的 UAF、e01b938 request_pending 桶数、webui); 相关开放 PR #2458 (429/503 不应 prohibit)、#2422 (TLS/HTTP3 泄漏) 均未合入。
