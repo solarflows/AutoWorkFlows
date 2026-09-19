@@ -904,6 +904,21 @@ jobs:
             echo "  Hit rate:      ${HIT_RATE}"
             echo "  Cache size:    ${CACHE_SIZE_LABEL} (disk ${DISK_USAGE_HUMAN}, gzip ~${CC_GZIP_HUMAN})"
 
+            # ── 可缓存路径体量（配额核算依据; 仅写日志, 不改 Summary 表格式）──
+            # 仓库 Actions Cache 配额 10GB，三类快照的新旧两代会短暂共存（save 先于
+            # purge），故各路径体量必须留出足够余量。这里逐个报体量，便于判断是否
+            # 需要缩小某类快照的保存范围（如 dl/rustc 可重新解压、dl/cargo 可重新
+            # 下载，属于可裁剪项）。
+            echo "📦 可缓存路径体量 (Actions Cache 配额核算):"
+            for CACHE_GLOB in openwrt/.ccache openwrt/staging_dir/host openwrt/staging_dir/hostpkg \
+                              openwrt/staging_dir/target-*/host openwrt/dl/cargo openwrt/dl/rustc \
+                              openwrt/tmp/go-build; do
+              for MATCH in $CACHE_GLOB; do
+                [ -e "$MATCH" ] || continue
+                printf '  %-44s %s\n' "$MATCH" "$(du -sh "$MATCH" 2>/dev/null | cut -f1)"
+              done
+            done
+
             # ── Summary ──
             TC_HIT_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
             TC_DISK=$(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo "N/A")
@@ -1118,10 +1133,45 @@ jobs:
       # ───────── toolchain/ccache/SDK tool 缓存保存（仅编译成功）─────────
       # full executor 维护全量 toolchain 和共享 ccache，并生产 SDK 专用
       # host/tool 快照。三类缓存使用独立 save，某一类保存失败不阻塞另外两类。
-      # SDK producer 与 consumer 必须使用完全相同的 SDK path 列表；SDK
-      # executor 独占 SDK 快照的保留和清理，full executor 不删除该 namespace。
-      - name: Save toolchain cache
+      # SDK producer 与 consumer 必须使用完全相同的 SDK path 列表。
+      # 每个 namespace 仍由写入方自约束保留量（每 target 仅最新 1 份）。理由不是
+      # "平台会乱删"：超配额时 GitHub 先保存新缓存、再按 last-access 从旧到新驱逐，
+      # 实测 run 35313768877 中被驱逐的正是上一代、创建后从未被读取的 sdk-hostpkg
+      # （3.10 GiB，与本策略等价，工具链未被波及）。自约束的价值在于把释放放在
+      # 自己可控的步骤里，并保住"新快照保存成功后才删旧"的兜底语义；同时避免
+      # 在陈旧代不足以吸收本轮增量（或根本不存在，如 7 天过期后）时，让平台的
+      # 下一批候选落在工具链快照上（代价 40 分钟全量重编）。
+      - name: Check existing toolchain snapshot
+        id: cache-tc-existing
         if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          # 工具链快照 key 由 tools/toolchain 源码树哈希决定（内容寻址），同一
+          # 源码修订只对应同一份快照；该 key 已存在时重复 save 必然以
+          # "Unable to reserve cache ..." 结束（Actions Cache 不可覆盖），
+          # 日志上表现为误导性失败。精确命中时跳过 save，purge 仍按快照可用处理。
+          TC_KEY="immwrt-v2-toolchain-${IMMWRT_TARGET}-${{ steps.toolchain_hash.outputs.hash }}"
+          set +e
+          TC_JSON=$(gh cache list --repo "${{ github.repository }}" --key "$TC_KEY" --limit 100 --json key)
+          TC_LOOKUP_RC=$?
+          set -e
+          if [ "$TC_LOOKUP_RC" -ne 0 ]; then
+            echo "exists=lookup-failed" >> "$GITHUB_OUTPUT"
+            echo "::warning title=toolchain cache::查询工具链快照失败 (rc=${TC_LOOKUP_RC})，按未命中处理并继续保存"
+            exit 0
+          fi
+          TC_EXISTS=$(printf '%s' "$TC_JSON" | jq -r --arg key "$TC_KEY" 'any(.[]; .key == $key)')
+          if [ "$TC_EXISTS" = "true" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ 工具链快照已存在，跳过重复保存: ${TC_KEY}"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save toolchain cache
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.cache-tc-existing.outputs.exists != 'true'
         id: cache-tc-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -1160,7 +1210,8 @@ jobs:
       # 的独立失败不会阻塞本类 purge。
       - name: Purge stale toolchain caches
         id: cache-tc-purge
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-tc-save.outcome == 'success'
+        # 快照已精确存在（save 被跳过）时同样执行清理，避免旧 key 长期滞留配额。
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && (steps.cache-tc-save.outcome == 'success' || steps.cache-tc-existing.outputs.exists == 'true')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1239,9 +1290,56 @@ jobs:
             echo "ℹ️ 无旧 ccache 缓存"
           fi
 
-      # SDK host/tool 快照的保留和清理由 compile-packages 独占；full
-      # 只负责生产当前源码对应的快照，避免两个 executor 并发删除同一 namespace。
+      # ───────── 清理远端 SDK hostpkg 快照（独立维护, 保留最新 1 份）─────────
+      # 全量构建生产 SDK host/tool 种子快照供 SDK 增量路径恢复；该快照 full
+      # executor 自己从不读取（只写不读），若 SDK 路径长期不运行则无人清理，
+      # 每轮全量构建净增 0.5~1.7GB/目标。写入方必须自约束保留量，否则会触碰
+      # 10GB 仓库配额并触发平台静默驱逐（见上方 Save 段说明）。
+      # 保留策略与 compile-packages 的 SDK hostpkg 清理完全一致：仅保留最新 1 份，
+      # 显式排除本轮 key，清理失败只告警不阻塞，两个 executor 交替写入也能收敛。
+      - name: Purge stale SDK hostpkg snapshots
+        id: cache-hostpkg-purge
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-sdk-hostpkg-save.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          HP_PREFIX="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-"
+          HP_CURRENT="${HP_PREFIX}${{ github.run_id }}"
+          HP_PATTERN="^immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-[0-9]+$"
+          set +e
+          HP_LIST=$(gh cache list --repo "$REPO" --key "$HP_PREFIX" --limit 100 --json id,key,createdAt)
+          HP_RC=$?
+          HP_IDS=""
+          HP_IDS_RC=0
+          if [ "$HP_RC" -eq 0 ]; then
+            HP_IDS=$(echo "$HP_LIST" | jq -r --arg pattern "$HP_PATTERN" --arg current "$HP_CURRENT" '[.[] | select((.key | test($pattern)) and .key != $current)] | .[].id')
+            HP_IDS_RC=$?
+          fi
+          set -e
+          if [ "$HP_RC" -ne 0 ]; then
+            echo "::warning title=SDK hostpkg retention::获取 SDK hostpkg 快照列表失败，保留旧快照 (rc=${HP_RC})"
+            printf '%s\n' '- SDK hostpkg 快照列表获取失败，旧快照已保留。' >> .ci-annotations.md
+          elif [ "$HP_IDS_RC" -ne 0 ]; then
+            echo "::warning title=SDK hostpkg retention::解析 SDK hostpkg 快照列表失败，跳过清理"
+            printf '%s\n' '- SDK hostpkg 快照列表解析失败，本轮跳过清理。' >> .ci-annotations.md
+          elif [ -n "$HP_IDS" ]; then
+            set +e
+            echo "$HP_IDS" | xargs -r -P4 -I{} gh cache delete {} --repo "$REPO"
+            DELETE_RC=$?
+            set -e
+            if [ "$DELETE_RC" -ne 0 ]; then
+              echo "::warning title=SDK hostpkg retention::部分 SDK hostpkg 旧快照删除失败"
+              printf '%s\n' '- 部分 SDK hostpkg 旧快照删除失败，本轮快照仍已保存。' >> .ci-annotations.md
+            fi
+          else
+            echo "ℹ️ 无旧 SDK hostpkg 快照 (保留最新 1 份)"
+          fi
+
       # no-cache 不保存任何 Actions Cache；其余策略按各自策略恢复、保存并清理。
+      # 每个 namespace 的写入方都负责把自己那一份收敛到保留上限，避免依赖
+      # 平台驱逐这种不可控的兜底。
 
       # ════════════ 产物打包 ════════════
       # 刻意设计: 打包后输出 release/ 根目录结构(深度1), 便于人工快速核验产物完整性
@@ -1929,6 +2027,9 @@ jobs:
             fi
             if [ "${{ steps.cache-cc-purge.outcome || 'skipped' }}" = "failure" ]; then
               note '- ccache 快照清理步骤失败，旧快照已保留。'
+            fi
+            if [ "${{ steps.cache-hostpkg-purge.outcome || 'skipped' }}" = "failure" ]; then
+              note '- SDK hostpkg 快照清理步骤失败，旧快照已保留。'
             fi
           fi
           if [ "${{ steps.build.outputs.ccache_wrapper_valid || 'false' }}" != "true" ] && [ "${{ steps.build.outcome || 'skipped' }}" = "success" ]; then
