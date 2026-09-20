@@ -6,8 +6,7 @@ on:
   push:
     paths:
       - '.github/workflows/OpenWRT_Packages_Updater.yml'
-      - '.github/custom/feeds/custom/**'
-      - 'scripts/feed/**'
+      - '.github/package-feed/**'
       - '.github/actions/**'
   workflow_dispatch:
     inputs:
@@ -110,8 +109,8 @@ jobs:
           cd "${{ matrix.target }}"
           # 同步清理工作树，保留 .git；不能后台运行 git rm，否则会与生成和 git add 竞争。
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
-          python3 $GITHUB_WORKSPACE/.github/custom/feeds/custom/scripts/collect_packages.py \
-            --manifest "$GITHUB_WORKSPACE/.github/custom/feeds/custom/packages.yaml" \
+          python3 $GITHUB_WORKSPACE/.github/package-feed/scripts/collect_packages.py \
+            --manifest "$GITHUB_WORKSPACE/.github/package-feed/packages.yaml" \
             --target "${{matrix.target}}" \
             --output-dir .
 
@@ -119,10 +118,10 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE/${{matrix.target}}
-          chmod +x $GITHUB_WORKSPACE/.github/custom/feeds/custom/*.sh
-          bash $GITHUB_WORKSPACE/.github/custom/feeds/custom/convert_translation.sh
-          bash $GITHUB_WORKSPACE/.github/custom/feeds/custom/create_acl_for_luci.sh -a
-          bash $GITHUB_WORKSPACE/.github/custom/feeds/custom/modify.sh
+          chmod +x $GITHUB_WORKSPACE/.github/package-feed/*.sh
+          bash $GITHUB_WORKSPACE/.github/package-feed/convert_translation.sh
+          bash $GITHUB_WORKSPACE/.github/package-feed/create_acl_for_luci.sh -a
+          bash $GITHUB_WORKSPACE/.github/package-feed/modify.sh
 
       - name: 生成插件来源摘要
         if: always()
@@ -130,7 +129,7 @@ jobs:
           set -euo pipefail
           python3 -c "
           import yaml, os
-          manifest_path = r'$GITHUB_WORKSPACE/.github/custom/feeds/custom/packages.yaml'
+          manifest_path = r'$GITHUB_WORKSPACE/.github/package-feed/packages.yaml'
           target = '${{matrix.target}}'
           summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
 
@@ -157,7 +156,7 @@ jobs:
           cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 应用补丁（temp* 前缀的补丁失败仅警告，不中断）
-          PATCH_DIR="$GITHUB_WORKSPACE/.github/custom/feeds/custom/patches/${{matrix.target}}"
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/package-feed/patches/${{matrix.target}}"
           if [ ! -d "$PATCH_DIR" ]; then
             echo "ℹ️ 无目标专用补丁目录，跳过: $PATCH_DIR"
           else
@@ -185,7 +184,7 @@ jobs:
 
           # 应用全局补丁（temp* 前缀的补丁失败仅警告，不中断）
           rm -rf v2ray-geodata
-          PATCH_DIR="$GITHUB_WORKSPACE/.github/custom/feeds/custom/patches"
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/package-feed/patches"
           while IFS= read -r -d '' f; do
             echo "检查并应用全局补丁: $f"
             patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$f"
@@ -233,16 +232,16 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 📝 覆写层" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          apply_overwrite "$GITHUB_WORKSPACE/.github/custom/feeds/custom/overwrite/global" "全局覆写"
-          apply_overwrite "$GITHUB_WORKSPACE/.github/custom/feeds/custom/overwrite/${{matrix.target}}" "${{matrix.target}} 覆写"
+          apply_overwrite "$GITHUB_WORKSPACE/.github/package-feed/overwrite/global" "全局覆写"
+          apply_overwrite "$GITHUB_WORKSPACE/.github/package-feed/overwrite/${{matrix.target}}" "${{matrix.target}} 覆写"
 
       - name: 生成 README (仅 main 分支)
         if: matrix.target == 'main'
         run: |
           set -euo pipefail
-          python3 $GITHUB_WORKSPACE/.github/custom/feeds/custom/scripts/generate_readme.py \
-            --manifest "$GITHUB_WORKSPACE/.github/custom/feeds/custom/packages.yaml" \
-            --template "$GITHUB_WORKSPACE/.github/custom/feeds/custom/readme-template.md" \
+          python3 $GITHUB_WORKSPACE/.github/package-feed/scripts/generate_readme.py \
+            --manifest "$GITHUB_WORKSPACE/.github/package-feed/packages.yaml" \
+            --template "$GITHUB_WORKSPACE/.github/package-feed/readme-template.md" \
             --output "$GITHUB_WORKSPACE/${{matrix.target}}/README.md"
 
       - name: 提交代码

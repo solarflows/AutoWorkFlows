@@ -14,8 +14,8 @@ on:
   push:
       paths:
         - '.github/workflows/Sync_Push.yml'
-        - '.github/custom/sources/**'
-        - '.github/custom/feeds/upstream/**'
+        - '.github/patches/**'
+        - '.github/overwrite/**'
         - '.github/actions/**'  # 当workflow文件或定制资产有改变时触发
   workflow_dispatch:
   # 手动触发
@@ -157,7 +157,7 @@ jobs:
               git checkout -B $target $target/master
             fi
 
-            if [ -d "$GITHUB_WORKSPACE/.github/custom/sources/lede/patches/$target" ]; then
+            if [ -d "$GITHUB_WORKSPACE/.github/patches/lede/$target" ]; then
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
@@ -173,7 +173,7 @@ jobs:
                     overall_patch_failed=true
                   fi
                 fi
-              done < <(find "$GITHUB_WORKSPACE/.github/custom/sources/lede/patches/$target" -type f -name '*.patch' -print0 | sort -z)
+              done < <(find "$GITHUB_WORKSPACE/.github/patches/lede/$target" -type f -name '*.patch' -print0 | sort -z)
               if [ "$patch_failed" = true ]; then
                 echo "::error::$target 补丁应用失败，跳过推送。"
                 continue
@@ -182,8 +182,8 @@ jobs:
 
             # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
             for ow_dir in \
-              "$GITHUB_WORKSPACE/.github/custom/sources/lede/overwrite/global" \
-              "$GITHUB_WORKSPACE/.github/custom/sources/lede/overwrite/$target"; do
+              "$GITHUB_WORKSPACE/.github/overwrite/lede/global" \
+              "$GITHUB_WORKSPACE/.github/overwrite/lede/$target"; do
               if [ -d "$ow_dir" ]; then
                 echo "应用覆写层: $ow_dir"
                 while IFS= read -r -d '' f; do
@@ -342,7 +342,7 @@ jobs:
             echo "Target: $target"
             git checkout -B $target $target/master
 
-            if [ -d "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/luci/patches/$target" ]; then
+            if [ -d "$GITHUB_WORKSPACE/.github/patches/luci/$target" ]; then
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
@@ -358,7 +358,7 @@ jobs:
                     overall_patch_failed=true
                   fi
                 fi
-              done < <(find "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/luci/patches/$target" -type f -name '*.patch' -print0 | sort -z)
+              done < <(find "$GITHUB_WORKSPACE/.github/patches/luci/$target" -type f -name '*.patch' -print0 | sort -z)
               if [ "$patch_failed" = true ]; then
                 echo "::error::$target 补丁应用失败，跳过推送。"
                 continue
@@ -367,8 +367,8 @@ jobs:
 
             # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
             for ow_dir in \
-              "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/luci/overwrite/global" \
-              "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/luci/overwrite/$target"; do
+              "$GITHUB_WORKSPACE/.github/overwrite/luci/global" \
+              "$GITHUB_WORKSPACE/.github/overwrite/luci/$target"; do
               if [ -d "$ow_dir" ]; then
                 echo "应用覆写层: $ow_dir"
                 while IFS= read -r -d '' f; do
@@ -410,7 +410,7 @@ jobs:
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
           patch_failed=false
-          if [ -d "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/luci/patches/hanwckf" ]; then
+          if [ -d "$GITHUB_WORKSPACE/.github/patches/luci/hanwckf" ]; then
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
@@ -424,13 +424,13 @@ jobs:
                   patch_failed=true
                 fi
               fi
-            done < <(find "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/luci/patches/hanwckf" -type f -name '*.patch' -print0 | sort -z)
+            done < <(find "$GITHUB_WORKSPACE/.github/patches/luci/hanwckf" -type f -name '*.patch' -print0 | sort -z)
           fi
 
           # 覆写层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
           for ow_dir in \
-            "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/luci/overwrite/global" \
-            "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/luci/overwrite/hanwckf"; do
+            "$GITHUB_WORKSPACE/.github/overwrite/luci/global" \
+            "$GITHUB_WORKSPACE/.github/overwrite/luci/hanwckf"; do
             if [ -d "$ow_dir" ]; then
               echo "应用覆写层: $ow_dir"
               while IFS= read -r -d '' f; do
@@ -604,7 +604,7 @@ jobs:
             }
             git checkout -B "$target" "${target}/master"
 
-            if [ -d "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/packages/patches/$target" ]; then
+            if [ -d "$GITHUB_WORKSPACE/.github/patches/packages/$target" ]; then
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
@@ -620,7 +620,7 @@ jobs:
                     overall_patch_failed=true
                   fi
                 fi
-              done < <(find "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/packages/patches/$target" -type f -name '*.patch' -print0 | sort -z)
+              done < <(find "$GITHUB_WORKSPACE/.github/patches/packages/$target" -type f -name '*.patch' -print0 | sort -z)
               if [ "$patch_failed" = true ]; then
                 echo "::error::$target 补丁应用失败，跳过推送。"
                 continue
@@ -629,8 +629,8 @@ jobs:
 
             # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
             for ow_dir in \
-              "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/packages/overwrite/global" \
-              "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/packages/overwrite/$target"; do
+              "$GITHUB_WORKSPACE/.github/overwrite/packages/global" \
+              "$GITHUB_WORKSPACE/.github/overwrite/packages/$target"; do
               if [ -d "$ow_dir" ]; then
                 echo "应用覆写层: $ow_dir"
                 while IFS= read -r -d '' f; do
@@ -673,7 +673,7 @@ jobs:
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
           patch_failed=false
-          if [ -d "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/packages/patches/hanwckf" ]; then
+          if [ -d "$GITHUB_WORKSPACE/.github/patches/packages/hanwckf" ]; then
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
@@ -687,13 +687,13 @@ jobs:
                   patch_failed=true
                 fi
               fi
-            done < <(find "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/packages/patches/hanwckf" -type f -name '*.patch' -print0 | sort -z)
+            done < <(find "$GITHUB_WORKSPACE/.github/patches/packages/hanwckf" -type f -name '*.patch' -print0 | sort -z)
           fi
 
           # 覆写层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
           for ow_dir in \
-            "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/packages/overwrite/global" \
-            "$GITHUB_WORKSPACE/.github/custom/feeds/upstream/packages/overwrite/hanwckf"; do
+            "$GITHUB_WORKSPACE/.github/overwrite/packages/global" \
+            "$GITHUB_WORKSPACE/.github/overwrite/packages/hanwckf"; do
             if [ -d "$ow_dir" ]; then
               echo "应用覆写层: $ow_dir"
               while IFS= read -r -d '' f; do
@@ -934,7 +934,7 @@ jobs:
         id: apply-source-patch
         uses: ./AutoWorkFlows/.github/actions/apply-patches
         with:
-          patch-dir: ${{ github.workspace }}/AutoWorkFlows/.github/custom/sources/immortalwrt-qualcommax/patches
+          patch-dir: ${{ github.workspace }}/AutoWorkFlows/.github/patches/qualcommax
           commit-prefix: "qualcommax: apply"
 
       - name: 推送更新到目标仓库
