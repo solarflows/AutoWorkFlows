@@ -7,6 +7,10 @@
 build-info.json
 .last_sha_*
 
+# Python
+__pycache__/
+*.pyc
+
 # OS
 .DS_Store
 Thumbs.db
