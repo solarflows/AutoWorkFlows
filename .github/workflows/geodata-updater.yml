@@ -187,39 +187,35 @@ jobs:
             test -s "$output_file"
           }
 
-          generate_rule "$WORK_DIR/publish/autoproxy.txt" \
-            'AutoProxy Rules' 'UnCN as primary rules,CN exceptions and IPs' "$VERSION" \
-            '!## UnCN Domains' geosite geolocation-!cn '||' \
-            '!## CN Domain Exceptions' geosite cn '@@||' \
-            '!## CN IP Ranges' geoip cn '@@' \
-            '!## Privite IP Ranges' geoip private '@@'
-          generate_rule "$WORK_DIR/publish/autoproxy_lite.txt" \
-            'AutoProxy Lite Rules' 'GFW as primary rules,geolocation CN exceptions' "$VERSION" \
-            '!## GFW Domains' geosite gfw '||' \
-            '!## Privite IP Ranges' geoip private '@@'
-          generate_rule "$WORK_DIR/publish/whitelist.txt" \
-            'Whitelist Rules' 'Only CN domains and IPs' "$VERSION" \
-            '!## CN Domain Exceptions' geosite cn '||' \
-            '!## CN IP Ranges' geoip cn '' \
-            '!## Privite IP Ranges' geoip private ''
-          generate_rule "$WORK_DIR/publish/whitelist_lite.txt" \
-            'Whitelist Lite Rules' 'Only geolocation CN domains and IPs' "$VERSION" \
-            '!## geolocation CN Domain Exceptions' geosite geolocation-cn '||' \
-            '!## Privite IP Ranges' geoip private ''
-          generate_rule "$WORK_DIR/publish/blacklist.txt" \
-            'Blacklist Rules' 'Only UnCN domains.' "$VERSION" \
-            '!## unCN Domains' geosite geolocation-!cn '||' \
-            '!## Privite IP Ranges' geoip private '@@'
-          generate_rule "$WORK_DIR/publish/blacklist_lite.txt" \
-            'blacklist_lite Rules' 'Only GFWList domains.' "$VERSION" \
-            '!## GFW Domains' geosite gfw '||' \
-            '!## Privite IP Ranges' geoip private '@@'
-          generate_rule "$WORK_DIR/publish/smartproxy_whitelist.txt" \
-            'Whitelist Rules For SmartProxy' 'Only CN domains and IPs' "$VERSION" \
-            '!## CN Domain Exceptions' geosite cn '@@||' \
-            '!## Privite IP Ranges' geoip private '@@'
+          # 1. gfwlist.txt (标准 GFWList 阻断规则: 仅被封锁域名走代理，国内直连)
+          generate_rule "$WORK_DIR/publish/gfwlist.txt" \
+            'GFWList Rules' 'GFW blocked domains for proxying' "$VERSION" \
+            '!## GFW Blocked Domains' geosite gfw '||'
 
-          expected_files=(autoproxy autoproxy_lite whitelist whitelist_lite blacklist blacklist_lite smartproxy_whitelist)
+          # 2. whitelist.txt (大陆直连白名单: 配合全局代理，国内域名直连)
+          # 注意：AutoProxy 规范中 @@|| 开头代表白名单（直连例外规则）
+          generate_rule "$WORK_DIR/publish/whitelist.txt" \
+            'China Direct Whitelist Rules' 'CN domains for direct connection' "$VERSION" \
+            '!## CN Direct Domain Exceptions' geosite cn '@@||'
+
+          # 3. whitelist_lite.txt (轻量级大陆直连白名单)
+          generate_rule "$WORK_DIR/publish/whitelist_lite.txt" \
+            'China Direct Whitelist Lite Rules' 'Geolocation-CN domains for direct connection' "$VERSION" \
+            '!## Geolocation-CN Direct Domain Exceptions' geosite geolocation-cn '@@||'
+
+          # 4. autoproxy.txt (全量 UnCN 代理规则，附带 CN 域名直连白名单)
+          generate_rule "$WORK_DIR/publish/autoproxy.txt" \
+            'AutoProxy Full Rules' 'UnCN domains as proxy rules, CN domains as direct exceptions' "$VERSION" \
+            '!## UnCN Domains' geosite geolocation-!cn '||' \
+            '!## CN Domain Exceptions' geosite cn '@@||'
+
+          # 建立向后兼容副本（保持历史订阅 URL 不断链，同时纠正旧文件的语义与语法错误）
+          cp -f "$WORK_DIR/publish/gfwlist.txt" "$WORK_DIR/publish/autoproxy_lite.txt"
+          cp -f "$WORK_DIR/publish/gfwlist.txt" "$WORK_DIR/publish/blacklist_lite.txt"
+          cp -f "$WORK_DIR/publish/autoproxy.txt" "$WORK_DIR/publish/blacklist.txt"
+          cp -f "$WORK_DIR/publish/whitelist.txt" "$WORK_DIR/publish/smartproxy_whitelist.txt"
+
+          expected_files=(autoproxy autoproxy_lite blacklist blacklist_lite gfwlist smartproxy_whitelist whitelist whitelist_lite)
           for asset in "${expected_files[@]}"; do
             file="$WORK_DIR/publish/${asset}.txt"
             test -f "$file" && test -s "$file"
@@ -228,7 +224,7 @@ jobs:
             tail -n 1 "$file" | grep -Fqx '!---------------------EOF-----------------------'
           done
           mapfile -t text_assets < <(find "$WORK_DIR/publish" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' | sort)
-          expected_text_assets=(autoproxy.txt autoproxy_lite.txt blacklist.txt blacklist_lite.txt smartproxy_whitelist.txt whitelist.txt whitelist_lite.txt)
+          expected_text_assets=(autoproxy.txt autoproxy_lite.txt blacklist.txt blacklist_lite.txt gfwlist.txt smartproxy_whitelist.txt whitelist.txt whitelist_lite.txt)
           diff -u <(printf '%s\n' "${expected_text_assets[@]}") <(printf '%s\n' "${text_assets[@]}")
           jq -n \
             --arg version "$VERSION" \
@@ -260,10 +256,10 @@ jobs:
           done
           cp -- "$WORK_DIR/release"/* "$WORK_DIR/publish/"
           mapfile -t encoded_assets < <(find "$WORK_DIR/release" -maxdepth 1 -type f -printf '%f\n' | sort)
-          expected_encoded_assets=(autoproxy autoproxy_lite blacklist blacklist_lite smartproxy_whitelist whitelist whitelist_lite)
+          expected_encoded_assets=(autoproxy autoproxy_lite blacklist blacklist_lite gfwlist smartproxy_whitelist whitelist whitelist_lite)
           diff -u <(printf '%s\n' "${expected_encoded_assets[@]}") <(printf '%s\n' "${encoded_assets[@]}")
           mapfile -t publish_assets < <(find "$WORK_DIR/publish" -maxdepth 1 -type f -printf '%f\n' | sort)
-          expected_publish_assets=(autoproxy autoproxy.txt autoproxy_lite autoproxy_lite.txt blacklist blacklist.txt blacklist_lite blacklist_lite.txt smartproxy_whitelist smartproxy_whitelist.txt source-metadata.json whitelist whitelist.txt whitelist_lite whitelist_lite.txt)
+          expected_publish_assets=(autoproxy autoproxy.txt autoproxy_lite autoproxy_lite.txt blacklist blacklist.txt blacklist_lite blacklist_lite.txt gfwlist gfwlist.txt smartproxy_whitelist smartproxy_whitelist.txt source-metadata.json whitelist whitelist.txt whitelist_lite whitelist_lite.txt)
           diff -u <(printf '%s\n' "${expected_publish_assets[@]}") <(printf '%s\n' "${publish_assets[@]}")
 
       - name: Publish release assets
