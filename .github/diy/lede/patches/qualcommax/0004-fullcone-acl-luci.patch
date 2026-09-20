@@ -1,0 +1,606 @@
+From: AutoWorkflows contributors
+Subject: [PATCH] luci-app-fullconenat-sonic: add per-device NAT1 access control
+
+Add an optional device list that restricts fullcone NAT (NAT1) mapping
+creation to explicitly listed devices. Unlisted devices of a zone keep
+ordinary masquerading, so they are not reachable from the internet through
+this mapping. The list is empty by default while the switch is off, which
+preserves the previous behaviour.
+
+Devices are chosen by MAC address from the hosts known to dnsmasq (DHCP
+leases, static leases and the neighbour table) and are resolved to the
+current IP address of the device whenever the page is saved, because the
+firewall consumes addresses. Fixed addresses may be entered as plain IP
+addresses or subnets instead and are used as-is. Every entry shows whether
+the device has a static lease and whether it currently has a usable
+address; a per-entry button refreshes the resolved addresses on demand.
+
+The page is a standalone view so that it does not depend on the layout of
+the firewall zone page, and it reuses the existing translation catalogue of
+this package for its added strings.
+
+Reading the dhcp configuration for the static lease hints requires read
+access, which the new ACL description grants.
+
+---
+diff --git a/package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js b/package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js
+new file mode 100644
+index 0000000..f764a82
+--- /dev/null
++++ b/package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js
+@@ -0,0 +1,273 @@
++'use strict';
++'require view';
++'require form';
++'require uci';
++'require rpc';
++'require ui';
++
++const callHostHints = rpc.declare({
++	object: 'luci-rpc',
++	method: 'getHostHints',
++	expect: { '': {} }
++});
++
++const macPattern = /^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$/i;
++
++function canonMAC(mac) {
++	return String(mac).trim().replace(/-/g, ':').toUpperCase();
++}
++
++function isMAC(value) {
++	return macPattern.test(String(value).trim());
++}
++
++function splitTokens(values) {
++	const tokens = [];
++
++	for (const value of L.toArray(values))
++		for (const token of String(value).split(/[ \t]+/))
++			if (token !== '')
++				tokens.push(token);
++
++	return tokens;
++}
++
++function hostHints(data) {
++	const hosts = {};
++
++	for (const mac in (data || {})) {
++		const hint = data[mac] || {};
++		const key = canonMAC(mac);
++		const entry = hosts[key] || (hosts[key] = { name: '', ipv4: [], ipv6: [] });
++
++		if (hint.name)
++			entry.name = hint.name;
++
++		const allIps = [
++			...L.toArray(hint.ipaddrs),
++			...L.toArray(hint.ipv4),
++			...L.toArray(hint.ipv6)
++		];
++
++		for (const ip of allIps) {
++			if (!ip) continue;
++			if (ip.includes(':')) {
++				const lower = ip.toLowerCase();
++				if (!lower.startsWith('fe80:') && !entry.ipv6.includes(ip))
++					entry.ipv6.push(ip);
++			} else {
++				if (!entry.ipv4.includes(ip))
++					entry.ipv4.push(ip);
++			}
++		}
++	}
++
++	return hosts;
++}
++
++function staticLeases() {
++	const leases = {};
++
++	uci.sections('dhcp', 'host', function(section) {
++		const name = section.name || '';
++		const addresses = L.toArray(section.ip);
++
++		for (const mac of L.toArray(section.mac))
++			if (isMAC(mac))
++				leases[canonMAC(mac)] = { name: name, addr: addresses[0] || null };
++	});
++
++	return leases;
++}
++
++return view.extend({
++	load() {
++		return Promise.all([
++			uci.load('firewall'),
++			uci.load('dhcp').catch(() => null),
++			callHostHints().catch(() => null)
++		]);
++	},
++
++	render(data) {
++		const hosts = hostHints(data[2]);
++		const leases = staticLeases();
++
++		function currentAddrs(mac) {
++			const key = canonMAC(mac);
++			const host = hosts[key];
++			const addrs = [];
++
++			if (host) {
++				for (const ip of host.ipv4)
++					if (!addrs.includes(ip))
++						addrs.push(ip);
++				for (const ip of host.ipv6)
++					if (!addrs.includes(ip))
++						addrs.push(ip);
++			}
++
++			const lease = leases[key];
++			if (lease && lease.addr && !addrs.includes(lease.addr))
++				addrs.push(lease.addr);
++
++			return addrs;
++		}
++
++		function hostLabel(mac) {
++			const key = canonMAC(mac);
++			return (hosts[key] && hosts[key].name) || (leases[key] && leases[key].name) || key;
++		}
++
++		function syncSectionIP(mapInstance, section_id) {
++			const devOpt = mapInstance.lookupOption('devices', section_id)?.[0];
++			const customOpt = mapInstance.lookupOption('custom_ip', section_id)?.[0];
++
++			const macs = splitTokens(devOpt ? devOpt.formvalue(section_id) : uci.get('firewall', section_id, 'mac')).map(canonMAC);
++			const customAddrs = splitTokens(customOpt ? customOpt.formvalue(section_id) : uci.get('firewall', section_id, 'custom_ip'));
++
++			const effective = [ ...customAddrs ];
++			for (const mac of macs) {
++				if (isMAC(mac)) {
++					for (const addr of currentAddrs(mac)) {
++						if (!effective.includes(addr))
++							effective.push(addr);
++					}
++				}
++			}
++
++			uci.set('firewall', section_id, 'ip', effective.length ? effective : null);
++		}
++
++		let m, s, o;
++
++		m = new form.Map('firewall', _('Fullcone NAT - Device Access Control'),
++			_('Limits fullcone NAT (NAT1) to the devices listed below. Devices that are not listed keep ordinary masquerading and are not reachable from the internet through this mapping. The master switch and the per-zone switch are configured under Firewall - Zone Settings; this page only takes effect for zones that have fullcone NAT enabled there.'));
++
++		s = m.section(form.TypedSection, 'defaults', _('General Settings'));
++		s.anonymous = true;
++		s.addremove = false;
++
++		o = s.option(form.Flag, 'fullcone_acl', _('Only allow NAT1 for the listed devices'));
++		o.default = '0';
++		o.rmempty = false;
++		o.description = _('Until this is enabled, every device of a zone with fullcone NAT enabled receives NAT1 mappings. Once enabled, only the devices listed below do; an empty list therefore disables fullcone NAT mappings entirely.');
++
++		s = m.section(form.TypedSection, 'fullcone_device', _('Devices'));
++		s.anonymous = true;
++		s.addremove = true;
++		s.sectiontitle = section_id => uci.get('firewall', section_id, 'remarks') || section_id;
++		s.description = _('Devices chosen by MAC address are resolved to their current IP address every time this page is saved, because the firewall works with addresses. Devices without a static lease may change their address at any time, so configuring a static lease for them is recommended.');
++
++		s.handleAdd = function(ev, name) {
++			const config_name = this.uciconfig ?? this.map.config;
++			let section_id;
++
++			do {
++				section_id = 'acl_%s'.format(Math.random().toString(36).substring(2, 7));
++			} while (this.map.data.get(config_name, section_id) != null);
++
++			this.map.data.add(config_name, this.sectiontype, section_id);
++
++			return this.map.save(null, true);
++		};
++
++		o = s.option(form.Flag, 'enabled', _('Enable'));
++		o.default = '1';
++		o.rmempty = false;
++
++		o = s.option(form.Value, 'remarks', _('Remarks'));
++		o.rmempty = true;
++		o.placeholder = _('e.g. living room PC');
++
++		o = s.option(form.DynamicList, 'devices', _('Devices (by MAC)'));
++		o.datatype = 'list(macaddr)';
++		o.rmempty = false;
++		o.placeholder = _('Pick a device or enter its MAC address');
++
++		for (const key in hosts)
++			o.value(key, '%s (%s)'.format(key, hosts[key].ipv4[0] || hosts[key].name || _('offline')));
++
++		for (const key in leases)
++			o.value(key, '%s (%s)'.format(key, leases[key].addr || leases[key].name || _('static lease')));
++
++		o.write = function(section_id, value) {
++			const macs = splitTokens(value).map(canonMAC);
++			uci.set('firewall', section_id, 'mac', macs.length ? macs : null);
++			syncSectionIP(this.map, section_id);
++		};
++
++		o.remove = function(section_id) {
++			uci.set('firewall', section_id, 'mac', null);
++			syncSectionIP(this.map, section_id);
++		};
++
++		o = s.option(form.DynamicList, 'custom_ip', _('Additional IP addresses'));
++		o.datatype = 'list(ipmask("true"))';
++		o.rmempty = false;
++		o.placeholder = _('IP address or subnet, e.g. 192.168.1.50 or 192.168.1.0/24');
++		o.description = _('Use these entries for devices with a fixed address; they are applied as given and are not resolved.');
++
++		o.write = function(section_id, value) {
++			const addrs = splitTokens(value);
++			uci.set('firewall', section_id, 'custom_ip', addrs.length ? addrs : null);
++			syncSectionIP(this.map, section_id);
++		};
++
++		o.remove = function(section_id) {
++			uci.set('firewall', section_id, 'custom_ip', null);
++			syncSectionIP(this.map, section_id);
++		};
++
++		o = s.option(form.DummyValue, '_status', _('Status'));
++		o.cfgvalue = function(section_id) {
++			const section = uci.get('firewall', section_id) || {};
++			const macs = L.toArray(section.mac);
++			const addrs = L.toArray(section.ip);
++			const custom = L.toArray(section.custom_ip);
++			const nodes = [];
++
++			for (const mac of macs) {
++				const current = currentAddrs(mac);
++				const label = hostLabel(mac);
+
++				if (current.length)
++					nodes.push(E('div', {}, [ '%s: %s'.format(label, current.join(', ')) ]));
++				else
++					nodes.push(E('div', { 'style': 'color:#c00' },
++						[ _('%s: no current address, NAT1 is not applied').format(label) ]));
+
++				if (!leases[canonMAC(mac)])
++					nodes.push(E('div', { 'style': 'color:#e60' },
++						[ _('%s: no static lease, the address may change').format(label) ]));
++			}
+
++			if (custom.length)
++				nodes.push(E('div', {}, [ '%s: %s'.format(_('Additional IP addresses'), custom.join(', ')) ]));
+
++			if (!macs.length && !custom.length && !addrs.length)
++				nodes.push(E('div', { 'style': 'color:#c00' },
++					[ _('No device address configured - fullcone NAT is disabled for every device of this zone.') ]));
+
++			return E('div', {}, nodes);
++		};
+
++		o = s.option(form.Button, '_resolve', _('Resolve MAC addresses'));
++		o.inputtitle = _('Refresh');
++		o.inputstyle = 'action';
++		o.description = _('Re-resolve the MAC addresses above to their current IP addresses. Saving this page does this automatically.');
++		o.onclick = function(ev, section_id) {
++			syncSectionIP(this.map, section_id);
++			const devOpt = this.map.lookupOption('devices', section_id)?.[0];
++			const macs = splitTokens(devOpt ? devOpt.formvalue(section_id) : uci.get('firewall', section_id, 'mac'));
++			const resolved = [];
+
++			for (const mac of macs) {
++				if (isMAC(mac)) {
++					for (const addr of currentAddrs(mac)) {
++						if (!resolved.includes(addr))
++							resolved.push(addr);
++					}
++				}
++			}
+
++			ui.addNotification(null, E('p', {},
++				[ _('Resolved %d address(es). Save the configuration to apply them.').format(resolved.length) ]));
++		};
+
++		o.write = function() {};
++		o.remove = function() {};
+
++		return m.render();
++	}
++});
++diff --git a/package/emortal/luci-app-fullconenat-sonic/po/templates/fullconenat-sonic.pot b/package/emortal/luci-app-fullconenat-sonic/po/templates/fullconenat-sonic.pot
+index 68e3b97..9c86569 100644
+--- a/package/emortal/luci-app-fullconenat-sonic/po/templates/fullconenat-sonic.pot
++++ b/package/emortal/luci-app-fullconenat-sonic/po/templates/fullconenat-sonic.pot
+@@ -25,3 +25,120 @@ msgid ""
+ "this zone. Disabling Fullcone NAT leaves masquerading unchanged. Usually "
+ "enable this only on the WAN zone."
+ msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:204
++msgid "%s: no current address, NAT1 is not applied"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:208
++msgid "%s: no static lease, the address may change"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:165
++msgid "Additional IP addresses"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:117
++msgid "Devices"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:144
++msgid "Devices (by MAC)"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:121
++msgid "Devices chosen by MAC address are resolved to their current IP address "
++"every time this page is saved, because the firewall works with "
++"addresses. Devices without a static lease may change their address at "
++"any time, so configuring a static lease for them is recommended."
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:136
++msgid "Enable"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:105
++msgid "Fullcone NAT - Device Access Control"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:108
++msgid "General Settings"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/root/usr/share/rpcd/acl.d/luci-app-fullconenat-sonic-acl.json:3
++msgid "Grant access to the fullcone NAT device access control settings"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:168
++msgid "IP address or subnet, e.g. 192.168.1.50 or 192.168.1.0/24"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:106
++msgid "Limits fullcone NAT (NAT1) to the devices listed below. Devices that are "
++"not listed keep ordinary masquerading and are not reachable from the "
++"internet through this mapping. The master switch and the per-zone switch "
++"are configured under Firewall - Zone Settings; this page only takes "
++"effect for zones that have fullcone NAT enabled there."
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:213
++msgid "No device address configured - fullcone NAT is disabled for every device "
++"of this zone."
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:112
++msgid "Only allow NAT1 for the listed devices"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:147
++msgid "Pick a device or enter its MAC address"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:221
++msgid "Re-resolve the MAC addresses above to their current IP addresses. Saving "
++"this page does this automatically."
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:219
++msgid "Refresh"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:140
++msgid "Remarks"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:218
++msgid "Resolve MAC addresses"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:239
++msgid "Resolved %d address(es). Save the configuration to apply them."
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:189
++msgid "Status"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:115
++msgid "Until this is enabled, every device of a zone with fullcone NAT enabled "
++"receives NAT1 mappings. Once enabled, only the devices listed below do; "
++"an empty list therefore disables fullcone NAT mappings entirely."
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:169
++msgid "Use these entries for devices with a fixed address; they are applied as "
++"given and are not resolved."
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:142
++msgid "e.g. living room PC"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:150
++msgid "offline"
++msgstr ""
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:153
++msgid "static lease"
++msgstr ""
++
+diff --git a/package/emortal/luci-app-fullconenat-sonic/po/zh_Hans/fullconenat-sonic.po b/package/emortal/luci-app-fullconenat-sonic/po/zh_Hans/fullconenat-sonic.po
+index 445b5c6..e31bcd9 100644
+--- a/package/emortal/luci-app-fullconenat-sonic/po/zh_Hans/fullconenat-sonic.po
++++ b/package/emortal/luci-app-fullconenat-sonic/po/zh_Hans/fullconenat-sonic.po
+@@ -33,3 +33,123 @@ msgstr ""
+ "使用所有受支持的协议。启用全锥型NAT时自动开启 IPv4 地址伪装。关闭地址伪装时，"
+ "也会关闭对应区域的全锥型NAT。关闭全锥型NAT不会更改地址伪装设置。通常仅需在 "
+ "WAN 区域开启。"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:204
++msgid "%s: no current address, NAT1 is not applied"
++msgstr "%s：当前没有可用地址，NAT1 不会生效"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:208
++msgid "%s: no static lease, the address may change"
++msgstr "%s：没有静态租约，地址可能会变化"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:165
++msgid "Additional IP addresses"
++msgstr "附加 IP 地址"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:117
++msgid "Devices"
++msgstr "设备"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:144
++msgid "Devices (by MAC)"
++msgstr "设备（按 MAC）"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:121
++msgid "Devices chosen by MAC address are resolved to their current IP address "
++"every time this page is saved, because the firewall works with "
++"addresses. Devices without a static lease may change their address at "
++"any time, so configuring a static lease for them is recommended."
++msgstr "由于防火墙按地址工作，按 MAC 选择的设备会在每次保存本页时解析为其当前 IP "
++"地址。未配置静态租约的设备地址可能随时变化，建议为其配置静态租约。"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:136
++msgid "Enable"
++msgstr "启用"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:105
++msgid "Fullcone NAT - Device Access Control"
++msgstr "全锥形 NAT - 设备访问控制"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:108
++msgid "General Settings"
++msgstr "常规设置"
++
++#: package/emortal/luci-app-fullconenat-sonic/root/usr/share/rpcd/acl.d/luci-app-fullconenat-sonic-acl.json:3
++msgid "Grant access to the fullcone NAT device access control settings"
++msgstr "授予访问全锥形 NAT 设备访问控制设置的权限"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:168
++msgid "IP address or subnet, e.g. 192.168.1.50 or 192.168.1.0/24"
++msgstr "IP 地址或子网，例如 192.168.1.50 或 192.168.1.0/24"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:106
++msgid "Limits fullcone NAT (NAT1) to the devices listed below. Devices that are "
++"not listed keep ordinary masquerading and are not reachable from the "
++"internet through this mapping. The master switch and the per-zone switch "
++"are configured under Firewall - Zone Settings; this page only takes "
++"effect for zones that have fullcone NAT enabled there."
++msgstr "把全锥形 NAT（NAT1）限制为下方列出的设备使用。未列出的设备仍使用普通地址伪装，不会被该映射暴露到公网。总开关与各区域开关位于\"防火墙 "
++"- 区域设置\"，本页仅对在那里已启用全锥形 NAT 的区域生效。"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:213
++msgid "No device address configured - fullcone NAT is disabled for every device "
++"of this zone."
++msgstr "未配置任何设备地址——该区域内所有设备的全锥形 NAT 均被禁用。"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:112
++msgid "Only allow NAT1 for the listed devices"
++msgstr "仅对列表中的设备启用 NAT1"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:147
++msgid "Pick a device or enter its MAC address"
++msgstr "选择设备或直接输入其 MAC 地址"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:221
++msgid "Re-resolve the MAC addresses above to their current IP addresses. Saving "
++"this page does this automatically."
++msgstr "将上述 MAC 地址重新解析为当前 IP 地址。保存本页时会自动执行该操作。"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:219
++msgid "Refresh"
++msgstr "刷新"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:140
++msgid "Remarks"
++msgstr "备注"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:218
++msgid "Resolve MAC addresses"
++msgstr "解析 MAC 地址"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:239
++msgid "Resolved %d address(es). Save the configuration to apply them."
++msgstr "已解析出 %d 个地址。保存配置后生效。"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:189
++msgid "Status"
++msgstr "状态"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:115
++msgid "Until this is enabled, every device of a zone with fullcone NAT enabled "
++"receives NAT1 mappings. Once enabled, only the devices listed below do; "
++"an empty list therefore disables fullcone NAT mappings entirely."
++msgstr "未启用时，已开启全锥形 NAT 的区域内的所有设备都会获得 NAT1 映射；启用后则仅列表中的设备获得，因此列表为空时完全不创建 NAT1 "
++"映射。"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:169
++msgid "Use these entries for devices with a fixed address; they are applied as "
++"given and are not resolved."
++msgstr "固定地址的设备可直接使用此列表；条目按原样应用，不做解析。"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:142
++msgid "e.g. living room PC"
++msgstr "例如：客厅的电脑"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:150
++msgid "offline"
++msgstr "离线"
++
++#: package/emortal/luci-app-fullconenat-sonic/htdocs/luci-static/resources/view/firewall/fullconenat-acl.js:153
++msgid "static lease"
++msgstr "静态租约"
++
+diff --git a/package/emortal/luci-app-fullconenat-sonic/root/usr/share/luci/menu.d/luci-app-fullconenat-sonic-acl.json b/package/emortal/luci-app-fullconenat-sonic/root/usr/share/luci/menu.d/luci-app-fullconenat-sonic-acl.json
+new file mode 100644
+index 0000000..d1497c9
+--- /dev/null
++++ b/package/emortal/luci-app-fullconenat-sonic/root/usr/share/luci/menu.d/luci-app-fullconenat-sonic-acl.json
+@@ -0,0 +1,14 @@
++{
++	"admin/network/firewall/fullconenat-acl": {
++		"title": "Fullcone NAT ACL",
++		"order": 16,
++		"action": {
++			"type": "view",
++			"path": "firewall/fullconenat-acl"
++		},
++		"depends": {
++			"acl": [ "luci-app-fullconenat-sonic-acl" ],
++			"uci": { "firewall": true }
++		}
++	}
++}
++diff --git a/package/emortal/luci-app-fullconenat-sonic/root/usr/share/rpcd/acl.d/luci-app-fullconenat-sonic-acl.json b/package/emortal/luci-app-fullconenat-sonic/root/usr/share/rpcd/acl.d/luci-app-fullconenat-sonic-acl.json
+new file mode 100644
+index 0000000..c20fa39
+--- /dev/null
++++ b/package/emortal/luci-app-fullconenat-sonic/root/usr/share/rpcd/acl.d/luci-app-fullconenat-sonic-acl.json
+@@ -0,0 +1,11 @@
++{
++	"luci-app-fullconenat-sonic-acl": {
++		"description": "Grant access to the fullcone NAT device access control settings",
++		"read": {
++			"uci": [ "firewall", "dhcp" ],
++			"ubus": {
++				"luci-rpc": [ "getHostHints" ]
++			}
++		},
++		"write": { "uci": [ "firewall" ] }
++	}
++}
++
