@@ -13,7 +13,8 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '.github/workflows/v2ray-geodataUpdater.yaml'
+      - '.github/workflows/geodata-updater.yml'
+      - '.github/custom-feed/overlay/global/v2ray-geodata/Makefile'
   workflow_dispatch:
 
 jobs:
@@ -107,59 +108,38 @@ jobs:
           echo "Downloaded GEOIP SHA: $GEOIP_SHA"
           echo "Downloaded GEOSITE SHA: $GEOSITE_SHA"
 
-      - name: Update patch files
+      - name: Update overlay Makefile
         run: |
           set -euo pipefail
-          PATCH_PATH="$GITHUB_WORKSPACE/.github/packages-updater/patches/0001-add-v2ray-geodata.patch"
-          [ -f "$PATCH_PATH" ] || { echo "::error::Patch file not found: $PATCH_PATH"; exit 1; }
+          MAKEFILE_PATH="$GITHUB_WORKSPACE/.github/custom-feed/overlay/global/v2ray-geodata/Makefile"
+          [ -f "$MAKEFILE_PATH" ] || { echo "::error::Makefile not found: $MAKEFILE_PATH"; exit 1; }
           [[ "$VERSION" =~ ^[0-9]{12}$ ]] || { echo "::error::版本格式无效: $VERSION"; exit 1; }
           [[ "$GEOIP_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::GeoIP SHA 格式无效"; exit 1; }
           [[ "$GEOSITE_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::GeoSite SHA 格式无效"; exit 1; }
 
-          echo "Updating patch: $PATCH_PATH"
+          echo "Updating Makefile: $MAKEFILE_PATH"
           echo "  VERSION    = ${VERSION}"
           echo "  GEOIP_SHA  = ${GEOIP_SHA}"
           echo "  GEOSITE_SHA= ${GEOSITE_SHA}"
 
-          sed -i -E "s/^(\+GEO_VER:=).*/\1${VERSION}/" "$PATCH_PATH"
-          sed -i -E "/^\+define Download\/geoip-full/,/^\+endef/ s/^(\+  HASH:=).*/\1${GEOIP_SHA}/" "$PATCH_PATH"
-          sed -i -E "/^\+define Download\/geosite-full/,/^\+endef/ s/^(\+  HASH:=).*/\1${GEOSITE_SHA}/" "$PATCH_PATH"
+          sed -i -E "s/^(GEO_VER:=).*/\1${VERSION}/" "$MAKEFILE_PATH"
+          sed -i -E "/^define Download\/geoip-full/,/^endef/ s/^(  HASH:=).*/\1${GEOIP_SHA}/" "$MAKEFILE_PATH"
+          sed -i -E "/^define Download\/geosite-full/,/^endef/ s/^(  HASH:=).*/\1${GEOSITE_SHA}/" "$MAKEFILE_PATH"
 
-          GEO_VER_COUNT=$(awk '/^\+GEO_VER:=/ { count++ } END { print count + 0 }' "$PATCH_PATH")
+          GEO_VER_COUNT=$(awk '/^GEO_VER:=/ { count++ } END { print count + 0 }' "$MAKEFILE_PATH")
           GEOIP_FULL_HASH=$(awk '
-            /^\+define Download\/geoip-full$/ { in_block=1; next }
-            /^\+endef$/ && in_block { in_block=0 }
-            in_block && /^\+  HASH:=/ { value=$0; sub(/^\+  HASH:=/, "", value); print value }
-          ' "$PATCH_PATH")
+            /^define Download\/geoip-full$/ { in_block=1; next }
+            /^endef$/ && in_block { in_block=0 }
+            in_block && /^  HASH:=/ { value=$0; sub(/^  HASH:=/, "", value); print value }
+          ' "$MAKEFILE_PATH")
           GEOSITE_FULL_HASH=$(awk '
-            /^\+define Download\/geosite-full$/ { in_block=1; next }
-            /^\+endef$/ && in_block { in_block=0 }
-            in_block && /^\+  HASH:=/ { value=$0; sub(/^\+  HASH:=/, "", value); print value }
-          ' "$PATCH_PATH")
+            /^define Download\/geosite-full$/ { in_block=1; next }
+            /^endef$/ && in_block { in_block=0 }
+            in_block && /^  HASH:=/ { value=$0; sub(/^  HASH:=/, "", value); print value }
+          ' "$MAKEFILE_PATH")
           [ "$GEO_VER_COUNT" -eq 1 ] || { echo "::error::GEO_VER 字段数量异常: $GEO_VER_COUNT"; exit 1; }
           [ "$GEOIP_FULL_HASH" = "$GEOIP_SHA" ] || { echo "::error::GeoIP full HASH 更新失败"; exit 1; }
           [ "$GEOSITE_FULL_HASH" = "$GEOSITE_SHA" ] || { echo "::error::GeoSite full HASH 更新失败"; exit 1; }
-
-          PATCH_FIXTURE="$WORK_DIR/patch-fixture"
-          rm -rf -- "$PATCH_FIXTURE"
-          mkdir -p -- "$PATCH_FIXTURE"
-          git -C "$PATCH_FIXTURE" init -q
-          git -C "$PATCH_FIXTURE" apply --check --whitespace=nowarn "$PATCH_PATH"
-          git -C "$PATCH_FIXTURE" apply --whitespace=nowarn "$PATCH_PATH"
-          MAKEFILE_BLOB=$(git -C "$PATCH_FIXTURE" hash-object v2ray-geodata/Makefile)
-          sed -i -E "s/^index 00000000\.\.[0-9a-f]+$/index 00000000..${MAKEFILE_BLOB}/" "$PATCH_PATH"
-          PATCH_BLOB=$(sed -n -E 's/^index 00000000\.\.([0-9a-f]+)$/\1/p' "$PATCH_PATH")
-          [ "$PATCH_BLOB" = "$MAKEFILE_BLOB" ] || { echo "::error::Makefile blob index 更新失败"; exit 1; }
-
-          SECOND_FIXTURE="$WORK_DIR/patch-fixture-verify"
-          rm -rf -- "$SECOND_FIXTURE"
-          mkdir -p -- "$SECOND_FIXTURE"
-          git -C "$SECOND_FIXTURE" init -q
-          git -C "$SECOND_FIXTURE" apply --check --whitespace=nowarn "$PATCH_PATH"
-          git -C "$SECOND_FIXTURE" apply --whitespace=nowarn "$PATCH_PATH"
-          VERIFY_BLOB=$(git -C "$SECOND_FIXTURE" hash-object v2ray-geodata/Makefile)
-          [ "$VERIFY_BLOB" = "$PATCH_BLOB" ] || { echo "::error::补丁 blob index 二次验证失败"; exit 1; }
-          git diff --check -- "$PATCH_PATH"
 
           cat >> $GITHUB_STEP_SUMMARY <<EOF
           ## 📦 v2ray-geodata Update
@@ -169,8 +149,7 @@ jobs:
           | Version | \`${VERSION}\` |
           | GeoIP SHA256 | \`${GEOIP_SHA}\` |
           | GeoSite SHA256 | \`${GEOSITE_SHA}\` |
-          | Makefile blob | \`${PATCH_BLOB}\` |
-          | Patch | \`${PATCH_PATH}\` |
+          | Makefile | \`${MAKEFILE_PATH}\` |
           EOF
 
       - name: Generate and validate assets
@@ -331,19 +310,19 @@ jobs:
           echo "### ✅ Release Published" >> "$GITHUB_STEP_SUMMARY"
           echo "Branch: \`release\` → \`${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Commit and push main patch
+      - name: Commit and push main overlay
         env:
           ACCESS_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-          PATCH_PATH=.github/packages-updater/patches/0001-add-v2ray-geodata.patch
+          MAKEFILE_PATH=.github/custom-feed/overlay/global/v2ray-geodata/Makefile
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- "$PATCH_PATH"
+          git add -- "$MAKEFILE_PATH"
           git diff --cached --check
           if git diff --cached --quiet; then
-            echo "ℹ️ patch 内容未变化，跳过 main 提交"
+            echo "ℹ️ Makefile 内容未变化，跳过 main 提交"
             exit 0
           fi
           git commit -m "openwrt-packages[all-tree]:v2ray-geodata: update version to ${VERSION}."

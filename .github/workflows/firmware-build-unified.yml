@@ -124,17 +124,17 @@ jobs:
       # 刻意设计: gh workflow run 不返回 run ID, 故记录触发前时间戳, 触发后轮询
       # 直到出现 created_at 晚于该时刻的新 run (最大 30s)。避免 sleep 竞态:
       # 若 5s 内 run 记录未创建或旧 run 恰好更晚, 会错拿旧 run ID 导致 watch 等错对象。
-      - name: Trigger OpenWRT_Packages_Updater
+      - name: Trigger custom-feed
         if: github.event.inputs.skip_upstream != 'true'
         id: trigger-updater
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
-          echo "🚀 触发 OpenWRT_Packages_Updater..."
+          echo "🚀 触发 custom-feed..."
           BEFORE=$(date +%s)
           echo "before_ts=${BEFORE}" >> $GITHUB_OUTPUT
-          gh workflow run OpenWRT_Packages_Updater.yml \
+          gh workflow run custom-feed.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }} \
             -f targets="${{ steps.updater-targets.outputs.targets }}"
@@ -142,9 +142,9 @@ jobs:
           for i in $(seq 1 10); do
             # gh 的 --jq 只接受单个表达式, 不支持 --argjson/--arg;
             # 时间戳是纯数字, 直接嵌入表达式 (双引号内不做路径名展开, [] 安全)
-            if ! RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow OpenWRT_Packages_Updater.yml --limit 20 \
+            if ! RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow custom-feed.yml --limit 20 \
               --json databaseId,createdAt,headBranch,event --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
-              echo "::error::查询 OpenWRT_Packages_Updater run 失败"
+              echo "::error::查询 custom-feed run 失败"
               exit 1
             fi
             [ -n "$RUN_ID" ] && break
@@ -157,28 +157,28 @@ jobs:
             echo "⚠️ 未在 30s 内发现新的 Updater run (等待步骤会补查)"
           fi
 
-      # ── 触发 Sync_Push (一定触发, 无 12h 去重) ──
-      # 刻意设计: 每次 full 构建都触发一次 Sync_Push, 不依据上次成功时间去重,
+      # ── 触发 upstream-sync (一定触发, 无 12h 去重) ──
+      # 刻意设计: 每次 full 构建都触发一次 upstream-sync, 不依据上次成功时间去重,
       # 确保源码同步 (sync_lede 等) 不因上次成功时间而遗漏。
-      - name: Trigger Sync_Push
+      - name: Trigger upstream-sync
         if: github.event.inputs.skip_upstream != 'true' && github.event.inputs.trigger != 'sdk-packages'
         id: trigger-sync
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
-          echo "🚀 触发 Sync_Push..."
+          echo "🚀 触发 upstream-sync..."
           BEFORE=$(date +%s)
           echo "before_ts=${BEFORE}" >> $GITHUB_OUTPUT
-          gh workflow run Sync_Push.yml \
+          gh workflow run upstream-sync.yml \
             --repo ${{ github.repository }} \
             --ref ${{ github.ref_name }}
           RUN_ID=""
           for i in $(seq 1 10); do
             # gh 的 --jq 只接受单个表达式, 不支持 --argjson/--arg; 时间戳直接嵌入
-            if ! RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --limit 20 \
+            if ! RUN_ID=$(gh run list --repo ${{ github.repository }} --workflow upstream-sync.yml --limit 20 \
               --json databaseId,createdAt,headBranch,event --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
-              echo "::error::查询 Sync_Push run 失败"
+              echo "::error::查询 upstream-sync run 失败"
               exit 1
             fi
             [ -n "$RUN_ID" ] && break
@@ -221,9 +221,9 @@ jobs:
           if [ -z "$UPDATER_ID" ] && [ -n "$BEFORE_TS" ] && [ "$BEFORE_TS" != "0" ]; then
             echo "🔎 触发步骤未取到 Updater run ID, 补查..."
             for i in $(seq 1 10); do
-              if ! UPDATER_ID=$(gh run list --repo ${{ github.repository }} --workflow OpenWRT_Packages_Updater.yml --limit 20 \
+              if ! UPDATER_ID=$(gh run list --repo ${{ github.repository }} --workflow custom-feed.yml --limit 20 \
                 --json databaseId,createdAt,headBranch,event --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE_TS} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
-                echo "::error::补查 OpenWRT_Packages_Updater run 失败"
+                echo "::error::补查 custom-feed run 失败"
                 exit 1
               fi
               [ -n "$UPDATER_ID" ] && break
@@ -242,11 +242,11 @@ jobs:
             exit 1
           fi
           if [ "$WAIT_FOR_SYNC" = "true" ] && [ -z "$SYNC_ID" ] && [ -n "$SYNC_BEFORE_TS" ] && [ "$SYNC_BEFORE_TS" != "0" ]; then
-            echo "🔎 触发步骤未取到 Sync_Push run ID, 补查..."
+            echo "🔎 触发步骤未取到 upstream-sync run ID, 补查..."
             for i in $(seq 1 10); do
-              if ! SYNC_ID=$(gh run list --repo ${{ github.repository }} --workflow Sync_Push.yml --limit 20 \
+              if ! SYNC_ID=$(gh run list --repo ${{ github.repository }} --workflow upstream-sync.yml --limit 20 \
                 --json databaseId,createdAt,headBranch,event --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${SYNC_BEFORE_TS} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
-                echo "::error::补查 Sync_Push run 失败"
+                echo "::error::补查 upstream-sync run 失败"
                 exit 1
               fi
               [ -n "$SYNC_ID" ] && break
@@ -254,7 +254,7 @@ jobs:
             done
           fi
           if [ "$WAIT_FOR_SYNC" != "true" ]; then
-            echo "⏭️ sdk-packages 模式不触发或等待 Sync_Push"
+            echo "⏭️ sdk-packages 模式不触发或等待 upstream-sync"
           elif [ -n "$SYNC_ID" ]; then
             if timeout 3600 gh run watch "$SYNC_ID" --repo ${{ github.repository }} --interval 5 --exit-status; then
               echo "✅ sync 完成"

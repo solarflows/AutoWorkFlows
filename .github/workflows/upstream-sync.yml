@@ -1,4 +1,4 @@
-name: 同步并推送
+name: 官方上游同步 (Upstream Sync)
 
 # 防止并发运行导致推送冲突 (cannot lock ref 错误)
 concurrency:
@@ -13,8 +13,8 @@ on:
     - cron: '0 */12 * * *'  # 每12小时运行一次
   push:
       paths:
-        - '.github/workflows/Sync_Push.yml'
-        - '.github/sync-push/**'
+        - '.github/workflows/upstream-sync.yml'
+        - '.github/upstream-sync/**'
         - '.github/actions/**'  # 当workflow文件或定制资产有改变时触发
   workflow_dispatch:
   # 手动触发
@@ -88,7 +88,7 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
 
           # 引入通用推送函数
-          source "$GITHUB_WORKSPACE/.github/sync-push/scripts/retry_push.sh"
+          source "$GITHUB_WORKSPACE/.github/upstream-sync/scripts/retry_push.sh"
 
           overall_patch_failed=false
           for target in $TARGETS; do
@@ -100,7 +100,7 @@ jobs:
               git checkout -B $target $target/master
             fi
 
-            if [ -d "$GITHUB_WORKSPACE/.github/sync-push/patches/lede/$target" ]; then
+            if [ -d "$GITHUB_WORKSPACE/.github/upstream-sync/patches/lede/$target" ]; then
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
@@ -116,32 +116,32 @@ jobs:
                     overall_patch_failed=true
                   fi
                 fi
-              done < <(find "$GITHUB_WORKSPACE/.github/sync-push/patches/lede/$target" -type f -name '*.patch' -print0 | sort -z)
+              done < <(find "$GITHUB_WORKSPACE/.github/upstream-sync/patches/lede/$target" -type f -name '*.patch' -print0 | sort -z)
               if [ "$patch_failed" = true ]; then
                 echo "::error::$target 补丁应用失败，跳过推送。"
                 continue
               fi
             fi
 
-            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            # 叠加层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
             for ow_dir in \
-              "$GITHUB_WORKSPACE/.github/sync-push/overwrite/lede/global" \
-              "$GITHUB_WORKSPACE/.github/sync-push/overwrite/lede/$target"; do
+              "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/lede/global" \
+              "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/lede/$target"; do
               if [ -d "$ow_dir" ]; then
-                echo "应用覆写层: $ow_dir"
+                echo "应用叠加层: $ow_dir"
                 while IFS= read -r -d '' f; do
                   rel="${f#"$ow_dir"/}"
                   mkdir -p "$(dirname "$rel")"
                   cp -f "$f" "$rel"
-                  echo "覆写: $rel"
+                  echo "叠加: $rel"
                 done < <(find "$ow_dir" -type f -print0 | sort -z)
               fi
             done
-            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            # 暂存本层所有叠加；仅当确有变更时提交，提交失败必须报错
             git add -A
             if ! git diff --cached --quiet; then
-              if ! git commit -m "Applying overwrite layer."; then
-                echo "::error::覆写层提交失败: $target"
+              if ! git commit -m "Applying overlay layer."; then
+                echo "::error::叠加层提交失败: $target"
                 exit 1
               fi
             fi
@@ -222,14 +222,14 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
 
           # 引入通用推送函数
-          source "$GITHUB_WORKSPACE/.github/sync-push/scripts/retry_push.sh"
+          source "$GITHUB_WORKSPACE/.github/upstream-sync/scripts/retry_push.sh"
 
           overall_patch_failed=false
           for target in $TARGETS; do
             echo "Target: $target"
             git checkout -B $target $target/master
 
-            if [ -d "$GITHUB_WORKSPACE/.github/sync-push/patches/luci/$target" ]; then
+            if [ -d "$GITHUB_WORKSPACE/.github/upstream-sync/patches/luci/$target" ]; then
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
@@ -245,32 +245,32 @@ jobs:
                     overall_patch_failed=true
                   fi
                 fi
-              done < <(find "$GITHUB_WORKSPACE/.github/sync-push/patches/luci/$target" -type f -name '*.patch' -print0 | sort -z)
+              done < <(find "$GITHUB_WORKSPACE/.github/upstream-sync/patches/luci/$target" -type f -name '*.patch' -print0 | sort -z)
               if [ "$patch_failed" = true ]; then
                 echo "::error::$target 补丁应用失败，跳过推送。"
                 continue
               fi
             fi
 
-            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            # 叠加层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
             for ow_dir in \
-              "$GITHUB_WORKSPACE/.github/sync-push/overwrite/luci/global" \
-              "$GITHUB_WORKSPACE/.github/sync-push/overwrite/luci/$target"; do
+              "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/luci/global" \
+              "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/luci/$target"; do
               if [ -d "$ow_dir" ]; then
-                echo "应用覆写层: $ow_dir"
+                echo "应用叠加层: $ow_dir"
                 while IFS= read -r -d '' f; do
                   rel="${f#"$ow_dir"/}"
                   mkdir -p "$(dirname "$rel")"
                   cp -f "$f" "$rel"
-                  echo "覆写: $rel"
+                  echo "叠加: $rel"
                 done < <(find "$ow_dir" -type f -print0 | sort -z)
               fi
             done
-            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            # 暂存本层所有叠加；仅当确有变更时提交，提交失败必须报错
             git add -A
             if ! git diff --cached --quiet; then
-              if ! git commit -m "Applying overwrite layer."; then
-                echo "::error::覆写层提交失败: $target"
+              if ! git commit -m "Applying overlay layer."; then
+                echo "::error::叠加层提交失败: $target"
                 exit 1
               fi
             fi
@@ -297,7 +297,7 @@ jobs:
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
           patch_failed=false
-          if [ -d "$GITHUB_WORKSPACE/.github/sync-push/patches/luci/hanwckf" ]; then
+          if [ -d "$GITHUB_WORKSPACE/.github/upstream-sync/patches/luci/hanwckf" ]; then
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
@@ -311,28 +311,28 @@ jobs:
                   patch_failed=true
                 fi
               fi
-            done < <(find "$GITHUB_WORKSPACE/.github/sync-push/patches/luci/hanwckf" -type f -name '*.patch' -print0 | sort -z)
+            done < <(find "$GITHUB_WORKSPACE/.github/upstream-sync/patches/luci/hanwckf" -type f -name '*.patch' -print0 | sort -z)
           fi
 
-          # 覆写层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
+          # 叠加层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
           for ow_dir in \
-            "$GITHUB_WORKSPACE/.github/sync-push/overwrite/luci/global" \
-            "$GITHUB_WORKSPACE/.github/sync-push/overwrite/luci/hanwckf"; do
+            "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/luci/global" \
+            "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/luci/hanwckf"; do
             if [ -d "$ow_dir" ]; then
-              echo "应用覆写层: $ow_dir"
+              echo "应用叠加层: $ow_dir"
               while IFS= read -r -d '' f; do
                 rel="${f#"$ow_dir"/}"
                 mkdir -p "$(dirname "$rel")"
                 cp -f "$f" "$rel"
-                echo "覆写: $rel"
+                echo "叠加: $rel"
               done < <(find "$ow_dir" -type f -print0 | sort -z)
             fi
           done
-          # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+          # 暂存本层所有叠加；仅当确有变更时提交，提交失败必须报错
           git add -A
           if ! git diff --cached --quiet; then
-            git commit -m "Applying overwrite layer." || {
-              echo "::error::覆写层提交失败: hanwckf"
+            git commit -m "Applying overlay layer." || {
+              echo "::error::叠加层提交失败: hanwckf"
               exit 1
             }
           fi
@@ -423,7 +423,7 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
 
           # 引入通用推送函数
-          source "$GITHUB_WORKSPACE/.github/sync-push/scripts/retry_push.sh"
+          source "$GITHUB_WORKSPACE/.github/upstream-sync/scripts/retry_push.sh"
 
           overall_patch_failed=false
           for target in $TARGETS; do
@@ -435,7 +435,7 @@ jobs:
             }
             git checkout -B "$target" "${target}/master"
 
-            if [ -d "$GITHUB_WORKSPACE/.github/sync-push/patches/packages/$target" ]; then
+            if [ -d "$GITHUB_WORKSPACE/.github/upstream-sync/patches/packages/$target" ]; then
               patch_failed=false
               while IFS= read -r -d '' patch_file; do
                 echo "应用补丁中: $patch_file"
@@ -451,32 +451,32 @@ jobs:
                     overall_patch_failed=true
                   fi
                 fi
-              done < <(find "$GITHUB_WORKSPACE/.github/sync-push/patches/packages/$target" -type f -name '*.patch' -print0 | sort -z)
+              done < <(find "$GITHUB_WORKSPACE/.github/upstream-sync/patches/packages/$target" -type f -name '*.patch' -print0 | sort -z)
               if [ "$patch_failed" = true ]; then
                 echo "::error::$target 补丁应用失败，跳过推送。"
                 continue
               fi
             fi
 
-            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            # 叠加层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
             for ow_dir in \
-              "$GITHUB_WORKSPACE/.github/sync-push/overwrite/packages/global" \
-              "$GITHUB_WORKSPACE/.github/sync-push/overwrite/packages/$target"; do
+              "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/packages/global" \
+              "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/packages/$target"; do
               if [ -d "$ow_dir" ]; then
-                echo "应用覆写层: $ow_dir"
+                echo "应用叠加层: $ow_dir"
                 while IFS= read -r -d '' f; do
                   rel="${f#"$ow_dir"/}"
                   mkdir -p "$(dirname "$rel")"
                   cp -f "$f" "$rel"
-                  echo "覆写: $rel"
+                  echo "叠加: $rel"
                 done < <(find "$ow_dir" -type f -print0 | sort -z)
               fi
             done
-            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            # 暂存本层所有叠加；仅当确有变更时提交，提交失败必须报错
             git add -A
             if ! git diff --cached --quiet; then
-              if ! git commit -m "Applying overwrite layer."; then
-                echo "::error::覆写层提交失败: $target"
+              if ! git commit -m "Applying overlay layer."; then
+                echo "::error::叠加层提交失败: $target"
                 exit 1
               fi
             fi
@@ -504,7 +504,7 @@ jobs:
           git checkout -B hanwckf immortalwrt/openwrt-21.02
 
           patch_failed=false
-          if [ -d "$GITHUB_WORKSPACE/.github/sync-push/patches/packages/hanwckf" ]; then
+          if [ -d "$GITHUB_WORKSPACE/.github/upstream-sync/patches/packages/hanwckf" ]; then
             while IFS= read -r -d '' patch_file; do
               echo "应用补丁中: $patch_file"
               if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
@@ -518,28 +518,28 @@ jobs:
                   patch_failed=true
                 fi
               fi
-            done < <(find "$GITHUB_WORKSPACE/.github/sync-push/patches/packages/hanwckf" -type f -name '*.patch' -print0 | sort -z)
+            done < <(find "$GITHUB_WORKSPACE/.github/upstream-sync/patches/packages/hanwckf" -type f -name '*.patch' -print0 | sort -z)
           fi
 
-          # 覆写层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
+          # 叠加层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
           for ow_dir in \
-            "$GITHUB_WORKSPACE/.github/sync-push/overwrite/packages/global" \
-            "$GITHUB_WORKSPACE/.github/sync-push/overwrite/packages/hanwckf"; do
+            "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/packages/global" \
+            "$GITHUB_WORKSPACE/.github/upstream-sync/overlay/packages/hanwckf"; do
             if [ -d "$ow_dir" ]; then
-              echo "应用覆写层: $ow_dir"
+              echo "应用叠加层: $ow_dir"
               while IFS= read -r -d '' f; do
                 rel="${f#"$ow_dir"/}"
                 mkdir -p "$(dirname "$rel")"
                 cp -f "$f" "$rel"
-                echo "覆写: $rel"
+                echo "叠加: $rel"
               done < <(find "$ow_dir" -type f -print0 | sort -z)
             fi
           done
-          # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+          # 暂存本层所有叠加；仅当确有变更时提交，提交失败必须报错
           git add -A
           if ! git diff --cached --quiet; then
-            git commit -m "Applying overwrite layer." || {
-              echo "::error::覆写层提交失败: hanwckf"
+            git commit -m "Applying overlay layer." || {
+              echo "::error::叠加层提交失败: hanwckf"
               exit 1
             }
           fi
@@ -769,7 +769,7 @@ jobs:
         id: apply-source-patch
         uses: ./.github/actions/apply-patches
         with:
-          patch-dir: ${{ github.workspace }}/.github/sync-push/patches/qualcommax
+          patch-dir: ${{ github.workspace }}/.github/upstream-sync/patches/qualcommax
           working-directory: temp_rep
           commit-prefix: "qualcommax: apply"
 
@@ -783,7 +783,7 @@ jobs:
           set -euo pipefail
           [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 Qualcomm fork"; exit 1; }
           # 引入通用推送函数
-          source "$GITHUB_WORKSPACE/.github/sync-push/scripts/retry_push.sh"
+          source "$GITHUB_WORKSPACE/.github/upstream-sync/scripts/retry_push.sh"
           echo "::group::推送 VIKINGYFY-main 到远程仓库"
           if retry_push origin HEAD:refs/heads/VIKINGYFY-main; then
             echo "push_success=true" >> $GITHUB_OUTPUT

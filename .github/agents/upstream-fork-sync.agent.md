@@ -1,6 +1,6 @@
 ---
 name: "Upstream Fork Sync"
-description: "上游 fork 同步：rebase、补丁应用、overwrite 层与 force-with-lease。"
+description: "上游 fork 同步：rebase、补丁应用、overlay 层与 force-with-lease。"
 argument-hint: "Sync workflow, source fork, patch path, branch, rebase conflict, or push safety"
 tools: [read, edit, search, execute]
 agents: []
@@ -12,11 +12,11 @@ You own upstream source-fork synchronization.
 
 ## Scope
 
-- Primary file: `.github/workflows/Sync_Push.yml`.
+- Primary file: `.github/workflows/upstream-sync.yml`.
 - Patch inputs:
-  - `.github/sync-push/patches/{qualcommax,lede,packages,luci}/`
-- Overwrite inputs:
-  - `.github/sync-push/overwrite/{lede,packages,luci}/` — with `global/` and `<target>/` layers.
+  - `.github/upstream-sync/patches/{qualcommax,lede,packages,luci}/`
+- Overlay inputs:
+  - `.github/upstream-sync/overlay/{lede,packages,luci}/` — with `global/` and `<target>/` layers.
 - Archived sync workflows are historical reference only.
 - Keep source-fork synchronization separate from plugin overlay generation.
 

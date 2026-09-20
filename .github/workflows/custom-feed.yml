@@ -1,12 +1,12 @@
-name: OpenWRT Packages Updater
+name: 自建插件源更新 (Custom Feed Publisher)
 
 on:
   schedule:
     - cron: '0 */12 * * *'  # 每12小时运行一次
   push:
     paths:
-      - '.github/workflows/OpenWRT_Packages_Updater.yml'
-      - '.github/packages-updater/**'
+      - '.github/workflows/custom-feed.yml'
+      - '.github/custom-feed/**'
       - '.github/actions/**'
   workflow_dispatch:
     inputs:
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: openwrt-packages-updater-${{ matrix.target }}
+      group: custom-feed-${{ matrix.target }}
       cancel-in-progress: false
 
     strategy:
@@ -123,8 +123,8 @@ jobs:
             echo "⚡ 启用增量跳过模式 (schedule 定时任务或普通手动触发)"
           fi
 
-          python3 $GITHUB_WORKSPACE/.github/packages-updater/scripts/collect_packages.py \
-            --manifest "$GITHUB_WORKSPACE/.github/packages-updater/packages.yaml" \
+          python3 $GITHUB_WORKSPACE/.github/custom-feed/scripts/collect_packages.py \
+            --manifest "$GITHUB_WORKSPACE/.github/custom-feed/packages.yaml" \
             --target "${{matrix.target}}" \
             --output-dir . \
             --threads 6 \
@@ -135,10 +135,10 @@ jobs:
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE/${{matrix.target}}
-          chmod +x $GITHUB_WORKSPACE/.github/packages-updater/*.sh
-          bash $GITHUB_WORKSPACE/.github/packages-updater/convert_translation.sh
-          bash $GITHUB_WORKSPACE/.github/packages-updater/create_acl_for_luci.sh -a
-          bash $GITHUB_WORKSPACE/.github/packages-updater/modify.sh
+          chmod +x $GITHUB_WORKSPACE/.github/custom-feed/*.sh
+          bash $GITHUB_WORKSPACE/.github/custom-feed/convert_translation.sh
+          bash $GITHUB_WORKSPACE/.github/custom-feed/create_acl_for_luci.sh -a
+          bash $GITHUB_WORKSPACE/.github/custom-feed/modify.sh
 
       - name: 生成插件来源摘要
         if: always()
@@ -146,7 +146,7 @@ jobs:
           set -euo pipefail
           python3 -c "
           import yaml, os
-          manifest_path = r'$GITHUB_WORKSPACE/.github/packages-updater/packages.yaml'
+          manifest_path = r'$GITHUB_WORKSPACE/.github/custom-feed/packages.yaml'
           target = '${{matrix.target}}'
           summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
 
@@ -173,7 +173,7 @@ jobs:
           cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 应用补丁（temp* 前缀的补丁失败仅警告，不中断）
-          PATCH_DIR="$GITHUB_WORKSPACE/.github/packages-updater/patches/${{matrix.target}}"
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/custom-feed/patches/${{matrix.target}}"
           if [ ! -d "$PATCH_DIR" ]; then
             echo "ℹ️ 无目标专用补丁目录，跳过: $PATCH_DIR"
           else
@@ -200,8 +200,7 @@ jobs:
           cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 应用全局补丁（temp* 前缀的补丁失败仅警告，不中断）
-          rm -rf v2ray-geodata
-          PATCH_DIR="$GITHUB_WORKSPACE/.github/packages-updater/patches"
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/custom-feed/patches"
           while IFS= read -r -d '' f; do
             echo "检查并应用全局补丁: $f"
             patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$f"
@@ -218,10 +217,10 @@ jobs:
             fi
           done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name 'temp*.patch' -print0 | sort -z)
 
-      - name: 应用覆写层
-        uses: ./.github/actions/apply-overwrite
+      - name: 应用叠加层
+        uses: ./.github/actions/apply-overlay
         with:
-          overwrite-base-dir: ${{ github.workspace }}/.github/packages-updater/overwrite
+          overlay-base-dir: ${{ github.workspace }}/.github/custom-feed/overlay
           target: ${{ matrix.target }}
           working-directory: ${{ matrix.target }}
           commit: "false"
@@ -230,9 +229,9 @@ jobs:
         if: matrix.target == 'main'
         run: |
           set -euo pipefail
-          python3 $GITHUB_WORKSPACE/.github/packages-updater/scripts/generate_readme.py \
-            --manifest "$GITHUB_WORKSPACE/.github/packages-updater/packages.yaml" \
-            --template "$GITHUB_WORKSPACE/.github/packages-updater/readme-template.md" \
+          python3 $GITHUB_WORKSPACE/.github/custom-feed/scripts/generate_readme.py \
+            --manifest "$GITHUB_WORKSPACE/.github/custom-feed/packages.yaml" \
+            --template "$GITHUB_WORKSPACE/.github/custom-feed/readme-template.md" \
             --output "$GITHUB_WORKSPACE/${{matrix.target}}/README.md" \
             --lockfile "$GITHUB_WORKSPACE/${{matrix.target}}/packages.lock.json"
 

@@ -1,9 +1,9 @@
-name: "Apply Overwrite"
-description: "应用 global 与 target 专属文件覆盖层，并自动提交变动"
+name: "Apply Overlay"
+description: "应用 global 与 target 专属文件叠加层 (Overlay)，并自动提交变动"
 
 inputs:
-  overwrite-base-dir:
-    description: "覆盖层根目录路径（应包含 global 与各个 target 子目录）"
+  overlay-base-dir:
+    description: "叠加层根目录路径（应包含 global 与各个 target 子目录）"
     required: true
   target:
     description: "当前构建目标名称（可选，如 mt798x, qualcommax 等）"
@@ -16,27 +16,27 @@ inputs:
   commit-prefix:
     description: "Git 提交信息前缀"
     required: false
-    default: "apply overwrite"
+    default: "apply overlay"
   commit:
     description: "是否自动执行 git commit 提交变更 (true/false)"
     required: false
     default: "true"
 
 outputs:
-  overwrite-applied:
-    description: "是否有覆盖层变动被应用/提交 (true/false)"
-    value: ${{ steps.overwrite.outputs.changed }}
+  overlay-applied:
+    description: "是否有叠加层变动被应用/提交 (true/false)"
+    value: ${{ steps.overlay.outputs.changed }}
 
 runs:
   using: "composite"
   steps:
-    - name: 应用文件覆盖层
-      id: overwrite
+    - name: 应用文件叠加层
+      id: overlay
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
-        BASE_DIR="${{ inputs.overwrite-base-dir }}"
+        BASE_DIR="${{ inputs.overlay-base-dir }}"
         TARGET="${{ inputs.target }}"
         PREFIX="${{ inputs.commit-prefix }}"
         SHOULD_COMMIT="${{ inputs.commit }}"
@@ -46,13 +46,13 @@ runs:
           local dir="$1"
           local desc="$2"
           if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-            echo "::group::应用覆盖层: $desc ($dir)"
+            echo "::group::应用叠加层: $desc ($dir)"
             local count=0
             while IFS= read -r -d '' f; do
               local rel="${f#"$dir"/}"
               mkdir -p "$(dirname "$rel")"
               cp -f "$f" "$rel"
-              echo "覆写: $rel"
+              echo "叠加: $rel"
               count=$((count + 1))
             done < <(find "$dir" -type f -print0 | sort -z)
 
@@ -63,14 +63,14 @@ runs:
                 git diff --cached --raw 2>/dev/null | awk '$2 ~ /^160000/ || $1 ~ /^:160000/ {print $6}' | xargs -r git rm --cached -f 2>/dev/null || true
                 if ! git diff --cached --quiet; then
                   git commit -m "${PREFIX}: ${desc}"
-                  echo "✅ 成功提交覆盖层变更: $desc"
+                  echo "✅ 成功提交叠加层变更: $desc"
                   has_changed=true
                 fi
               else
-                echo "ℹ️ 覆盖层无内容变更: $desc"
+                echo "ℹ️ 叠加层无内容变更: $desc"
               fi
             else
-              echo "ℹ️ 跳过自动提交 (commit=false)，已覆写 $count 个文件: $desc"
+              echo "ℹ️ 跳过自动提交 (commit=false)，已叠加 $count 个文件: $desc"
               if [ "$count" -gt 0 ]; then
                 has_changed=true
               fi
@@ -79,9 +79,9 @@ runs:
           fi
         }
 
-        apply_dir "${BASE_DIR}/global" "global 覆盖层"
+        apply_dir "${BASE_DIR}/global" "global 叠加层"
         if [ -n "$TARGET" ]; then
-          apply_dir "${BASE_DIR}/${TARGET}" "${TARGET} 覆盖层"
+          apply_dir "${BASE_DIR}/${TARGET}" "${TARGET} 叠加层"
         fi
 
         echo "changed=${has_changed}" >> "$GITHUB_OUTPUT"

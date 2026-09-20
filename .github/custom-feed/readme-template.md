@@ -4,7 +4,7 @@
 
 **自动化采集的 OpenWrt / ImmortalWrt 第三方插件集合**
 
-[![Update Status](https://github.com/solarflows/AutoWorkflows/actions/workflows/OpenWRT_Packages_Updater.yml/badge.svg)](https://github.com/solarflows/AutoWorkflows/actions/workflows/OpenWRT_Packages_Updater.yml)
+[![Update Status](https://github.com/solarflows/AutoWorkflows/actions/workflows/custom-feed.yml/badge.svg)](https://github.com/solarflows/AutoWorkflows/actions/workflows/custom-feed.yml)
 
 </div>
 

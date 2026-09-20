@@ -12,26 +12,26 @@ You own the OpenWrt plugin overlay feed.
 
 ## Scope
 
-- Primary workflow: `.github/workflows/OpenWRT_Packages_Updater.yml`.
-- Primary sources: `.github/packages-updater/`.
+- Primary workflow: `.github/workflows/custom-feed.yml`.
+- Primary sources: `.github/custom-feed/`.
 - Key files:
-  - `.github/packages-updater/packages.yaml` — declarative manifest defining package sources and target matrices.
-  - `.github/packages-updater/scripts/collect_packages.py` — engine collecting packages based on manifest.
-  - `.github/packages-updater/scripts/generate_readme.py` — structured generator for branch README.
-  - `.github/packages-updater/overwrite/global/` — applies to all matrix targets.
-  - `.github/packages-updater/overwrite/<target>/` — applies to one target.
+  - `.github/custom-feed/packages.yaml` — declarative manifest defining package sources and target matrices.
+  - `.github/custom-feed/scripts/collect_packages.py` — engine collecting packages based on manifest.
+  - `.github/custom-feed/scripts/generate_readme.py` — structured generator for branch README.
+  - `.github/custom-feed/overlay/global/` — applies to all matrix targets.
+  - `.github/custom-feed/overlay/<target>/` — applies to one target.
 - Archived package workflows are historical reference only.
 - `solarflows/openwrt-packages` is the plugin overlay; standard source feeds have separate ownership.
 
-## Overwrite Layer
+## Overlay Layer
 
 - Directory layout (sibling of `patches/`, never nested inside it):
-  - `.github/packages-updater/overwrite/global/` — applies to all matrix targets.
-  - `.github/packages-updater/overwrite/<target>/` — applies to one target.
+  - `.github/custom-feed/overlay/global/` — applies to all matrix targets.
+  - `.github/custom-feed/overlay/<target>/` — applies to one target.
 - Applied after all patches; highest priority. Files are copied into the working tree by relative path, replacing or adding whole files.
 - Intended for complete files, including OpenWrt-native package patch dirs such as `smartdns/patch/*.patch`, which the build system applies automatically.
-- Do not use the overwrite layer for small line-level fixes — keep those as `.patch` files under `patches/`.
-- An overwritten file no longer follows upstream updates; regenerate its copy when upstream changes.
+- Do not use the overlay layer for small line-level fixes — keep those as `.patch` files under `patches/`.
+- An overlaid file no longer follows upstream updates; regenerate its copy when upstream changes.
 
 ## Invariants
 

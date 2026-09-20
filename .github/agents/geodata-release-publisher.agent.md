@@ -12,9 +12,9 @@ You own the v2ray geodata update pipeline.
 
 ## Scope
 
-- Primary workflow: `.github/workflows/v2ray-geodataUpdater.yaml`.
-- Primary generated patch: `.github/packages-updater/patches/0001-add-v2ray-geodata.patch`.
-- Treat this as a data-supply-chain and generated-patch workflow.
+- Primary workflow: `.github/workflows/geodata-updater.yml`.
+- Primary generated overlay: `.github/custom-feed/overlay/global/v2ray-geodata/Makefile`.
+- Treat this as a data-supply-chain and generated-overlay workflow.
 
 ## Invariants
 
