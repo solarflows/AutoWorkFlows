@@ -11,11 +11,16 @@ on:
   schedule:
     - cron: '6 6 * * 6'
   push:
-    branches: [ main ]
     paths:
       - '.github/workflows/geodata-updater.yml'
       - '.github/custom-feed/overlay/global/v2ray-geodata/Makefile'
   workflow_dispatch:
+    inputs:
+      force_update:
+        description: '强制全量重新生成并发布（即使上游版本未变）'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   update:
@@ -31,8 +36,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: main
           persist-credentials: false
+
+      - name: 配置 Git 凭据与环境
+        uses: ./.github/actions/git-auth
+        with:
+          token: ${{ secrets.ACCESS_TOKEN || github.token }}
 
       - name: Fetch and parse data
         id: geo-data
@@ -84,7 +93,21 @@ jobs:
             "$VERSION" "$GEOIP_URL" "$GEOSITE_URL" "$GEOIP_API_SHA" "$GEOSITE_API_SHA" "$GEOVIEW_URL" "$WORK_DIR" >> "$GITHUB_ENV"
           printf 'version=%s\ngeoip_api_sha=%s\ngeosite_api_sha=%s\n' "$VERSION" "$GEOIP_API_SHA" "$GEOSITE_API_SHA" >> "$GITHUB_OUTPUT"
 
+          # 增量判断：若版本与当前 Makefile 一致，且非强制刷新/非 push 事件，则跳过后续构建
+          CURRENT_VER=$(grep -oP '(?<=^GEO_VER:=)\d+' "$GITHUB_WORKSPACE/.github/custom-feed/overlay/global/v2ray-geodata/Makefile" || true)
+          FORCE_UPDATE="${{ github.event.inputs.force_update || 'false' }}"
+          if [ "$VERSION" = "$CURRENT_VER" ] && [ "$FORCE_UPDATE" != "true" ] && [ "${{ github.event_name }}" != "push" ]; then
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+            echo "🟢 上游规则版本未变 ($VERSION)，无需重新构建"
+            echo "### 🟢 Upstream Version Unchanged" >> "$GITHUB_STEP_SUMMARY"
+            echo "Current version \`${VERSION}\` is already up-to-date." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            echo "🔵 检测到新版本或触发强制构建: $VERSION"
+          fi
+
       - name: Display results
+        if: steps.geo-data.outputs.has_update == 'true'
         run: |
           set -euo pipefail
           echo "版本号: $VERSION"
@@ -92,6 +115,7 @@ jobs:
           echo "GeoSite URL: $GEOSITE_URL"
 
       - name: Download files and compute SHA
+        if: steps.geo-data.outputs.has_update == 'true'
         run: |
           set -euo pipefail
           curl --fail-with-body --show-error --location --retry 3 --retry-delay 2 "$GEOVIEW_URL" --output "$WORK_DIR/geoview"
@@ -153,6 +177,7 @@ jobs:
           EOF
 
       - name: Generate and validate assets
+        if: steps.geo-data.outputs.has_update == 'true'
         id: generate_assets
         run: |
           set -euo pipefail
@@ -172,7 +197,7 @@ jobs:
               local rule_prefix="$4"
               shift 4
               printf '%s\n' "$rule_kind" >> "$output_file"
-              local raw_file="$WORK_DIR/raw/$(basename "$output_file").${RANDOM}"
+              local raw_file="$WORK_DIR/raw/$(basename "$output_file").${RANDOM}_${$}"
               "$WORK_DIR/geoview" -type "$rule_input" -input "$WORK_DIR/${rule_input}.dat" -list "$rule_list" > "$raw_file"
               test -s "$raw_file"
               sed "s/^/${rule_prefix}/" "$raw_file" >> "$output_file"
@@ -187,27 +212,30 @@ jobs:
             test -s "$output_file"
           }
 
+          # 多核并发生成 4 种核心规则文件
           # 1. gfwlist.txt (标准 GFWList 阻断规则: 仅被封锁域名走代理，国内直连)
           generate_rule "$WORK_DIR/publish/gfwlist.txt" \
             'GFWList Rules' 'GFW blocked domains for proxying' "$VERSION" \
-            '!## GFW Blocked Domains' geosite gfw '||'
+            '!## GFW Blocked Domains' geosite gfw '||' &
 
           # 2. whitelist.txt (大陆直连白名单: 配合全局代理，国内域名直连)
           # 注意：AutoProxy 规范中 @@|| 开头代表白名单（直连例外规则）
           generate_rule "$WORK_DIR/publish/whitelist.txt" \
             'China Direct Whitelist Rules' 'CN domains for direct connection' "$VERSION" \
-            '!## CN Direct Domain Exceptions' geosite cn '@@||'
+            '!## CN Direct Domain Exceptions' geosite cn '@@||' &
 
           # 3. whitelist_lite.txt (轻量级大陆直连白名单)
           generate_rule "$WORK_DIR/publish/whitelist_lite.txt" \
             'China Direct Whitelist Lite Rules' 'Geolocation-CN domains for direct connection' "$VERSION" \
-            '!## Geolocation-CN Direct Domain Exceptions' geosite geolocation-cn '@@||'
+            '!## Geolocation-CN Direct Domain Exceptions' geosite geolocation-cn '@@||' &
 
           # 4. autoproxy.txt (全量 UnCN 代理规则，附带 CN 域名直连白名单)
           generate_rule "$WORK_DIR/publish/autoproxy.txt" \
             'AutoProxy Full Rules' 'UnCN domains as proxy rules, CN domains as direct exceptions' "$VERSION" \
             '!## UnCN Domains' geosite geolocation-!cn '||' \
-            '!## CN Domain Exceptions' geosite cn '@@||'
+            '!## CN Domain Exceptions' geosite cn '@@||' &
+
+          wait
 
           # 建立向后兼容副本（保持历史订阅 URL 不断链，同时纠正旧文件的语义与语法错误）
           cp -f "$WORK_DIR/publish/gfwlist.txt" "$WORK_DIR/publish/autoproxy_lite.txt"
@@ -247,6 +275,7 @@ jobs:
           test -s "$WORK_DIR/publish/source-metadata.json"
 
       - name: Generate base64 encoded files
+        if: steps.geo-data.outputs.has_update == 'true'
         run: |
           set -euo pipefail
           for file in "$WORK_DIR"/publish/*.txt; do
@@ -263,32 +292,16 @@ jobs:
           diff -u <(printf '%s\n' "${expected_publish_assets[@]}") <(printf '%s\n' "${publish_assets[@]}")
 
       - name: Publish release assets
-        env:
-          ACCESS_TOKEN: ${{ github.token }}
+        if: steps.geo-data.outputs.has_update == 'true'
         run: |
           set -euo pipefail
-          [ -n "$ACCESS_TOKEN" ] || { echo "::error::GITHUB_TOKEN 未设置，无法发布 release 分支"; exit 1; }
           cd "$WORK_DIR/publish"
           git init -q
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c release
           git add -- .
           git diff --cached --check
           git commit -m "v2ray-geodata: ${VERSION}"
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-
-          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
-          cat > "$ASKPASS" <<'EOF'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *) printf '%s\n' "$ACCESS_TOKEN" ;;
-          esac
-          EOF
-          chmod 700 "$ASKPASS"
-          export GIT_ASKPASS="$ASKPASS"
-          export GIT_TERMINAL_PROMPT=0
 
           if ! remote_sha=$(git ls-remote origin refs/heads/release); then
             echo "::error::读取 release 分支当前 SHA 失败"
@@ -306,45 +319,31 @@ jobs:
           echo "### ✅ Release Published" >> "$GITHUB_STEP_SUMMARY"
           echo "Branch: \`release\` → \`${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Commit and push main overlay
-        env:
-          ACCESS_TOKEN: ${{ github.token }}
+      - name: Commit and push overlay
+        if: steps.geo-data.outputs.has_update == 'true'
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           MAKEFILE_PATH=.github/custom-feed/overlay/global/v2ray-geodata/Makefile
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- "$MAKEFILE_PATH"
           git diff --cached --check
           if git diff --cached --quiet; then
-            echo "ℹ️ Makefile 内容未变化，跳过 main 提交"
+            echo "ℹ️ Makefile 内容未变化，跳过提交"
             exit 0
           fi
           git commit -m "openwrt-packages[all-tree]:v2ray-geodata: update version to ${VERSION}."
 
-          ASKPASS="$RUNNER_TEMP/git-askpass-main.sh"
-          cat > "$ASKPASS" <<'EOF'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *) printf '%s\n' "$ACCESS_TOKEN" ;;
-          esac
-          EOF
-          chmod 700 "$ASKPASS"
-          export GIT_ASKPASS="$ASKPASS"
-          export GIT_TERMINAL_PROMPT=0
-
-          if ! remote_sha=$(git ls-remote origin refs/heads/main); then
-            echo "::error::读取 main 分支当前 SHA 失败"
+          TARGET_BRANCH="${GITHUB_REF_NAME:-main}"
+          if ! remote_sha=$(git ls-remote origin "refs/heads/${TARGET_BRANCH}"); then
+            echo "::error::读取 ${TARGET_BRANCH} 分支当前 SHA 失败"
             exit 1
           fi
           expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
           if [ -n "$expected" ]; then
-            lease="--force-with-lease=refs/heads/main:${expected}"
+            lease="--force-with-lease=refs/heads/${TARGET_BRANCH}:${expected}"
           else
-            lease="--force-with-lease=refs/heads/main:"
+            lease="--force-with-lease=refs/heads/${TARGET_BRANCH}:"
           fi
 
-          git push --quiet "$lease" origin HEAD:refs/heads/main
-          echo "✅ main 已推送: ${VERSION}"
+          git push --quiet "$lease" origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "✅ ${TARGET_BRANCH} 已推送: ${VERSION}"
