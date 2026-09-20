@@ -29,7 +29,7 @@ git clone -b <branch> https://github.com/solarflows/openwrt-packages.git package
 
 ## 📖 插件来源
 
-{{PLUGIN_TABLE}}
+{{BRANCH_INFO}}{{PLUGIN_TABLE}}
 
 > 📌 仅列出各分支中实际采集的插件，已注释/归档的不在此列。
 

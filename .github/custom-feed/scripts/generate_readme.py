@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--manifest", required=True, help="Path to packages.yaml")
     parser.add_argument("--template", required=True, help="Path to readme-template.md")
     parser.add_argument("--output", required=True, help="Output README.md path")
+    parser.add_argument("--target", default=None, help="Optional target branch name (e.g. main, mt798x, qualcommax, qt6)")
     parser.add_argument("--lockfile", default=None, help="Optional path to packages.lock.json")
     args = parser.parse_args()
 
@@ -35,6 +36,10 @@ def main():
 
     packages = data.get("packages", [])
 
+    # 若指定了 target，则仅筛选属于该 target 的软件包
+    if args.target and args.target.lower() != "all":
+        packages = [p for p in packages if args.target in p.get("targets", [])]
+
     # 读取 lockfile 中的 commit SHA 映射
     commit_map = {}
     if args.lockfile and os.path.exists(args.lockfile):
@@ -42,7 +47,6 @@ def main():
             with open(args.lockfile, "r", encoding="utf-8") as lf:
                 lock_data = json.load(lf)
                 targets_dict = lock_data.get("targets", {})
-                # 遍历所有 targets 聚合最新的 commit
                 for t, pkgs in targets_dict.items():
                     for name, meta in pkgs.items():
                         c = meta.get("commit")
@@ -85,14 +89,23 @@ def main():
         template = f.read()
 
     update_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    rendered = template.replace("{{PLUGIN_TABLE}}", table_content)
+
+    target_banner = ""
+    if args.target and args.target.lower() != "all":
+        target_banner = f"> 📌 **当前分支**: `{args.target}`（本分支共收录 **{len(packages)}** 个插件）\n\n"
+    else:
+        target_banner = f"> 📌 **全量分支汇总**（共收录 **{len(packages)}** 个插件）\n\n"
+
+    rendered = template.replace("{{BRANCH_INFO}}", target_banner)
+    rendered = rendered.replace("{{PLUGIN_TABLE}}", table_content)
     rendered = rendered.replace("{{LAST_UPDATE}}", update_time)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w", encoding="utf-8", newline="\n") as f:
         f.write(rendered)
 
-    print(f"✅ README 生成成功: {args.output} (共包含 {len(packages)} 个插件)")
+    target_desc = f" [{args.target}]" if args.target else ""
+    print(f"✅ README 生成成功{target_desc}: {args.output} (共包含 {len(packages)} 个插件)")
 
 
 if __name__ == "__main__":

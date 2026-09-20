@@ -225,14 +225,14 @@ jobs:
           working-directory: ${{ matrix.target }}
           commit: "false"
 
-      - name: 生成 README (仅 main 分支)
-        if: matrix.target == 'main'
+      - name: 生成分支专属 README
         run: |
           set -euo pipefail
           python3 $GITHUB_WORKSPACE/.github/custom-feed/scripts/generate_readme.py \
             --manifest "$GITHUB_WORKSPACE/.github/custom-feed/packages.yaml" \
             --template "$GITHUB_WORKSPACE/.github/custom-feed/readme-template.md" \
             --output "$GITHUB_WORKSPACE/${{matrix.target}}/README.md" \
+            --target "${{matrix.target}}" \
             --lockfile "$GITHUB_WORKSPACE/${{matrix.target}}/packages.lock.json"
 
       - name: 提交代码
