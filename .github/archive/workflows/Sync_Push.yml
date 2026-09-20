@@ -1,0 +1,1047 @@
+name: 同步并推送
+
+# 防止并发运行导致推送冲突 (cannot lock ref 错误)
+concurrency:
+  group: ${{ github.workflow }}-shared
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'  # 每12小时运行一次
+  push:
+      paths:
+        - '.github/workflows/Sync_Push.yml'
+        - '.github/diy/lede/patches/**/*.patch'
+        - '.github/diy/luci/patches/**/*.patch'
+        - '.github/diy/packages/patches/**/*.patch'
+        - '.github/diy/lede/overwrite/**'
+        - '.github/diy/luci/overwrite/**'
+        - '.github/diy/packages/overwrite/**'  # 当workflow文件有改变时触发
+  workflow_dispatch:
+  # 手动触发
+
+jobs:
+  sync_lede:
+    name: 同步 lean 仓库
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGETS: "lean openwrt-snapshot dg741a immortalwrt hanwckf"
+      UPSTREAMS: "https://github.com/coolsnowwolf/lede.git https://github.com/openwrt/openwrt.git https://github.com/dg741a/lede.git https://github.com/immortalwrt/immortalwrt.git https://github.com/hanwckf/immortalwrt-mt798x.git"
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: 配置环境
+        run: |
+          set -euo pipefail
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: 克隆仓库并设置上游
+        run: |
+          set -euo pipefail
+          cd $GITHUB_WORKSPACE
+          git clone --no-tags --single-branch https://github.com/solarflows/lede.git temp_rep
+          cd temp_rep
+
+          index=1
+          for target in $TARGETS; do
+            upstream=$(echo $UPSTREAMS | cut -d' ' -f$index)
+            echo "Target: $target  Upstream: $upstream"
+            git remote add $target $upstream
+            ((index++))
+          done
+
+          git fetch --no-tags lean \
+            refs/heads/master:refs/remotes/lean/master
+          git fetch --no-tags openwrt-snapshot \
+            refs/heads/master:refs/remotes/openwrt-snapshot/master
+          git fetch --no-tags dg741a \
+            refs/heads/master:refs/remotes/dg741a/master
+          git fetch --no-tags immortalwrt \
+            refs/heads/master:refs/remotes/immortalwrt/master
+          # hanwckf/immortalwrt-mt798x 只有 openwrt-21.02 分支, 没有 master;
+          # fetch 必须只请求存在的 ref, 否则 git fetch 对任一缺失 ref 整体失败。
+          git fetch --no-tags hanwckf \
+            refs/heads/openwrt-21.02:refs/remotes/hanwckf/openwrt-21.02
+
+      - name: 拉取上游代码并打补丁
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd $GITHUB_WORKSPACE/temp_rep
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 lede"; exit 1; }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
+
+          # 推送函数：使用远端当前 SHA 建立显式 lease，避免无条件覆盖分支。
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            local branch="${refspec#HEAD:refs/heads/}"
+            local remote_sha expected lease
+            case "$refspec" in
+              HEAD:refs/heads/*) ;;
+              *) echo "::error::无效的目标 refspec: $refspec"; return 2 ;;
+            esac
+            if ! remote_sha=$(git ls-remote "$remote_url" "refs/heads/$branch"); then
+              echo "::error::读取远端分支失败: $remote_url refs/heads/$branch"
+              return 1
+            fi
+            expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+            if [ -n "$expected" ]; then
+              # 若远端已有该分支，检查其内容树是否与本地 HEAD 完全一致
+              # 若文件树一致（代码内容零差异），跳过推送以避免产生无意义的空提交，防止下游工作流误判变更
+              if git fetch --no-tags --depth=1 "$remote_url" "refs/heads/$branch" 2>/dev/null; then
+                local remote_tree local_tree
+                remote_tree=$(git rev-parse "FETCH_HEAD^{tree}" 2>/dev/null || true)
+                local_tree=$(git rev-parse "HEAD^{tree}" 2>/dev/null || true)
+                if [ -n "$remote_tree" ] && [ "$remote_tree" = "$local_tree" ]; then
+                  echo "🟢 远端分支 $branch 内容树与本地完全一致 (${local_tree:0:7})，跳过推送"
+                  return 0
+                fi
+              fi
+              lease="--force-with-lease=refs/heads/$branch:$expected"
+            else
+              lease="--force-with-lease=refs/heads/$branch:"
+            fi
+            for i in $(seq 1 $max_retries); do
+              if git push "$remote_url" "$lease" "$refspec" 2>&1; then
+                return 0
+              fi
+              if ! remote_sha=$(git ls-remote "$remote_url" "refs/heads/$branch"); then
+                echo "::error::读取远端分支失败: $remote_url refs/heads/$branch"
+                return 1
+              fi
+              current=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+              if [ "$current" = "$(git rev-parse HEAD)" ]; then
+                echo "✅ 远端已包含本地 HEAD"
+                return 0
+              fi
+              if [ "$current" != "$expected" ]; then
+                echo "::error::远端分支已在重试期间变化，拒绝覆盖: refs/heads/$branch"
+                return 1
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
+
+          overall_patch_failed=false
+          for target in $TARGETS; do
+            echo "Target: $target"
+
+            if [[ $target == "hanwckf" ]]; then
+              git checkout -B $target $target/openwrt-21.02
+            else
+              git checkout -B $target $target/master
+            fi
+
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" ]; then
+              patch_failed=false
+              while IFS= read -r -d '' patch_file; do
+                echo "应用补丁中: $patch_file"
+                if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
+                  git add .
+                  git commit -m "Applying $(basename "$patch_file")."
+                else
+                  if [[ "$(basename "$patch_file")" == temp* ]]; then
+                    echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                  else
+                    echo "::error::应用补丁时出错: $patch_file"
+                    patch_failed=true
+                    overall_patch_failed=true
+                  fi
+                fi
+              done < <(find "$GITHUB_WORKSPACE/.github/diy/lede/patches/$target" -type f -name '*.patch' -print0 | sort -z)
+              if [ "$patch_failed" = true ]; then
+                echo "::error::$target 补丁应用失败，跳过推送。"
+                continue
+              fi
+            fi
+
+            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            for ow_dir in \
+              "$GITHUB_WORKSPACE/.github/diy/lede/overwrite/global" \
+              "$GITHUB_WORKSPACE/.github/diy/lede/overwrite/$target"; do
+              if [ -d "$ow_dir" ]; then
+                echo "应用覆写层: $ow_dir"
+                while IFS= read -r -d '' f; do
+                  rel="${f#"$ow_dir"/}"
+                  mkdir -p "$(dirname "$rel")"
+                  cp -f "$f" "$rel"
+                  echo "覆写: $rel"
+                done < <(find "$ow_dir" -type f -print0 | sort -z)
+              fi
+            done
+            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            git add -A
+            if ! git diff --cached --quiet; then
+              if ! git commit -m "Applying overwrite layer."; then
+                echo "::error::覆写层提交失败: $target"
+                exit 1
+              fi
+            fi
+
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+            retry_push "https://github.com/solarflows/lede.git" "HEAD:refs/heads/$target" || {
+              echo "::error::推送 $target 失败（已重试）"
+              overall_patch_failed=true
+            }
+
+          done
+          if [ "$overall_patch_failed" = true ]; then exit 1; fi
+
+  sync_luci:
+    name: 同步 Luci 仓库
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGETS: "lean openwrt immortalwrt"
+      UPSTREAMS: "https://github.com/coolsnowwolf/luci.git https://github.com/openwrt/luci.git https://github.com/immortalwrt/luci.git"
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: 配置环境
+        run: |
+          set -euo pipefail
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: 克隆仓库并设置上游
+        run: |
+          set -euo pipefail
+          cd $GITHUB_WORKSPACE
+          git clone --no-tags --single-branch https://github.com/solarflows/luci.git temp_rep
+          cd temp_rep
+
+          index=1
+          for target in $TARGETS; do
+            upstream=$(echo $UPSTREAMS | cut -d' ' -f$index)
+            echo "Target: $target  Upstream: $upstream"
+            git remote add $target $upstream
+            ((index++))
+          done
+
+          git fetch --no-tags lean \
+            refs/heads/master:refs/remotes/lean/master
+          git fetch --no-tags openwrt \
+            refs/heads/master:refs/remotes/openwrt/master
+          git fetch --no-tags immortalwrt \
+            refs/heads/master:refs/remotes/immortalwrt/master \
+            refs/heads/openwrt-21.02:refs/remotes/immortalwrt/openwrt-21.02
+
+      - name: 拉取上游代码并打补丁
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd $GITHUB_WORKSPACE/temp_rep
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 luci"; exit 1; }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
+
+          # 推送函数：使用远端当前 SHA 建立显式 lease，避免无条件覆盖分支。
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            local branch="${refspec#HEAD:refs/heads/}"
+            local remote_sha expected lease current
+            case "$refspec" in
+              HEAD:refs/heads/*) ;;
+              *) echo "::error::无效的目标 refspec: $refspec"; return 2 ;;
+            esac
+            if ! remote_sha=$(git ls-remote "$remote_url" "refs/heads/$branch"); then
+              echo "::error::读取远端分支失败: $remote_url refs/heads/$branch"
+              return 1
+            fi
+            expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+            if [ -n "$expected" ]; then
+              # 若远端已有该分支，检查其内容树是否与本地 HEAD 完全一致
+              # 若文件树一致（代码内容零差异），跳过推送以避免产生无意义的空提交，防止下游工作流误判变更
+              if git fetch --no-tags --depth=1 "$remote_url" "refs/heads/$branch" 2>/dev/null; then
+                local remote_tree local_tree
+                remote_tree=$(git rev-parse "FETCH_HEAD^{tree}" 2>/dev/null || true)
+                local_tree=$(git rev-parse "HEAD^{tree}" 2>/dev/null || true)
+                if [ -n "$remote_tree" ] && [ "$remote_tree" = "$local_tree" ]; then
+                  echo "🟢 远端分支 $branch 内容树与本地完全一致 (${local_tree:0:7})，跳过推送"
+                  return 0
+                fi
+              fi
+              lease="--force-with-lease=refs/heads/$branch:$expected"
+            else
+              lease="--force-with-lease=refs/heads/$branch:"
+            fi
+            for i in $(seq 1 $max_retries); do
+              if git push "$remote_url" "$lease" "$refspec" 2>&1; then
+                return 0
+              fi
+              if ! remote_sha=$(git ls-remote "$remote_url" "refs/heads/$branch"); then
+                echo "::error::读取远端分支失败: $remote_url refs/heads/$branch"
+                return 1
+              fi
+              current=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+              if [ "$current" = "$(git rev-parse HEAD)" ]; then
+                echo "✅ 远端已包含本地 HEAD"
+                return 0
+              fi
+              if [ "$current" != "$expected" ]; then
+                echo "::error::远端分支已在重试期间变化，拒绝覆盖: refs/heads/$branch"
+                return 1
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
+
+          overall_patch_failed=false
+          for target in $TARGETS; do
+            echo "Target: $target"
+            git checkout -B $target $target/master
+
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" ]; then
+              patch_failed=false
+              while IFS= read -r -d '' patch_file; do
+                echo "应用补丁中: $patch_file"
+                if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
+                  git add .
+                  git commit -m "Applying $(basename "$patch_file")."
+                else
+                  if [[ "$(basename "$patch_file")" == temp* ]]; then
+                    echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                  else
+                    echo "::error::应用补丁时出错: $patch_file"
+                    patch_failed=true
+                    overall_patch_failed=true
+                  fi
+                fi
+              done < <(find "$GITHUB_WORKSPACE/.github/diy/luci/patches/$target" -type f -name '*.patch' -print0 | sort -z)
+              if [ "$patch_failed" = true ]; then
+                echo "::error::$target 补丁应用失败，跳过推送。"
+                continue
+              fi
+            fi
+
+            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            for ow_dir in \
+              "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/global" \
+              "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/$target"; do
+              if [ -d "$ow_dir" ]; then
+                echo "应用覆写层: $ow_dir"
+                while IFS= read -r -d '' f; do
+                  rel="${f#"$ow_dir"/}"
+                  mkdir -p "$(dirname "$rel")"
+                  cp -f "$f" "$rel"
+                  echo "覆写: $rel"
+                done < <(find "$ow_dir" -type f -print0 | sort -z)
+              fi
+            done
+            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            git add -A
+            if ! git diff --cached --quiet; then
+              if ! git commit -m "Applying overwrite layer."; then
+                echo "::error::覆写层提交失败: $target"
+                exit 1
+              fi
+            fi
+
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+
+            if [[ $target == "lean" ]]; then
+              retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/master" || {
+                echo "::error::推送 $target 失败（已重试）"
+                overall_patch_failed=true
+              }
+            else
+              retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/$target" || {
+                echo "::error::推送 $target 失败（已重试）"
+                overall_patch_failed=true
+              }
+            fi
+          done
+          echo "Target: hanwckf"
+          git checkout -B hanwckf immortalwrt/openwrt-21.02
+
+          patch_failed=false
+          if [ -d "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" ]; then
+            while IFS= read -r -d '' patch_file; do
+              echo "应用补丁中: $patch_file"
+              if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
+                git add .
+                git commit -m "Applying $(basename "$patch_file")."
+              else
+                if [[ "$(basename "$patch_file")" == temp* ]]; then
+                  echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                else
+                  echo "::error::应用补丁时出错: $patch_file"
+                  patch_failed=true
+                fi
+              fi
+            done < <(find "$GITHUB_WORKSPACE/.github/diy/luci/patches/hanwckf" -type f -name '*.patch' -print0 | sort -z)
+          fi
+
+          # 覆写层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
+          for ow_dir in \
+            "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/global" \
+            "$GITHUB_WORKSPACE/.github/diy/luci/overwrite/hanwckf"; do
+            if [ -d "$ow_dir" ]; then
+              echo "应用覆写层: $ow_dir"
+              while IFS= read -r -d '' f; do
+                rel="${f#"$ow_dir"/}"
+                mkdir -p "$(dirname "$rel")"
+                cp -f "$f" "$rel"
+                echo "覆写: $rel"
+              done < <(find "$ow_dir" -type f -print0 | sort -z)
+            fi
+          done
+          # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Applying overwrite layer." || {
+              echo "::error::覆写层提交失败: hanwckf"
+              exit 1
+            }
+          fi
+
+          if [ "$patch_failed" = false ]; then
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+            retry_push "https://github.com/solarflows/luci.git" "HEAD:refs/heads/hanwckf" || {
+              echo "::error::推送 hanwckf 失败（已重试）"
+              overall_patch_failed=true
+            }
+          else
+            echo "::error::hanwckf 补丁应用失败，跳过推送。"
+            overall_patch_failed=true
+          fi
+
+          if [ "$overall_patch_failed" = true ]; then
+            echo "::error::一个或多个 Luci 分支同步失败"
+            exit 1
+          fi
+
+  sync_packages:
+    name: 同步 Packages 仓库
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGETS: "lean openwrt immortalwrt qualcommax"
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: 配置环境
+        run: |
+          set -euo pipefail
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: 克隆仓库并设置上游
+        run: |
+          set -euo pipefail
+          cd $GITHUB_WORKSPACE
+          git clone --no-tags --single-branch https://github.com/solarflows/packages.git temp_rep
+          cd temp_rep
+
+          for target in $TARGETS; do
+            case "$target" in
+              lean) upstream=https://github.com/coolsnowwolf/packages.git ;;
+              openwrt) upstream=https://github.com/openwrt/packages.git ;;
+              immortalwrt|qualcommax) upstream=https://github.com/immortalwrt/packages.git ;;
+              *) echo "::error::未配置 packages 上游: $target"; exit 1 ;;
+            esac
+            echo "Target: $target  Upstream: $upstream"
+            git remote add "$target" "$upstream"
+          done
+
+          git fetch --no-tags lean \
+            refs/heads/master:refs/remotes/lean/master
+          git fetch --no-tags openwrt \
+            refs/heads/master:refs/remotes/openwrt/master
+          git fetch --no-tags immortalwrt \
+            refs/heads/master:refs/remotes/immortalwrt/master \
+            refs/heads/openwrt-21.02:refs/remotes/immortalwrt/openwrt-21.02
+          git update-ref refs/remotes/qualcommax/master refs/remotes/immortalwrt/master
+
+      - name: 拉取上游代码并打补丁
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd $GITHUB_WORKSPACE/temp_rep
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 packages"; exit 1; }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
+
+          # 推送函数：先fetch确保本地ref最新，避免浅克隆导致的 cannot lock ref 错误
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            local branch="${refspec#HEAD:refs/heads/}"
+            local remote_sha expected lease current
+            case "$refspec" in
+              HEAD:refs/heads/*) ;;
+              *) echo "::error::无效的目标 refspec: $refspec"; return 2 ;;
+            esac
+            if ! remote_sha=$(git ls-remote "$remote_url" "refs/heads/${branch}"); then
+              echo "::error::读取远端分支失败: $remote_url refs/heads/${branch}"
+              return 1
+            fi
+            expected=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+            if [ -n "$expected" ]; then
+              # 若远端已有该分支，检查其内容树是否与本地 HEAD 完全一致
+              # 若文件树一致（代码内容零差异），跳过推送以避免产生无意义的空提交，防止下游工作流误判变更
+              if git fetch --no-tags --depth=1 "$remote_url" "refs/heads/${branch}" 2>/dev/null; then
+                local remote_tree local_tree
+                remote_tree=$(git rev-parse "FETCH_HEAD^{tree}" 2>/dev/null || true)
+                local_tree=$(git rev-parse "HEAD^{tree}" 2>/dev/null || true)
+                if [ -n "$remote_tree" ] && [ "$remote_tree" = "$local_tree" ]; then
+                  echo "🟢 远端分支 ${branch} 内容树与本地完全一致 (${local_tree:0:7})，跳过推送"
+                  return 0
+                fi
+              fi
+              lease="--force-with-lease=refs/heads/${branch}:${expected}"
+            else
+              lease="--force-with-lease=refs/heads/${branch}:"
+            fi
+            for i in $(seq 1 $max_retries); do
+              if git push "$remote_url" "$lease" "$refspec" 2>&1; then
+                return 0
+              fi
+              if ! remote_sha=$(git ls-remote "$remote_url" "refs/heads/${branch}"); then
+                echo "::error::读取远端分支失败: $remote_url refs/heads/${branch}"
+                return 1
+              fi
+              current=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+              if [ "$current" = "$(git rev-parse HEAD)" ]; then
+                echo "✅ 远端已包含本地 HEAD"
+                return 0
+              fi
+              if [ "$current" != "$expected" ]; then
+                echo "::error::远端分支已在重试期间变化，拒绝覆盖: refs/heads/${branch}"
+                return 1
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
+
+          overall_patch_failed=false
+          for target in $TARGETS; do
+            echo "Target: $target"
+            git show-ref --verify --quiet "refs/remotes/${target}/master" || {
+              echo "::error::未找到上游 ${target}/master，跳过 $target"
+              overall_patch_failed=true
+              continue
+            }
+            git checkout -B "$target" "${target}/master"
+
+            if [ -d "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" ]; then
+              patch_failed=false
+              while IFS= read -r -d '' patch_file; do
+                echo "应用补丁中: $patch_file"
+                if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
+                  git add .
+                  git commit -m "Applying $(basename "$patch_file")."
+                else
+                  if [[ "$(basename "$patch_file")" == temp* ]]; then
+                    echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                  else
+                    echo "::error::应用补丁时出错: $patch_file"
+                    patch_failed=true
+                    overall_patch_failed=true
+                  fi
+                fi
+              done < <(find "$GITHUB_WORKSPACE/.github/diy/packages/patches/$target" -type f -name '*.patch' -print0 | sort -z)
+              if [ "$patch_failed" = true ]; then
+                echo "::error::$target 补丁应用失败，跳过推送。"
+                continue
+              fi
+            fi
+
+            # 覆写层：全局 + 目标专用，直接替换或新增文件（优先级高于补丁）
+            for ow_dir in \
+              "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/global" \
+              "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/$target"; do
+              if [ -d "$ow_dir" ]; then
+                echo "应用覆写层: $ow_dir"
+                while IFS= read -r -d '' f; do
+                  rel="${f#"$ow_dir"/}"
+                  mkdir -p "$(dirname "$rel")"
+                  cp -f "$f" "$rel"
+                  echo "覆写: $rel"
+                done < <(find "$ow_dir" -type f -print0 | sort -z)
+              fi
+            done
+            # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+            git add -A
+            if ! git diff --cached --quiet; then
+              if ! git commit -m "Applying overwrite layer."; then
+                echo "::error::覆写层提交失败: $target"
+                exit 1
+              fi
+            fi
+
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+
+            if [[ $target == "lean" ]]; then
+              retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/master" || {
+                echo "::error::推送 $target 失败（已重试）"
+                overall_patch_failed=true
+              }
+            else
+              retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/$target" || {
+                echo "::error::推送 $target 失败（已重试）"
+                overall_patch_failed=true
+              }
+            fi
+
+          done
+          echo "Target: hanwckf"
+          git checkout -B hanwckf immortalwrt/openwrt-21.02
+
+          patch_failed=false
+          if [ -d "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" ]; then
+            while IFS= read -r -d '' patch_file; do
+              echo "应用补丁中: $patch_file"
+              if git apply --check --whitespace=nowarn "$patch_file" && git apply --whitespace=nowarn "$patch_file"; then
+                git add .
+                git commit -m "Applying $(basename "$patch_file")."
+              else
+                if [[ "$(basename "$patch_file")" == temp* ]]; then
+                  echo "::warning::临时补丁应用失败 (忽略): $patch_file"
+                else
+                  echo "::error::应用补丁时出错: $patch_file"
+                  patch_failed=true
+                fi
+              fi
+            done < <(find "$GITHUB_WORKSPACE/.github/diy/packages/patches/hanwckf" -type f -name '*.patch' -print0 | sort -z)
+          fi
+
+          # 覆写层：全局 + 目标专用（hanwckf 尾段与主循环保持一致）
+          for ow_dir in \
+            "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/global" \
+            "$GITHUB_WORKSPACE/.github/diy/packages/overwrite/hanwckf"; do
+            if [ -d "$ow_dir" ]; then
+              echo "应用覆写层: $ow_dir"
+              while IFS= read -r -d '' f; do
+                rel="${f#"$ow_dir"/}"
+                mkdir -p "$(dirname "$rel")"
+                cp -f "$f" "$rel"
+                echo "覆写: $rel"
+              done < <(find "$ow_dir" -type f -print0 | sort -z)
+            fi
+          done
+          # 暂存本层所有覆写；仅当确有变更时提交，提交失败必须报错
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Applying overwrite layer." || {
+              echo "::error::覆写层提交失败: hanwckf"
+              exit 1
+            }
+          fi
+
+          if [ "$patch_failed" = false ]; then
+            if [ -d .github ]; then
+                rm -rf .github
+                git add .
+                git commit -m "Removing workflows files."
+            fi
+            retry_push "https://github.com/solarflows/packages.git" "HEAD:refs/heads/hanwckf" || {
+              echo "::error::推送 hanwckf 失败（已重试）"
+              overall_patch_failed=true
+            }
+          else
+            echo "::error::hanwckf 补丁应用失败，跳过推送。"
+            overall_patch_failed=true
+          fi
+
+          if [ "$overall_patch_failed" = true ]; then
+            echo "::error::一个或多个 Packages 分支同步失败"
+            exit 1
+          fi
+
+  sync_vikingyfy:
+    name: 同步VIKINGYFY仓库
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出目标仓库
+        uses: actions/checkout@v6
+        with:
+          repository: solarflows/ImmortalWrt-QualcommAX
+          ref: VIKINGYFY-main
+          fetch-depth: 0
+          token: ${{ secrets.ACCESS_TOKEN }}
+          persist-credentials: false
+
+      - name: 检出自动化仓库
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository }}
+          path: AutoWorkFlows
+          persist-credentials: false
+
+      - name: 配置环境
+        run: |
+          set -euo pipefail
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: 添加上游仓库并拉取
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/VIKINGYFY/immortalwrt.git
+          git fetch --no-tags upstream main
+
+      - name: 检测上游是否有更新
+        id: check
+        run: |
+          set -euo pipefail
+          # 获取当前分支 HEAD 的 commit SHA
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          # 获取上游 main 分支的最新 commit SHA
+          UPSTREAM_COMMIT=$(git rev-parse upstream/main)
+
+          echo "当前跟踪提交: $CURRENT_COMMIT"
+          echo "上游最新提交: $UPSTREAM_COMMIT"
+          echo "expected_remote_sha=$CURRENT_COMMIT" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$UPSTREAM_COMMIT" "$CURRENT_COMMIT"; then
+            echo "🟢 上游最新提交已包含在当前分支，无需变基。"
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "🔵 检测到上游更新，准备同步。"
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 保存未同步快照 tag
+        if: steps.check.outputs.has_update == 'true'
+        id: save-snapshot
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 仅当触发上游 rebase（has_update=true，准备改写本地历史）时才保存快照；正常无需变基不做多余 tag。
+          # 去重依据是“内容”而非仅“名称”：先查同名 tag，再查远端是否有任意 tag 已指向相同 commit（相同内容），命中则跳过。
+          # 命名 YYMMDD-beforerebase-<SHA> 与其它固定版本发版 CI 的 tag 区分。
+          CURRENT_SHA=$(git rev-parse HEAD)
+          SAVED_TAG=""
+          ASKPASS="$RUNNER_TEMP/git-askpass-save.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
+          if [ -n "$ACCESS_TOKEN" ]; then
+            TAG="$(date +'%y%m%d')-beforerebase-${CURRENT_SHA:0:8}"
+            if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "ℹ️ 远端已存在同名 tag $TAG，跳过保存"
+            else
+              # 搜索远端是否有任意 tag 已指向相同 commit（相同内容），有则无需再打
+              SAME_TAG=$(git ls-remote origin "refs/tags/*" 2>/dev/null | awk -v want="$CURRENT_SHA" '$1 == want { tag=$2; sub("^refs/tags/", "", tag); print tag; exit }')
+              if [ -n "$SAME_TAG" ]; then
+                echo "🟢 远端已有指向相同内容的 tag（$SAME_TAG），跳过保存"
+              else
+                git tag "$TAG" "$CURRENT_SHA"
+                if git push origin "refs/tags/$TAG" 2>&1; then
+                  echo "✅ 已保存未同步快照 tag: $TAG"
+                else
+                  echo "::warning::快照 tag $TAG 推送失败（本地已打，可后续手动推送）"
+                fi
+                SAVED_TAG="$TAG"
+              fi
+            fi
+          else
+            echo "::warning::ACCESS_TOKEN 未设置，跳过快照 tag 保存"
+          fi
+          echo "saved_tag=$SAVED_TAG" >> "$GITHUB_OUTPUT"
+          echo "saved_tag=$SAVED_TAG"
+
+      - name: 尝试变基
+        if: steps.check.outputs.has_update == 'true'
+        id: rebase
+        run: |
+          set -euo pipefail
+          echo "::group::尝试将 VIKINGYFY-main 变基到上游 main"
+          if git rebase upstream/main; then
+            echo "rebase_conflict=false" >> "$GITHUB_OUTPUT"
+            echo "✅ 变基成功"
+          else
+            echo "rebase_conflict=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::rebase 冲突（大概率上游历史被改写），先保存快照再强同步"
+            git rebase --abort || true
+          fi
+          echo "::endgroup::"
+
+      - name: 强同步并导出被丢弃提交
+        if: steps.rebase.outputs.rebase_conflict == 'true'
+        id: force-sync
+        run: |
+          set -euo pipefail
+          # 强同步：放弃本地历史，采用上游最新，按序重放本地专属提交；
+          # 内容已被上游等效包含或冲突的自动跳过，并把被丢弃提交导出 .patch 证据，防止 debug 无从找起。
+          BEFORE_SHA=$(git rev-parse HEAD)
+          MERGE_BASE=$(git merge-base upstream/main HEAD)
+          LOCAL_COMMITS=$(git rev-list --reverse --no-merges "$MERGE_BASE"..HEAD)
+          SKIP_DIR="$RUNNER_TEMP/skipped-commits/${BEFORE_SHA:0:8}"
+          mkdir -p "$SKIP_DIR"
+          echo "本地专属提交（将被逐序重放，被跳过的会导出 .patch 证据）:"
+          for c in $LOCAL_COMMITS; do
+            echo "  $(git log -1 --format='%h %s' "$c")"
+          done
+
+          git reset --hard upstream/main
+
+          skipped=""
+          for c in $LOCAL_COMMITS; do
+            subj=$(git log -1 --format=%s "$c")
+            if git cherry-pick -n "$c" 2>/dev/null; then
+              if git diff --cached --quiet; then
+                git reset -q --hard
+                git format-patch -1 --stdout "$c" > "$SKIP_DIR/${c:0:8}-nochange.patch" 2>/dev/null || true
+                skipped="$skipped ${c:0:8}($subj,no-change) "
+                echo "ℹ️ 跳过（内容已被上游包含）: ${c:0:8} $subj"
+              else
+                git commit -q -m "$subj"
+                echo "✅ 重放本地提交: ${c:0:8} $subj"
+              fi
+            else
+              git cherry-pick --abort 2>/dev/null || git reset -q --hard
+              git format-patch -1 --stdout "$c" > "$SKIP_DIR/${c:0:8}-conflict.patch" 2>/dev/null || true
+              skipped="$skipped ${c:0:8}($subj,conflict) "
+              echo "⚠️ 跳过（与上游等效/冲突，快照 tag 可恢复）: ${c:0:8} $subj"
+            fi
+          done
+
+          if git status --porcelain | grep -q .; then
+            echo "::warning::强同步后仍有未提交残留，已强制清理"
+            git reset -q --hard
+          fi
+          if [ -n "$skipped" ]; then
+            echo "::warning::强同步跳过提交:$skipped"
+          fi
+
+          {
+            echo "强同步时间 (UTC): $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "快照 tag: ${{ steps.save-snapshot.outputs.saved_tag }}"
+            echo "强同步前 HEAD: $BEFORE_SHA"
+            echo "强同步后 HEAD: $(git rev-parse HEAD)"
+            echo "上游 main HEAD: $(git rev-parse upstream/main)"
+            echo ""
+            echo "本地专属提交清单:"
+            for c in $LOCAL_COMMITS; do
+              echo "  $c $(git log -1 --format='%s' "$c")"
+            done
+            echo ""
+            [ -z "$skipped" ] || echo "被跳过提交:$skipped"
+          } > "$SKIP_DIR/summary.txt"
+
+          if find "$SKIP_DIR" -name '*.patch' | grep -q .; then
+            echo "skips_exported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skips_exported=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "✅ 强同步完成（本地专属提交已重放或跳过，被跳过差异见 artifact）"
+
+      - name: 上传强同步被丢弃提交证据
+        if: steps.force-sync.outputs.skips_exported == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vikingyfy-skipped-commits-${{ steps.save-snapshot.outputs.saved_tag || 'unsaved' }}
+          path: ${{ runner.temp }}/skipped-commits/
+          if-no-files-found: error
+
+      - name: 应用 Qualcomm 源码补丁
+        if: steps.check.outputs.has_update == 'true' || steps.check.outputs.has_update == 'false'
+        id: apply-source-patch
+        run: |
+          set -euo pipefail
+          PATCH_DIR="$GITHUB_WORKSPACE/AutoWorkFlows/.github/diy/lede/patches/qualcommax"
+          patch_applied=false
+          if [ -d "$PATCH_DIR" ]; then
+            while IFS= read -r -d '' patch_file; do
+              patch_name=$(basename "$patch_file")
+              echo "检查补丁: $patch_name"
+              if git apply --check --whitespace=nowarn "$patch_file" 2>/dev/null; then
+                git apply --whitespace=nowarn "$patch_file"
+                git add .
+                git commit -m "qualcommax: apply $patch_name"
+                echo "✅ 成功应用补丁: $patch_name"
+                patch_applied=true
+              else
+                echo "ℹ️ 补丁已应用或无需应用: $patch_name"
+              fi
+            done < <(find "$PATCH_DIR" -type f -name '*.patch' -print0 | sort -z)
+          fi
+          echo "patch_changed=${patch_applied}" >> "$GITHUB_OUTPUT"
+
+      - name: 推送更新到目标仓库
+        if: steps.check.outputs.has_update == 'true' || steps.apply-source-patch.outputs.patch_changed == 'true'
+        id: push
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 Qualcomm fork"; exit 1; }
+          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
+          cat > "$ASKPASS" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *) printf '%s\n' "$ACCESS_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS"
+          export GIT_ASKPASS="$ASKPASS"
+          export GIT_TERMINAL_PROMPT=0
+          retry_push() {
+            local remote_url="$1"
+            local refspec="$2"
+            local max_retries=3
+            local retry_delay=10
+            local branch="${refspec#HEAD:refs/heads/}"
+            local remote_sha expected lease
+            case "$refspec" in
+              HEAD:refs/heads/*) ;;
+              *) echo "::error::无效的目标 refspec: $refspec"; return 2 ;;
+            esac
+            expected="${{ steps.check.outputs.expected_remote_sha }}"
+            if [ -n "$expected" ]; then
+              lease="--force-with-lease=refs/heads/$branch:$expected"
+            else
+              lease="--force-with-lease=refs/heads/$branch:"
+            fi
+            for i in $(seq 1 $max_retries); do
+              if git push "$remote_url" "$lease" "$refspec" 2>&1; then
+                return 0
+              fi
+              if ! remote_sha=$(git ls-remote "$remote_url" "refs/heads/$branch"); then
+                echo "::error::读取远端分支失败: $remote_url refs/heads/$branch"
+                return 1
+              fi
+              current=$(printf '%s\n' "$remote_sha" | awk 'NR == 1 { print $1 }')
+              if [ "$current" = "$(git rev-parse HEAD)" ]; then
+                echo "✅ 远端已包含本地 HEAD"
+                return 0
+              fi
+              if [ "$current" != "$expected" ]; then
+                echo "::error::远端分支已在 rebase/补丁期间变化，拒绝覆盖: refs/heads/$branch"
+                return 1
+              fi
+              if [[ $i -lt $max_retries ]]; then
+                echo "::warning::推送失败，${retry_delay}秒后重试 ($i/$max_retries)..."
+                sleep $retry_delay
+                retry_delay=$((retry_delay * 2))
+              fi
+            done
+            return 1
+          }
+          echo "::group::推送 VIKINGYFY-main 到远程仓库"
+          if retry_push origin HEAD:refs/heads/VIKINGYFY-main; then
+            echo "push_success=true" >> $GITHUB_OUTPUT
+            echo "✅ 已推送分支 VIKINGYFY-main"
+          else
+            echo "::error::推送失败（已重试）"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+  del_runs:
+    name: 删除旧运行记录
+    needs: [sync_lede, sync_luci, sync_packages, sync_vikingyfy]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@0cf693bc9909e5e867ee8f27b813224ba862939c
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 1
+          keep_minimum_runs: 4
