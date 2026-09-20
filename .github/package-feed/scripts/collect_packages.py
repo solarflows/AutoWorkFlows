@@ -48,14 +48,40 @@ def ensure_source_cache(cache_root, repo_url, branch=None):
 
 
 def sync_path(src, dst):
-    if not os.path.exists(src):
+    if not os.path.exists(src) and not os.path.islink(src):
         return False
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    if os.path.isdir(src):
-        shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".git*", ".svn*", ".github*"))
+    if shutil.which("rsync"):
+        if os.path.isdir(src) and not os.path.islink(src):
+            os.makedirs(dst, exist_ok=True)
+            cmd = [
+                "rsync", "-a", "--links",
+                "--exclude=.git*", "--exclude=.svn*", "--exclude=.github*",
+                f"{src}/", f"{dst}/"
+            ]
+        else:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            cmd = ["rsync", "-a", "--links", src, dst]
+        res = subprocess.run(cmd)
+        return res.returncode == 0
     else:
-        shutil.copy2(src, dst)
-    return True
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.isdir(src) and not os.path.islink(src):
+            shutil.copytree(
+                src, dst,
+                symlinks=True,
+                ignore_dangling_symlinks=True,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(".git*", ".svn*", ".github*")
+            )
+        else:
+            if os.path.islink(src):
+                linkto = os.readlink(src)
+                if os.path.lexists(dst):
+                    os.remove(dst)
+                os.symlink(linkto, dst)
+            else:
+                shutil.copy2(src, dst)
+        return True
 
 
 def mvdir(dest_root, dirname):
@@ -138,6 +164,13 @@ def main():
                     src_full = os.path.join(dest_root, s_rel)
                     dst_full = dest_root if d_rel in [".", "./"] else os.path.join(dest_root, d_rel)
                     if os.path.exists(src_full):
+                        target_name = os.path.basename(s_rel) if d_rel in [".", "./"] else ""
+                        final_dest = os.path.join(dst_full, target_name) if target_name else dst_full
+                        if os.path.exists(final_dest):
+                            if os.path.isdir(final_dest):
+                                shutil.rmtree(final_dest, ignore_errors=True)
+                            else:
+                                os.remove(final_dest)
                         try:
                             shutil.move(src_full, dst_full)
                         except Exception as e:
