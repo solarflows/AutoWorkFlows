@@ -11,3 +11,22 @@ CONFIG_PACKAGE_shadowsocksr-libev-ssr-local=y
 CONFIG_PACKAGE_shadowsocksr-libev-ssr-redir=y
 CONFIG_PACKAGE_shadowsocksr-libev-ssr-server=y
 CONFIG_PACKAGE_sing-box=y
+
+# ────────────────────────────────────────────────────────────
+# SONiC FullCone NAT（内核 6.18，集成进 nf_nat / nft_masq / xt_MASQUERADE）
+#
+# 上游已用 SONiC 方案替换旧版 fullconenat / fullconenat-nft；
+# 内核补丁位于 target/linux/generic/hack-6.18/984~986。
+# 包自身的 KCONFIG 会向内核注入：
+#   CONFIG_NF_NAT_FULLCONE=y
+#   CONFIG_NF_CT_PROTO_UDPLITE=y
+#   CONFIG_NF_CT_PROTO_SCTP=y
+#
+# ⚠️ 必须显式 =y，不能依赖 Kconfig 的 `default y if PACKAGE_firewall4`：
+#    SDK+IB 增量路径的 PACKAGES 只从 seed 文件提取（compile-packages.yml
+#    的 `grep -E '^CONFIG_PACKAGE_...=y$'`），依赖 default 会使 IB 组装的
+#    固件静默缺少该功能。
+# 依赖：@LINUX_6_18 @(PACKAGE_firewall4||PACKAGE_firewall)
+# ────────────────────────────────────────────────────────────
+CONFIG_PACKAGE_fullconenat-sonic=y
+CONFIG_PACKAGE_luci-app-fullconenat-sonic=y
