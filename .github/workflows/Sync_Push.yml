@@ -755,11 +755,10 @@ jobs:
           path: AutoWorkFlows
           persist-credentials: false
 
-      - name: 配置环境
-        run: |
-          set -euo pipefail
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
+      - name: 配置环境与 Git 凭据
+        uses: ./AutoWorkFlows/.github/actions/git-auth
+        with:
+          token: ${{ secrets.ACCESS_TOKEN }}
 
       - name: 添加上游仓库并拉取
         run: |
@@ -933,46 +932,19 @@ jobs:
       - name: 应用 Qualcomm 源码补丁
         if: steps.check.outputs.has_update == 'true' || steps.check.outputs.has_update == 'false'
         id: apply-source-patch
-        run: |
-          set -euo pipefail
-          PATCH_DIR="$GITHUB_WORKSPACE/AutoWorkFlows/.github/custom/sources/immortalwrt-qualcommax/patches"
-          patch_applied=false
-          if [ -d "$PATCH_DIR" ]; then
-            while IFS= read -r -d '' patch_file; do
-              patch_name=$(basename "$patch_file")
-              echo "检查补丁: $patch_name"
-              if git apply --check --whitespace=nowarn "$patch_file" 2>/dev/null; then
-                git apply --whitespace=nowarn "$patch_file"
-                git add .
-                git commit -m "qualcommax: apply $patch_name"
-                echo "✅ 成功应用补丁: $patch_name"
-                patch_applied=true
-              else
-                echo "ℹ️ 补丁已应用或无需应用: $patch_name"
-              fi
-            done < <(find "$PATCH_DIR" -type f -name '*.patch' -print0 | sort -z)
-          fi
-          echo "patch_changed=${patch_applied}" >> "$GITHUB_OUTPUT"
+        uses: ./AutoWorkFlows/.github/actions/apply-patches
+        with:
+          patch-dir: ${{ github.workspace }}/AutoWorkFlows/.github/custom/sources/immortalwrt-qualcommax/patches
+          commit-prefix: "qualcommax: apply"
 
       - name: 推送更新到目标仓库
-        if: steps.check.outputs.has_update == 'true' || steps.apply-source-patch.outputs.patch_changed == 'true'
+        if: steps.check.outputs.has_update == 'true' || steps.apply-source-patch.outputs.patches-applied == 'true'
         id: push
         env:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           [ -n "$ACCESS_TOKEN" ] || { echo "::error::ACCESS_TOKEN 未设置，无法推送 Qualcomm fork"; exit 1; }
-          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
-          cat > "$ASKPASS" <<'EOF'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *) printf '%s\n' "$ACCESS_TOKEN" ;;
-          esac
-          EOF
-          chmod 700 "$ASKPASS"
-          export GIT_ASKPASS="$ASKPASS"
-          export GIT_TERMINAL_PROMPT=0
           retry_push() {
             local remote_url="$1"
             local refspec="$2"

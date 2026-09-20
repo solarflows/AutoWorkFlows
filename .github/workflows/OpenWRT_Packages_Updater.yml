@@ -85,13 +85,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 初始化环境
+      - name: 配置环境与 Git 凭据
+        uses: ./.github/actions/git-auth
+        with:
+          token: ${{ secrets.ACCESS_TOKEN }}
+
+      - name: 写入 Job Summary 头部
         run: |
           set -euo pipefail
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-
-          # 写入 Job Summary 头部
           echo "# 🔄 OpenWRT Packages Updater" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **分支**: \`${{matrix.target}}\`" >> $GITHUB_STEP_SUMMARY
@@ -254,17 +255,6 @@ jobs:
             echo "::error::ACCESS_TOKEN 未设置，无法推送 packages feed"
             exit 1
           }
-          ASKPASS="$RUNNER_TEMP/git-askpass.sh"
-          cat > "$ASKPASS" <<'EOF'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *) printf '%s\n' "$ACCESS_TOKEN" ;;
-          esac
-          EOF
-          chmod 700 "$ASKPASS"
-          export GIT_ASKPASS="$ASKPASS"
-          export GIT_TERMINAL_PROMPT=0
           if [ "${{ github.event_name }}" == "schedule" ]; then
             commit_message="⏲ Schedule update-$(TZ='Asia/Shanghai' date -d now)"
           else

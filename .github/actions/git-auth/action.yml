@@ -39,15 +39,9 @@ runs:
       env:
         INPUT_TOKEN: ${{ inputs.token }}
 
-    - name: 配置本地 Git 身份
+    - name: 配置 Git 身份
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
-        if [ -d ".git" ]; then
-          git config user.name "${{ inputs.user-name }}"
-          git config user.email "${{ inputs.user-email }}"
-        else
-          git config --global user.name "${{ inputs.user-name }}"
-          git config --global user.email "${{ inputs.user-email }}"
-        fi
+        git config --global user.name "${{ inputs.user-name }}"
+        git config --global user.email "${{ inputs.user-email }}"
