@@ -1,0 +1,657 @@
+packages:
+- name: my-diy
+  description: my-diy
+  repo: https://github.com/hyy-666/my-diy
+  branch: main
+  hook: mvdir my-diy
+  targets:
+  - main
+- name: luci-theme-argon-dark-mod
+  description: luci-theme-argon-dark-mod
+  repo: https://github.com/Leo-Jo-My/luci-theme-argon-dark-mod
+  targets:
+  - main
+  - qt6
+- name: luci-theme-Butterfly-dark
+  description: luci-theme-Butterfly-dark
+  repo: https://github.com/hyy-666/luci-theme-Butterfly-dark
+  targets:
+  - main
+  - qt6
+- name: luci-theme-darkmatter
+  description: luci-theme-darkmatter
+  repo: https://github.com/apollo-ng/luci-theme-darkmatter
+  targets:
+  - main
+  - qt6
+- name: luci-theme-argon
+  description: luci-theme-argon
+  repo: https://github.com/solarflows/luci-theme-argon
+  branch: '21.02'
+  targets:
+  - main
+  - mt798x
+  - qt6
+- name: luci-theme-neobird
+  description: luci-theme-neobird
+  repo: https://github.com/thinktip/luci-theme-neobird
+  targets:
+  - main
+  - qt6
+- name: luci-theme-alpha
+  description: luci-theme-alpha
+  repo: https://github.com/derisamedia/luci-theme-alpha
+  targets:
+  - main
+  - qt6
+- name: luci-app-argon-conf
+  description: luci-app-argon-conf
+  repo: https://github.com/jerrykuku/luci-app-argon-conf
+  branch: '18.06'
+  targets:
+  - main
+  - qt6
+- name: luci-app-aliyundrive-webdav
+  description: 阿里网盘Webdav挂载
+  repo: https://github.com/messense/aliyundrive-webdav
+  paths:
+  - openwrt/aliyundrive-webdav
+  - openwrt/luci-app-aliyundrive-webdav
+  targets:
+  - main
+  - qt6
+- name: luci-app-advanced
+  description: advanced          配置文件级别的设置修改插件
+  repo: https://github.com/sirpdboy/luci-app-advanced
+  targets:
+  - main
+  - qt6
+- name: airconnect
+  description: airconnect        将DLNA设备转为AirPlay设备
+  repo: https://github.com/sbwml/luci-app-airconnec
+  paths:
+  - luci-app-airconnect
+  - airconnect
+  targets:
+  - main
+  - qt6
+- name: luci-app-amlogic
+  description: amlogic           固件更新功能加强
+  repo: https://github.com/ophub/luci-app-amlogic
+  paths:
+  - luci-app-amlogic
+  targets:
+  - main
+  - qt6
+- name: luci-app-autoipsetadder
+  description: autoipsetadder    自动添加不能访问的网站到gfwlist转发链
+  repo: https://github.com/rufengsuixing/luci-app-autoipsetadder
+  targets:
+  - main
+  - qt6
+- name: luci-app-autotimese
+  description: autotimeset       设置OpenWRT按时执行某个操作
+  repo: https://github.com/sirpdboy/luci-app-autotimese
+  targets:
+  - main
+  - qt6
+- name: luci-app-autorepeater
+  description: autorepeater      OpenWRT自动中继网络
+  repo: https://github.com/peter-tank/luci-app-autorepeater
+  targets:
+  - main
+  - qt6
+- name: luci-app-beardropper
+  description: beardropper       控制dropbear的登录
+  repo: https://github.com/NateLol/luci-app-beardropper
+  targets:
+  - main
+  - qt6
+- name: cdnspeedtest
+  description: cdnspeedtest                  CloudFlare CDN 测速
+  repo: https://github.com/immortalwrt/packages
+  paths:
+  - net/cdnspeedtest
+  targets:
+  - main
+  - mt798x
+  - qt6
+- name: luci-app-cloudflarespeedtest
+  description: luci-app-cloudflarespeedtest
+  repo: https://github.com/mingxiaoyu/luci-app-cloudflarespeedtes
+  paths:
+  - applications/luci-app-cloudflarespeedtest
+  targets:
+  - main
+  - qt6
+- name: luci-app-control-guest-wifi
+  description: control-guest-wifi            访客wifi
+  repo: https://github.com/zxlhhyccc/bf-package-master
+  paths:
+  - zxlhhyccc/luci-app-control-guest-wifi
+  targets:
+  - main
+  - qt6
+- name: luci-app-dnsfilter
+  description: dnsfilter         基于dnsmasq的去广告程序
+  repo: https://github.com/kiddin9/luci-app-dnsfilter
+  targets:
+  - main
+  - mt798x
+  - qualcommax
+  - qt6
+- name: luci-app-dockerman
+  description: dockerman         Docker管理界面
+  repo: https://github.com/lisaac/luci-app-dockerman
+  paths:
+  - applications/luci-app-dockerman
+  targets:
+  - main
+  - qt6
+- name: filebrowser
+  description: filebrowser       文件管理器
+  repo: https://github.com/immortalwrt/packages/
+  paths:
+  - utils/filebrowser
+  targets:
+  - main
+  - qt6
+- name: luci-app-filebrowser
+  description: luci-app-filebrowser
+  repo: https://github.com/immortalwrt/luci/
+  branch: openwrt-18.06
+  paths:
+  - applications/luci-app-filebrowser
+  targets:
+  - main
+  - qt6
+- name: luci-app-homebridge
+  description: homebridge        米家的智能家居到Apple HomeKit的桥接
+  repo: https://github.com/shanglanxin/luci-app-homebridge
+  targets:
+  - main
+  - qt6
+- name: homeproxy
+  description: HomeProxy         Tianling Shen主导的FQ
+  repo: https://github.com/immortalwrt/homeproxy
+  targets:
+  - main
+  - qt6
+- name: natter
+  description: Hyy2001X          软件库
+  repo: https://github.com/Hyy2001X/AutoBuild-Packages
+  paths:
+  - luci-app-adguardhome
+  - luci-app-natter
+  - luci-app-onliner
+  - luci-app-webd
+  - webd
+  - natter
+  targets:
+  - main
+  - qt6
+- name: luci-app-ikoolproxy
+  description: ikoolproxy        广告过滤
+  repo: https://github.com/1wrt/luci-app-ikoolproxy
+  hook: mv luci-app-ikoolproxy/koolproxy ./
+  targets:
+  - main
+  - qt6
+- name: luci-app-iperf
+  description: iperf             测速软件的luci界面
+  repo: https://github.com/Ysurac/openmptcprouter-feeds
+  paths:
+  - luci-app-iperf
+  targets:
+  - main
+  - qt6
+- name: openwrt-iptvhelper
+  description: iptvhelper        融合IPTV到家庭局域网
+  repo: https://github.com/riverscn/openwrt-iptvhelper
+  hook: mvdir openwrt-iptvhelper
+  targets:
+  - main
+  - qt6
+- name: irqbalance
+  description: irqbalance        修复lean的irqbalance
+  repo: https://github.com/openwrt/packages
+  paths:
+  - utils/irqbalance
+  targets:
+  - main
+  - qt6
+- name: libtorrent-rasterbar
+  description: libtorrent-rasterbar
+  repo: https://github.com/immortalwrt/packages
+  paths:
+  - libs/libtorrent-rasterbar
+  targets:
+  - main
+  - qt6
+- name: '*'
+  description: linkease          易有云官方软件(易有云ddnsto,linkshare)
+  repo: https://github.com/linkease/istore/
+  paths:
+  - luci/*
+  targets:
+  - main
+  - qt6
+- name: '*'
+  description: '*'
+  repo: https://github.com/linkease/nas-packages-luc
+  paths:
+  - luci/*
+  targets:
+  - main
+  - qt6
+- name: app-store-ui
+  description: app-store-ui
+  repo: https://github.com/linkease/istore-u
+  paths:
+  - app-store-ui
+  targets:
+  - main
+  - qt6
+- name: '*'
+  description: '*'
+  repo: https://github.com/linkease/nas-packages
+  paths:
+  - network/services/*
+  - multimedia/*
+  targets:
+  - main
+  - qt6
+- name: lucky
+  description: lucky             大吉多种功能结合体
+  repo: https://github.com/gdy666/luci-app-lucky
+  paths:
+  - luci-app-lucky
+  - lucky
+  targets:
+  - main
+  - mt798x
+  - qualcommax
+- name: geo2txt
+  description: '# MosDNS            插件化可定制的DNS转发器'
+  repo: https://github.com/sbwml/luci-app-mosdns
+  branch: v5
+  paths:
+  - luci-app-mosdns
+  - mosdns
+  - geo2txt
+  targets:
+  - main
+  - mt798x
+  - qualcommax
+  - qt6
+- name: luci-app-mmconf
+  description: mmconfig          3G/LTE 解调器设置
+  repo: https://github.com/erdoukki/luci-app-mmconf
+  targets:
+  - main
+  - qt6
+- name: luci-app-modeminfo
+  description: modeminfo         3G/LTE 解调器信息
+  repo: https://github.com/4IceG/luci-app-modeminfo
+  targets:
+  - main
+  - qt6
+- name: luci-app-msd_lite
+  description: msd_lite          新一代IPTV转发
+  repo: https://github.com/ximiTech/luci-app-msd_lite
+  targets:
+  - main
+  - qt6
+- name: msd_lite
+  description: msd_lite
+  repo: https://github.com/ximiTech/msd_lite
+  targets:
+  - main
+  - qt6
+- name: openwrt-nezha
+  description: nezha             开源、轻量的服务器和网站监控、运维工具
+  repo: https://github.com/Erope/openwrt_nezha
+  paths:
+  - luci-app-nezha
+  - openwrt-nezha
+  hook: mv openwrt-nezha nezha-agent
+  targets:
+  - main
+  - qt6
+- name: luci-app-netdata
+  description: netdata
+  repo: https://github.com/sirpdboy/luci-app-netdata
+  targets:
+  - main
+  - qt6
+- name: ngrokc
+  description: ngrokc            c语言实现的ngrok
+  repo: https://github.com/immortalwrt/packages
+  paths:
+  - net/ngrokc
+  targets:
+  - main
+  - qt6
+- name: luci-app-nodogsplash
+  description: nodogsplash       无WIFIDOG实现WIFI认证
+  repo: https://github.com/tty228/luci-app-nodogsplash
+  targets:
+  - main
+  - qt6
+- name: OpenAppFilter
+  description: OpenAppFilter     内核级应用过滤
+  repo: https://github.com/destan19/OpenAppFilter
+  hook: mvdir OpenAppFilter
+  targets:
+  - main
+  - qt6
+- name: luci-app-openclash
+  description: openclash         OpenWRT的Clash
+  repo: https://github.com/vernesong/OpenClash
+  paths:
+  - luci-app-openclash
+  targets:
+  - main
+  - qt6
+- name: openwrt-passwall-packages
+  description: PassWall1&2       科学上网
+  repo: https://github.com/Openwrt-Passwall/openwrt-passwall-packages
+  hook: mvdir openwrt-passwall-packages
+  targets:
+  - main
+  - mt798x
+  - qualcommax
+  - qt6
+- name: luci-app-passwall
+  description: luci-app-passwall
+  repo: https://github.com/solarflows/openwrt-passwall
+  branch: custom
+  paths:
+  - luci-app-passwall
+  targets:
+  - main
+  - mt798x
+  - qualcommax
+- name: luci-app-passwall2
+  description: '规范化 PKG_RELEASE: 统一 release 为整数规范'
+  repo: https://github.com/Openwrt-Passwall/openwrt-passwall2
+  paths:
+  - luci-app-passwall2
+  targets:
+  - main
+  - mt798x
+  - qualcommax
+  - qt6
+- name: '*'
+  description: pikpak-webdav     海外迅雷网盘
+  repo: https://github.com/ykxVK8yL5L/pikpak-webdav/
+  paths:
+  - openwrt/*
+  targets:
+  - main
+  - qt6
+- name: luci-app-poweroff
+  description: poweroff          关机插件
+  repo: https://github.com/esirplayground/luci-app-poweroff
+  targets:
+  - main
+  - qt6
+- name: luci-app-rtorren
+  description: rtorrent          OpenWRT的rTorrent客户端
+  repo: https://github.com/wolandmaster/luci-app-rtorren
+  targets:
+  - main
+  - qt6
+- name: luci-app-smartdns
+  description: SmartDNS          DNS解析工具
+  repo: https://github.com/pymumu/luci-app-smartdns
+  branch: lede
+  targets:
+  - main
+  - qt6
+- name: smartdns
+  description: smartdns
+  repo: https://github.com/immortalwrt/packages
+  paths:
+  - net/smartdns
+  targets:
+  - main
+  - qt6
+- name: luci-app-smartinfo
+  description: smartinfo         S.M.A.R.T监控软件
+  repo: https://github.com/huajijam/luci-app-smartinfo
+  targets:
+  - main
+  - qt6
+- name: luci-app-sms-tool
+  description: sms-tool          sms-tool的luci界面
+  repo: https://github.com/4IceG/luci-app-sms-tool
+  paths:
+  - luci-app-sms-tool
+  targets:
+  - main
+  - qt6
+- name: sms-tool
+  description: sms-tool
+  repo: https://github.com/4IceG/packages
+  paths:
+  - sms-tool
+  targets:
+  - main
+  - qt6
+- name: shadow-tls
+  description: ssr-plus          科学上网
+  repo: https://github.com/fw876/helloworld
+  paths:
+  - luci-app-ssr-plus
+  - lua-neturl
+  - redsocks2
+  - shadow-tls
+  targets:
+  - main
+  - qt6
+- name: openwrt-subconverter
+  description: subconverter      订阅转换
+  repo: https://github.com/WYC-2020/openwrt-subconverter
+  hook: mvdir openwrt-subconverter
+  targets:
+  - main
+  - qt6
+- name: luci-app-wolplus
+  description: sundaqiang        sundaqiang编写的软件合集(luci-app-nginx-manager,luci-app-supervisord,luci-app-wolplus)
+  repo: https://github.com/sundaqiang/openwrt-packages
+  paths:
+  - luci-app-nginx-manager
+  - luci-app-supervisord
+  - luci-app-wolplus
+  targets:
+  - main
+  - qt6
+- name: luci-app-syncthing
+  description: syncthing         文件同步
+  repo: https://github.com/immortalwrt/luc
+  branch: openwrt-18.06
+  paths:
+  - applications/luci-app-syncthing
+  targets:
+  - main
+  - qt6
+- name: luci-app-tasks
+  description: tasks             定时任务
+  repo: https://github.com/jjm2473/openwrt-apps
+  paths:
+  - luci-app-tasks
+  targets:
+  - main
+  - qt6
+- name: luci-app-tailscaler
+  description: luci-app-tailscaler 异地组网
+  repo: https://github.com/zijieKwok/luci-app-tailscale1
+  paths:
+  - luci-app-tailscaler
+  targets:
+  - main
+  - qt6
+- name: tencentcloud_ddns
+  description: tencentcloud_ddns 腾讯云DDNS
+  repo: https://github.com/Tencent-Cloud-Plugins/tencentcloud-openwrt-plugin-ddns
+  paths:
+  - tencentcloud_ddns
+  hook: mv tencentcloud_ddns luci-app-tencentddns
+  targets:
+  - main
+  - qt6
+- name: luci-app-tcpdump
+  description: tcpdump           抓包工具
+  repo: https://github.com/KFERMercer/luci-app-tcpdump
+  targets:
+  - main
+  - qt6
+- name: luci-app-tinyfilemanager
+  description: tinyfilemanager   最小web-based文件管理工具
+  repo: https://github.com/muink/luci-app-tinyfilemanager
+  targets:
+  - main
+  - qt6
+- name: luci-app-wechatpush
+  description: wechatpush          全能推送
+  repo: https://github.com/tty228/luci-app-wechatpush
+  targets:
+  - main
+  - mt798x
+- name: luci-wifido
+  description: wifidog           WIFIDOG的luci管理界面WIFI认证
+  repo: https://github.com/walkingsky/luci-wifido
+  hook: mv luci-wifidog luci-app-wifidog
+  targets:
+  - main
+  - qt6
+- name: xmurp-ua
+  description: xmurp-ua          在 OpenWrt 上修改 HTTP 流量的 UA
+  repo: https://github.com/CHN-beta/xmurp-ua
+  targets:
+  - main
+  - qt6
+- name: tailscale
+  description: tailscale
+  repo: https://github.com/openwrt/packages/
+  paths:
+  - net/tailscale
+  targets:
+  - mt798x
+- name: wrtbwmon
+  description: wrtbwmon
+  repo: https://github.com/padavanonly/immortalwrt-mt798x-24.10
+  paths:
+  - package/mtk/applications/luci-app-mwan3helper-chinaroute
+  - package/mtk/applications/luci-app-wrtbwmon
+  - package/mtk/applications/wrtbwmon
+  targets:
+  - mt798x
+- name: arp-scan
+  description: arp-scan           基于arping的局域网扫描工具
+  repo: https://github.com/immortalwrt/packages
+  paths:
+  - net/arp-scan
+  targets:
+  - mt798x
+- name: luci-app-cloudflarespeedtes
+  description: CloudflareSpeedtest  Cloudflare Speedtest 插件
+  repo: https://github.com/stevenjoezhang/luci-app-cloudflarespeedtes
+  targets:
+  - mt798x
+  - qualcommax
+- name: luci-app-ddnsto
+  description: luci-app-ddnsto
+  repo: https://github.com/linkease/ddnsto-openwrt-package
+  paths:
+  - ddnsto
+  - luci-app-ddnsto
+  targets:
+  - mt798x
+  - qualcommax
+- name: openwrt-smartdns
+  description: SmartDNS
+  repo: https://github.com/pymumu/openwrt-smartdns
+  targets:
+  - mt798x
+- name: luci-app-smartdns
+  description: SmartDNS
+  repo: https://github.com/pymumu/luci-app-smartdns
+  branch: master
+  targets:
+  - mt798x
+  - qualcommax
+- name: luci-app-taskplan
+  description: TaskPlan         定时任务计划管理器
+  repo: https://github.com/sirpdboy/luci-app-taskplan
+  paths:
+  - luci-app-taskplan
+  targets:
+  - mt798x
+  - qualcommax
+- name: luci-app-argon-conf
+  description: luci-app-argon-conf
+  repo: https://github.com/jerrykuku/luci-app-argon-conf
+  targets:
+  - mt798x
+  - qualcommax
+- name: zerotier
+  description: ZeroTier
+  repo: https://github.com/coolsnowwolf/packages
+  paths:
+  - net/zerotier
+  targets:
+  - mt798x
+- name: luci-app-zerotier
+  description: luci-app-zerotier
+  repo: https://github.com/zhengmz/luci-app-zerotier
+  targets:
+  - mt798x
+- name: luci-app-podman
+  description: luci-app-podman
+  repo: https://github.com/Zerogiven-OpenWRT-Packages/luci-app-podman
+  targets:
+  - qualcommax
+- name: luci-theme-argon
+  description: luci-theme-argon
+  repo: https://github.com/jerrykuku/luci-theme-argon
+  targets:
+  - qualcommax
+- name: luci-theme-aurora
+  description: luci-theme-aurora
+  repo: https://github.com/eamonxg/luci-theme-aurora
+  targets:
+  - qualcommax
+- name: luci-app-aurora-conf
+  description: luci-app-aurora-conf
+  repo: https://github.com/eamonxg/luci-app-aurora-conf
+  targets:
+  - qualcommax
+- name: my-diy
+  description: my-diy
+  repo: https://github.com/hyy-666/my-diy
+  branch: qt6
+  hook: mvdir my-diy
+  targets:
+  - qt6
+- name: lucky
+  description: lucky             大吉多种功能结合体
+  repo: https://github.com/sirpdboy/luci-app-lucky
+  paths:
+  - luci-app-lucky
+  - lucky
+  targets:
+  - qt6
+- name: luci-app-passwall
+  description: luci-app-passwall
+  repo: https://github.com/Openwrt-Passwall/openwrt-passwall
+  paths:
+  - luci-app-passwall
+  targets:
+  - qt6
+- name: luci-app-pushbo
+  description: pushbot           全能推送
+  repo: https://github.com/zzsj0928/luci-app-pushbo
+  targets:
+  - qt6
