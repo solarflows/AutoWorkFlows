@@ -570,7 +570,7 @@ packages:
   targets:
   - mt798x
   - qualcommax
-- name: openwrt-smartdns
+- name: smartdns
   description: SmartDNS
   repo: https://github.com/pymumu/openwrt-smartdns
   targets:

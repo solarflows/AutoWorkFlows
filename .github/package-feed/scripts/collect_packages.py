@@ -6,6 +6,7 @@ collect_packages.py
 """
 
 import argparse
+import glob
 import hashlib
 import os
 import shutil
@@ -57,6 +58,24 @@ def sync_path(src, dst):
     return True
 
 
+def mvdir(dest_root, dirname):
+    """将 dirname 下所有直接子目录/文件移动到 dest_root，并删除 dirname"""
+    src_dir = os.path.join(dest_root, dirname)
+    if not os.path.isdir(src_dir):
+        print(f"⚠️ mvdir 目标目录不存在: {src_dir}")
+        return
+    for item in os.listdir(src_dir):
+        s = os.path.join(src_dir, item)
+        d = os.path.join(dest_root, item)
+        if os.path.exists(d):
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+            else:
+                os.remove(d)
+        shutil.move(s, d)
+    shutil.rmtree(src_dir, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Collect packages from manifest")
     parser.add_argument("--manifest", required=True, help="Path to packages.yaml")
@@ -77,7 +96,9 @@ def main():
 
     print(f"📦 目标 [{args.target}] 共匹配到 {len(matched_packages)} 个软件包，开始收集...")
 
+    dest_root = os.path.abspath(args.output_dir)
     success_count = 0
+
     for pkg in matched_packages:
         name = pkg.get("name")
         repo = pkg.get("repo")
@@ -89,25 +110,43 @@ def main():
         if not cache_dir:
             continue
 
-        dest_root = os.path.abspath(args.output_dir)
-
         if paths:
             for p in paths:
-                src = os.path.join(cache_dir, p.strip("/"))
-                dst_name = os.path.basename(p.strip("/"))
-                dst = os.path.join(dest_root, dst_name)
-                sync_path(src, dst)
+                pattern = os.path.join(cache_dir, p.strip("/"))
+                matched = glob.glob(pattern)
+                if not matched and os.path.exists(pattern):
+                    matched = [pattern]
+                for src in matched:
+                    dst_name = os.path.basename(src.rstrip("/"))
+                    dst = os.path.join(dest_root, dst_name)
+                    sync_path(src, dst)
         else:
             dst_name = name or os.path.basename(repo.rstrip("/").rstrip(".git"))
             dst = os.path.join(dest_root, dst_name)
             sync_path(cache_dir, dst)
 
         if hook:
-            # 执行简单的 hook 命令（如 mvdir 或重命名）
-            try:
-                subprocess.run(hook, shell=True, cwd=dest_root, check=False)
-            except Exception as e:
-                print(f"⚠️ 执行 hook 失败: {hook} ({e})")
+            if hook.startswith("mvdir "):
+                target_dir = hook.split(maxsplit=1)[1].strip()
+                mvdir(dest_root, target_dir)
+            elif hook.startswith("mv "):
+                # 解析 "mv <src> <dst>"
+                parts = hook.split()
+                if len(parts) >= 3:
+                    s_rel = parts[1]
+                    d_rel = parts[2]
+                    src_full = os.path.join(dest_root, s_rel)
+                    dst_full = dest_root if d_rel in [".", "./"] else os.path.join(dest_root, d_rel)
+                    if os.path.exists(src_full):
+                        try:
+                            shutil.move(src_full, dst_full)
+                        except Exception as e:
+                            print(f"⚠️ 执行 mv 失败: {hook} ({e})")
+            else:
+                try:
+                    subprocess.run(hook, shell=True, cwd=dest_root, check=False)
+                except Exception as e:
+                    print(f"⚠️ 执行 hook 失败: {hook} ({e})")
 
         success_count += 1
 

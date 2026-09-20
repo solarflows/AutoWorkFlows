@@ -26,11 +26,11 @@ runs:
       run: |
         set -euo pipefail
         ASKPASS="${RUNNER_TEMP:-/tmp}/git-askpass-${GITHUB_ACTION_REF:-ci}.sh"
-        cat > "$ASKPASS" <<'EOF'
+        cat > "$ASKPASS" <<EOF
         #!/bin/sh
-        case "$1" in
+        case "\$1" in
           *Username*) printf '%s\n' 'x-access-token' ;;
-          *) printf '%s\n' "$INPUT_TOKEN" ;;
+          *) printf '%s\n' '${INPUT_TOKEN}' ;;
         esac
         EOF
         chmod 700 "$ASKPASS"
