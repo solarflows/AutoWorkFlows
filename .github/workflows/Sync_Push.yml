@@ -745,7 +745,7 @@ jobs:
       - name: 检出目标仓库
         uses: actions/checkout@v6
         with:
-          repository: solarflows/ImmortalWRT-QualcommAX
+          repository: solarflows/ImmortalWrt-QualcommAX
           ref: VIKINGYFY-main
           fetch-depth: 0
           token: ${{ secrets.ACCESS_TOKEN }}

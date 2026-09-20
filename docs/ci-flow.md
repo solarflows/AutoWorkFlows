@@ -56,7 +56,7 @@ flowchart TB
     P1 --> GEODATA
 
     UPD -->|"push 分支"| FEEDREPO[("solarflows/openwrt-packages")]
-    SYNC -->|"push fork"| FORKREPO[("lede / luci / packages<br/>ImmortalWRT-QualcommAX")]
+    SYNC -->|"push fork"| FORKREPO[("lede / luci / packages<br/>ImmortalWrt-QualcommAX")]
     FW -->|"Release"| REL[("固件 + SDK/IB<br/>+ Passwall")]
     SIB --> REL
     PKG --> REL
