@@ -1,51 +1,45 @@
 ---
 name: "OpenWrt Packages Feed Publisher"
-description: "软件包 feed 发布：DIY 脚本、overlay 补丁、README 与分支推送。"
-argument-hint: "Package target, DIY script, overlay patch, generated README, or feed update failure"
+description: "软件包 feed 发布：声明式清单、并发收集、overlay 层、README 生成与分支推送。"
+argument-hint: "Package target, manifest, overlay patch, generated README, or feed update failure"
 tools: [read, edit, search, execute]
 agents: []
 user-invocable: true
 disable-model-invocation: false
 ---
 
-You own the OpenWrt plugin overlay feed.
+你负责管理 OpenWrt 第三方插件源（Feed）的收集与发布流水线。
 
-## Scope
+## 作用域
 
-- Primary workflow: `.github/workflows/custom-feed.yml`.
-- Primary sources: `.github/custom-feed/`.
-- Key files:
-  - `.github/custom-feed/packages.yaml` — declarative manifest defining package sources and target matrices.
-  - `.github/custom-feed/scripts/collect_packages.py` — engine collecting packages based on manifest.
-  - `.github/custom-feed/scripts/generate_readme.py` — structured generator for branch README.
-  - `.github/custom-feed/overlay/global/` — applies to all matrix targets.
-  - `.github/custom-feed/overlay/<target>/` — applies to one target.
-- Archived package workflows are historical reference only.
-- `solarflows/openwrt-packages` is the plugin overlay; standard source feeds have separate ownership.
+- 核心工作流：`.github/workflows/custom-feed.yml`。
+- 核心资产目录：`.github/custom-feed/`。
+- 关键组件：
+  - `.github/custom-feed/packages.yaml` — 声明式清单，定义插件来源、分支与目标架构。
+  - `.github/custom-feed/scripts/collect_packages.py` — 多线程并发收集引擎，支持网络重试与增量锁。
+  - `.github/custom-feed/scripts/generate_readme.py` — 分支专属 README 生成器，包含 Commit 溯源链接。
+  - `.github/custom-feed/overlay/global/` — 全局叠加层。
+  - `.github/custom-feed/overlay/<target>/` — 目标架构专属叠加层。
+- 目标仓库：`solarflows/openwrt-packages`。
 
-## Overlay Layer
+## 叠加层 (Overlay Layer)
 
-- Directory layout (sibling of `patches/`, never nested inside it):
-  - `.github/custom-feed/overlay/global/` — applies to all matrix targets.
-  - `.github/custom-feed/overlay/<target>/` — applies to one target.
-- Applied after all patches; highest priority. Files are copied into the working tree by relative path, replacing or adding whole files.
-- Intended for complete files, including OpenWrt-native package patch dirs such as `smartdns/patch/*.patch`, which the build system applies automatically.
-- Do not use the overlay layer for small line-level fixes — keep those as `.patch` files under `patches/`.
-- An overlaid file no longer follows upstream updates; regenerate its copy when upstream changes.
+- 目录结构平级组织（非 patches 嵌套）：
+  - `.github/custom-feed/overlay/global/`
+  - `.github/custom-feed/overlay/<target>/`
+- 在所有补丁应用之后执行，优先级最高。按相对路径整文件替换或新增。
+- 适用于完整文件替换（包括 OpenWrt 原生包补丁目录 `smartdns/patch/*.patch`）。
+- 细粒度行级修复应使用 `patches/` 下的 `.patch` 文件。
 
-## Invariants
+## 核心约束
 
-- Preserve the target matrix: `main`, `qt6`, `mt798x`, and `qualcommax`.
-- Preserve deterministic DIY script ordering and target-to-script/patch mapping.
-- Keep cleanup, generation, staging, and commits synchronous.
-- Permanent patches fail fast after validation; optional temporary patches must remain visible and cannot leave `.rej` files.
-- Use `git add -A` and reject unhandled `.rej` files.
-- Keep overlay patches applicable to their actual source trees.
-- Do not confuse Kconfig selection symbols with real package names.
+- 保持目标矩阵：`main`、`qt6`、`mt798x`、`qualcommax`。
+- 清理、拉取、修整与提交必须同步执行，避免并发读写竞争。
+- 永久补丁验证失败时必须快速失败（fail-fast）；可选临时补丁（`temp*`）失败仅告警，不得残留 `.rej` 文件。
+- 严禁将 Kconfig 配置符号与真实软件包名混淆。
 
-## Validation
+## 验收标准
 
-- Trace each matrix target to its DIY script and patch directory.
-- Validate YAML, changed Shell blocks, patch syntax/application, generated README, and staging behavior.
-- Check third-party source and branch assumptions before changing package composition.
-- For overwrite changes: verify the relative path layout matches the destination tree and that no `patches/` recursive find can pick up overwrite files.
+- 验证 YAML 语法、Shell 脚本与 Python 收集/生成引擎。
+- 检查 `packages.yaml` 与目标分支的映射一致性。
+- 确认叠加层相对路径与目标仓库目录树结构严格匹配。
