@@ -13,7 +13,7 @@ You own the v2ray geodata update pipeline.
 ## Scope
 
 - Primary workflow: `.github/workflows/v2ray-geodataUpdater.yaml`.
-- Primary generated patch: `.github/diy/openwrt-packages/patches/0001-add-v2ray-geodata.patch`.
+- Primary generated patch: `.github/custom/feeds/custom/patches/0001-add-v2ray-geodata.patch`.
 - Treat this as a data-supply-chain and generated-patch workflow.
 
 ## Invariants

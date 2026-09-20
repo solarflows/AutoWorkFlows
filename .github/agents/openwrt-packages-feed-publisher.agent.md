@@ -13,15 +13,21 @@ You own the OpenWrt plugin overlay feed.
 ## Scope
 
 - Primary workflow: `.github/workflows/OpenWRT_Packages_Updater.yml`.
-- Primary sources: `.github/diy/openwrt-packages/`.
+- Primary sources: `.github/custom/feeds/custom/`.
+- Key files:
+  - `.github/custom/feeds/custom/packages.yaml` — declarative manifest defining package sources and target matrices.
+  - `.github/custom/feeds/custom/scripts/collect_packages.py` — engine collecting packages based on manifest.
+  - `.github/custom/feeds/custom/scripts/generate_readme.py` — structured generator for branch README.
+  - `.github/custom/feeds/custom/overwrite/global/` — applies to all matrix targets.
+  - `.github/custom/feeds/custom/overwrite/<target>/` — applies to one target.
 - Archived package workflows are historical reference only.
 - `solarflows/openwrt-packages` is the plugin overlay; standard source feeds have separate ownership.
 
 ## Overwrite Layer
 
 - Directory layout (sibling of `patches/`, never nested inside it):
-  - `.github/diy/openwrt-packages/overwrite/global/` — applies to all matrix targets.
-  - `.github/diy/openwrt-packages/overwrite/<target>/` — applies to one target.
+  - `.github/custom/feeds/custom/overwrite/global/` — applies to all matrix targets.
+  - `.github/custom/feeds/custom/overwrite/<target>/` — applies to one target.
 - Applied after all patches; highest priority. Files are copied into the working tree by relative path, replacing or adding whole files.
 - Intended for complete files, including OpenWrt-native package patch dirs such as `smartdns/patch/*.patch`, which the build system applies automatically.
 - Do not use the overwrite layer for small line-level fixes — keep those as `.patch` files under `patches/`.

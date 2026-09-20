@@ -16,13 +16,15 @@
 
 ## 补丁与覆写层
 
-自定义内容按仓库存放在 `.github/diy/<repo>/` 下，两类机制互不干扰：
+自定义内容按领域统一存放在 `.github/custom/{sources,feeds}/<category>/` 下，两类机制互不干扰：
 
 | 机制 | 目录 | 用途 |
 |:-----|:-----|:-----|
 | **补丁（patches）** | `patches/` 或 `patches/<target>/` | 对上游文件的小型行级修改，按顺序应用 |
 | **覆写层（overwrite）** | `overwrite/global/` 或 `overwrite/<target>/` | 整文件替换或新增（含 OpenWrt 原生包补丁目录如 `smartdns/patches/*.patch`），在所有补丁之后应用，优先级最高 |
 
+- 源码树主工程补丁存放于 `.github/custom/sources/<repo>/`。
+- 上游同步与自定义 Feed 资产分别存放于 `.github/custom/feeds/upstream/` 与 `.github/custom/feeds/custom/`。
 - 覆写层目录结构与目标仓库相对路径一致，CI 直接复制落位。
 - 被覆写的文件不再跟随上游自动更新，需手动维护。
 - `temp*.patch` 为临时补丁：应用失败仅告警跳过；其余补丁失败会中断流程。

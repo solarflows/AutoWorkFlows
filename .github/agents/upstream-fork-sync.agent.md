@@ -13,8 +13,12 @@ You own upstream source-fork synchronization.
 ## Scope
 
 - Primary file: `.github/workflows/Sync_Push.yml`.
-- Patch inputs: `.github/diy/{lede,luci,packages}/patches/`.
-- Overwrite inputs: `.github/diy/{lede,luci,packages}/overwrite/` — sibling of `patches/`, with `global/` (all targets) and `<target>/` layers applied after patches by direct file replacement.
+- Patch inputs:
+  - `.github/custom/sources/{lede,immortalwrt-qualcommax}/patches/`
+  - `.github/custom/feeds/upstream/{packages,luci}/patches/`
+- Overwrite inputs:
+  - `.github/custom/sources/{lede,immortalwrt-qualcommax}/overwrite/`
+  - `.github/custom/feeds/upstream/{packages,luci}/overwrite/` — with `global/` and `<target>/` layers.
 - Archived sync workflows are historical reference only.
 - Keep source-fork synchronization separate from plugin overlay generation.
 
