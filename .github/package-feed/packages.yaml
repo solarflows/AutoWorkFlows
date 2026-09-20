@@ -44,9 +44,9 @@ packages:
   targets:
   - main
   - qt6
-- name: luci-app-argon-conf
+- name: luci-app-argon-config
   description: luci-app-argon-conf
-  repo: https://github.com/jerrykuku/luci-app-argon-conf
+  repo: https://github.com/jerrykuku/luci-app-argon-config
   branch: '18.06'
   targets:
   - main
@@ -68,7 +68,7 @@ packages:
   - qt6
 - name: airconnect
   description: airconnect        将DLNA设备转为AirPlay设备
-  repo: https://github.com/sbwml/luci-app-airconnec
+  repo: https://github.com/sbwml/luci-app-airconnect
   paths:
   - luci-app-airconnect
   - airconnect
@@ -89,9 +89,9 @@ packages:
   targets:
   - main
   - qt6
-- name: luci-app-autotimese
+- name: luci-app-autotimeset
   description: autotimeset       设置OpenWRT按时执行某个操作
-  repo: https://github.com/sirpdboy/luci-app-autotimese
+  repo: https://github.com/sirpdboy/luci-app-autotimeset
   targets:
   - main
   - qt6
@@ -118,7 +118,7 @@ packages:
   - qt6
 - name: luci-app-cloudflarespeedtest
   description: luci-app-cloudflarespeedtest
-  repo: https://github.com/mingxiaoyu/luci-app-cloudflarespeedtes
+  repo: https://github.com/mingxiaoyu/luci-app-cloudflarespeedtest
   paths:
   - applications/luci-app-cloudflarespeedtest
   targets:
@@ -228,17 +228,17 @@ packages:
   targets:
   - main
   - qt6
-- name: '*'
+- name: istore
   description: linkease          易有云官方软件(易有云ddnsto,linkshare)
-  repo: https://github.com/linkease/istore/
+  repo: https://github.com/linkease/istore
   paths:
   - luci/*
   targets:
   - main
   - qt6
-- name: '*'
-  description: '*'
-  repo: https://github.com/linkease/nas-packages-luc
+- name: nas-packages-luci
+  description: linkease          易有云 nas-packages-luci
+  repo: https://github.com/linkease/nas-packages-luci
   paths:
   - luci/*
   targets:
@@ -246,14 +246,14 @@ packages:
   - qt6
 - name: app-store-ui
   description: app-store-ui
-  repo: https://github.com/linkease/istore-u
+  repo: https://github.com/linkease/istore-ui
   paths:
   - app-store-ui
   targets:
   - main
   - qt6
-- name: '*'
-  description: '*'
+- name: nas-packages
+  description: linkease          易有云 nas-packages
   repo: https://github.com/linkease/nas-packages
   paths:
   - network/services/*
@@ -284,9 +284,9 @@ packages:
   - mt798x
   - qualcommax
   - qt6
-- name: luci-app-mmconf
+- name: luci-app-mmconfig
   description: mmconfig          3G/LTE 解调器设置
-  repo: https://github.com/erdoukki/luci-app-mmconf
+  repo: https://github.com/erdoukki/luci-app-mmconfig
   targets:
   - main
   - qt6
@@ -382,9 +382,9 @@ packages:
   - mt798x
   - qualcommax
   - qt6
-- name: '*'
+- name: pikpak-webdav
   description: pikpak-webdav     海外迅雷网盘
-  repo: https://github.com/ykxVK8yL5L/pikpak-webdav/
+  repo: https://github.com/ykxVK8yL5L/pikpak-webdav
   paths:
   - openwrt/*
   targets:
@@ -396,9 +396,9 @@ packages:
   targets:
   - main
   - qt6
-- name: luci-app-rtorren
+- name: luci-app-rtorrent
   description: rtorrent          OpenWRT的rTorrent客户端
-  repo: https://github.com/wolandmaster/luci-app-rtorren
+  repo: https://github.com/wolandmaster/luci-app-rtorrent
   targets:
   - main
   - qt6
@@ -469,7 +469,7 @@ packages:
   - qt6
 - name: luci-app-syncthing
   description: syncthing         文件同步
-  repo: https://github.com/immortalwrt/luc
+  repo: https://github.com/immortalwrt/luci
   branch: openwrt-18.06
   paths:
   - applications/luci-app-syncthing
@@ -519,9 +519,9 @@ packages:
   targets:
   - main
   - mt798x
-- name: luci-wifido
+- name: luci-wifidog
   description: wifidog           WIFIDOG的luci管理界面WIFI认证
-  repo: https://github.com/walkingsky/luci-wifido
+  repo: https://github.com/walkingsky/luci-wifidog
   hook: mv luci-wifidog luci-app-wifidog
   targets:
   - main
@@ -555,9 +555,9 @@ packages:
   - net/arp-scan
   targets:
   - mt798x
-- name: luci-app-cloudflarespeedtes
+- name: luci-app-cloudflarespeedtest
   description: CloudflareSpeedtest  Cloudflare Speedtest 插件
-  repo: https://github.com/stevenjoezhang/luci-app-cloudflarespeedtes
+  repo: https://github.com/stevenjoezhang/luci-app-cloudflarespeedtest
   targets:
   - mt798x
   - qualcommax
@@ -590,9 +590,9 @@ packages:
   targets:
   - mt798x
   - qualcommax
-- name: luci-app-argon-conf
+- name: luci-app-argon-config
   description: luci-app-argon-conf
-  repo: https://github.com/jerrykuku/luci-app-argon-conf
+  repo: https://github.com/jerrykuku/luci-app-argon-config
   targets:
   - mt798x
   - qualcommax
@@ -623,9 +623,9 @@ packages:
   repo: https://github.com/eamonxg/luci-theme-aurora
   targets:
   - qualcommax
-- name: luci-app-aurora-conf
+- name: luci-app-aurora-config
   description: luci-app-aurora-conf
-  repo: https://github.com/eamonxg/luci-app-aurora-conf
+  repo: https://github.com/eamonxg/luci-app-aurora-config
   targets:
   - qualcommax
 - name: my-diy
@@ -650,8 +650,8 @@ packages:
   - luci-app-passwall
   targets:
   - qt6
-- name: luci-app-pushbo
+- name: luci-app-pushbot
   description: pushbot           全能推送
-  repo: https://github.com/zzsj0928/luci-app-pushbo
+  repo: https://github.com/zzsj0928/luci-app-pushbot
   targets:
   - qt6
