@@ -1,0 +1,63 @@
+name: "Apply Patches"
+description: "按文件名正序检验并应用补丁目录下的所有 *.patch 文件"
+
+inputs:
+  patch-dir:
+    description: "补丁所在目录路径"
+    required: true
+  working-directory:
+    description: "目标代码仓库工作目录"
+    required: false
+    default: "."
+  commit-prefix:
+    description: "Git 提交信息前缀"
+    required: false
+    default: "apply patch"
+
+outputs:
+  patches-applied:
+    description: "是否有补丁被成功应用 (true/false)"
+    value: ${{ steps.apply.outputs.changed }}
+  applied-count:
+    description: "成功应用的补丁总数"
+    value: ${{ steps.apply.outputs.count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: 检验并应用补丁
+      id: apply
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        PATCH_DIR="${{ inputs.patch-dir }}"
+        COMMIT_PREFIX="${{ inputs.commit-prefix }}"
+        applied_count=0
+
+        if [ -d "$PATCH_DIR" ]; then
+          echo "::group::正在扫描并应用补丁: $PATCH_DIR"
+          while IFS= read -r -d '' patch_file; do
+            patch_name=$(basename "$patch_file")
+            echo "检查补丁: $patch_name"
+            if git apply --check --whitespace=nowarn "$patch_file" 2>/dev/null; then
+              git apply --whitespace=nowarn "$patch_file"
+              git add .
+              git commit -m "${COMMIT_PREFIX}: ${patch_name}"
+              echo "✅ 成功应用补丁: $patch_name"
+              applied_count=$((applied_count + 1))
+            else
+              echo "ℹ️ 补丁已应用或无需应用: $patch_name"
+            fi
+          done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name '*.patch' -print0 | sort -z)
+          echo "::endgroup::"
+        else
+          echo "ℹ️ 补丁目录不存在，跳过: $PATCH_DIR"
+        fi
+
+        if [ "$applied_count" -gt 0 ]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        fi
+        echo "count=$applied_count" >> "$GITHUB_OUTPUT"

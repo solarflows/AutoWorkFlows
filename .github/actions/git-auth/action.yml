@@ -1,0 +1,53 @@
+name: "Setup Git Authentication"
+description: "配置安全的 Git 凭据（基于 GIT_ASKPASS）及提交者身份，避免全局凭据泄漏"
+
+inputs:
+  token:
+    description: "GitHub Access Token (PAT)"
+    required: true
+  user-name:
+    description: "Git 提交者名称"
+    required: false
+    default: "github-actions[bot]"
+  user-email:
+    description: "Git 提交者邮箱"
+    required: false
+    default: "41898282+github-actions[bot]@users.noreply.github.com"
+  working-directory:
+    description: "需要配置本地 Git 身份的仓库路径（可选）"
+    required: false
+    default: "."
+
+runs:
+  using: "composite"
+  steps:
+    - name: 配置 Git AskPass 凭据
+      shell: bash
+      run: |
+        set -euo pipefail
+        ASKPASS="${RUNNER_TEMP:-/tmp}/git-askpass-${GITHUB_ACTION_REF:-ci}.sh"
+        cat > "$ASKPASS" <<'EOF'
+        #!/bin/sh
+        case "$1" in
+          *Username*) printf '%s\n' 'x-access-token' ;;
+          *) printf '%s\n' "$INPUT_TOKEN" ;;
+        esac
+        EOF
+        chmod 700 "$ASKPASS"
+        echo "GIT_ASKPASS=$ASKPASS" >> "$GITHUB_ENV"
+        echo "GIT_TERMINAL_PROMPT=0" >> "$GITHUB_ENV"
+      env:
+        INPUT_TOKEN: ${{ inputs.token }}
+
+    - name: 配置本地 Git 身份
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        if [ -d ".git" ]; then
+          git config user.name "${{ inputs.user-name }}"
+          git config user.email "${{ inputs.user-email }}"
+        else
+          git config --global user.name "${{ inputs.user-name }}"
+          git config --global user.email "${{ inputs.user-email }}"
+        fi

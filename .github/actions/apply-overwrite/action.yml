@@ -1,0 +1,64 @@
+name: "Apply Overwrite"
+description: "应用 global 与 target 专属文件覆盖层，并自动提交变动"
+
+inputs:
+  overwrite-base-dir:
+    description: "覆盖层根目录路径（应包含 global 与各个 target 子目录）"
+    required: true
+  target:
+    description: "当前构建目标名称（可选，如 mt798x, qualcommax 等）"
+    required: false
+    default: ""
+  working-directory:
+    description: "目标代码仓库工作目录"
+    required: false
+    default: "."
+  commit-prefix:
+    description: "Git 提交信息前缀"
+    required: false
+    default: "apply overwrite"
+
+outputs:
+  overwrite-applied:
+    description: "是否有覆盖层变动被提交 (true/false)"
+    value: ${{ steps.overwrite.outputs.changed }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: 应用文件覆盖层
+      id: overwrite
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        BASE_DIR="${{ inputs.overwrite-base-dir }}"
+        TARGET="${{ inputs.target }}"
+        PREFIX="${{ inputs.commit-prefix }}"
+        has_changed=false
+
+        apply_dir() {
+          local dir="$1"
+          local desc="$2"
+          if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+            echo "::group::应用覆盖层: $desc ($dir)"
+            cp -rf "$dir"/* ./
+            git status -s
+            if [ -n "$(git status --porcelain)" ]; then
+              git add .
+              git commit -m "${PREFIX}: ${desc}"
+              echo "✅ 成功提交覆盖层变更: $desc"
+              has_changed=true
+            else
+              echo "ℹ️ 覆盖层无内容变更: $desc"
+            fi
+            echo "::endgroup::"
+          fi
+        }
+
+        apply_dir "${BASE_DIR}/global" "global 覆盖层"
+        if [ -n "$TARGET" ]; then
+          apply_dir "${BASE_DIR}/${TARGET}" "${TARGET} 覆盖层"
+        fi
+
+        echo "changed=${has_changed}" >> "$GITHUB_OUTPUT"
