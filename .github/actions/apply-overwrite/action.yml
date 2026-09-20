@@ -17,10 +17,14 @@ inputs:
     description: "Git 提交信息前缀"
     required: false
     default: "apply overwrite"
+  commit:
+    description: "是否自动执行 git commit 提交变更 (true/false)"
+    required: false
+    default: "true"
 
 outputs:
   overwrite-applied:
-    description: "是否有覆盖层变动被提交 (true/false)"
+    description: "是否有覆盖层变动被应用/提交 (true/false)"
     value: ${{ steps.overwrite.outputs.changed }}
 
 runs:
@@ -35,6 +39,7 @@ runs:
         BASE_DIR="${{ inputs.overwrite-base-dir }}"
         TARGET="${{ inputs.target }}"
         PREFIX="${{ inputs.commit-prefix }}"
+        SHOULD_COMMIT="${{ inputs.commit }}"
         has_changed=false
 
         apply_dir() {
@@ -42,15 +47,33 @@ runs:
           local desc="$2"
           if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
             echo "::group::应用覆盖层: $desc ($dir)"
-            cp -rf "$dir"/* ./
-            git status -s
-            if [ -n "$(git status --porcelain)" ]; then
-              git add .
-              git commit -m "${PREFIX}: ${desc}"
-              echo "✅ 成功提交覆盖层变更: $desc"
-              has_changed=true
+            local count=0
+            while IFS= read -r -d '' f; do
+              local rel="${f#"$dir"/}"
+              mkdir -p "$(dirname "$rel")"
+              cp -f "$f" "$rel"
+              echo "覆写: $rel"
+              count=$((count + 1))
+            done < <(find "$dir" -type f -print0 | sort -z)
+
+            if [ "$SHOULD_COMMIT" = "true" ]; then
+              git status -s
+              if [ -n "$(git status --porcelain)" ]; then
+                git add -A -- ':!AutoWorkFlows' ':!.github'
+                git diff --cached --raw 2>/dev/null | awk '$2 ~ /^160000/ || $1 ~ /^:160000/ {print $6}' | xargs -r git rm --cached -f 2>/dev/null || true
+                if ! git diff --cached --quiet; then
+                  git commit -m "${PREFIX}: ${desc}"
+                  echo "✅ 成功提交覆盖层变更: $desc"
+                  has_changed=true
+                fi
+              else
+                echo "ℹ️ 覆盖层无内容变更: $desc"
+              fi
             else
-              echo "ℹ️ 覆盖层无内容变更: $desc"
+              echo "ℹ️ 跳过自动提交 (commit=false)，已覆写 $count 个文件: $desc"
+              if [ "$count" -gt 0 ]; then
+                has_changed=true
+              fi
             fi
             echo "::endgroup::"
           fi

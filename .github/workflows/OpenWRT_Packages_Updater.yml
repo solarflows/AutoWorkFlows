@@ -6,7 +6,7 @@ on:
   push:
     paths:
       - '.github/workflows/OpenWRT_Packages_Updater.yml'
-      - '.github/package-feed/**'
+      - '.github/packages-updater/**'
       - '.github/actions/**'
   workflow_dispatch:
     inputs:
@@ -15,6 +15,11 @@ on:
         required: false
         default: 'all'
         type: string
+      force_refresh:
+        description: '强制全量刷新（忽略增量跳过，重新拉取并重构所有插件）'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -107,21 +112,33 @@ jobs:
           # 避免当仓库中存在与分支同名的 release (如 qualcommax/mt798x) 时产生歧义
           git clone --single-branch --branch "${{ matrix.target }}" https://github.com/solarflows/openwrt-packages.git "${{ matrix.target }}"
           cd "${{ matrix.target }}"
-          # 同步清理工作树，保留 .git；不能后台运行 git rm，否则会与生成和 git add 竞争。
-          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
-          python3 $GITHUB_WORKSPACE/.github/package-feed/scripts/collect_packages.py \
-            --manifest "$GITHUB_WORKSPACE/.github/package-feed/packages.yaml" \
+
+          FORCE_FLAG=""
+          if [ "${{ github.event_name }}" == "push" ] || [ "${{ github.event.inputs.force_refresh }}" == "true" ]; then
+            echo "🔥 触发源要求强制全量刷新 (push 事件或手动指定 force_refresh)"
+            FORCE_FLAG="--force"
+            # 强制刷新模式：彻底清理旧工作树，全量重新生成
+            find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
+          else
+            echo "⚡ 启用增量跳过模式 (schedule 定时任务或普通手动触发)"
+          fi
+
+          python3 $GITHUB_WORKSPACE/.github/packages-updater/scripts/collect_packages.py \
+            --manifest "$GITHUB_WORKSPACE/.github/packages-updater/packages.yaml" \
             --target "${{matrix.target}}" \
-            --output-dir .
+            --output-dir . \
+            --threads 6 \
+            --lockfile packages.lock.json \
+            $FORCE_FLAG
 
       - name: 修改代码
         run: |
           set -euo pipefail
           cd $GITHUB_WORKSPACE/${{matrix.target}}
-          chmod +x $GITHUB_WORKSPACE/.github/package-feed/*.sh
-          bash $GITHUB_WORKSPACE/.github/package-feed/convert_translation.sh
-          bash $GITHUB_WORKSPACE/.github/package-feed/create_acl_for_luci.sh -a
-          bash $GITHUB_WORKSPACE/.github/package-feed/modify.sh
+          chmod +x $GITHUB_WORKSPACE/.github/packages-updater/*.sh
+          bash $GITHUB_WORKSPACE/.github/packages-updater/convert_translation.sh
+          bash $GITHUB_WORKSPACE/.github/packages-updater/create_acl_for_luci.sh -a
+          bash $GITHUB_WORKSPACE/.github/packages-updater/modify.sh
 
       - name: 生成插件来源摘要
         if: always()
@@ -129,7 +146,7 @@ jobs:
           set -euo pipefail
           python3 -c "
           import yaml, os
-          manifest_path = r'$GITHUB_WORKSPACE/.github/package-feed/packages.yaml'
+          manifest_path = r'$GITHUB_WORKSPACE/.github/packages-updater/packages.yaml'
           target = '${{matrix.target}}'
           summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
 
@@ -156,7 +173,7 @@ jobs:
           cd $GITHUB_WORKSPACE/${{matrix.target}}
 
           # 应用补丁（temp* 前缀的补丁失败仅警告，不中断）
-          PATCH_DIR="$GITHUB_WORKSPACE/.github/package-feed/patches/${{matrix.target}}"
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/packages-updater/patches/${{matrix.target}}"
           if [ ! -d "$PATCH_DIR" ]; then
             echo "ℹ️ 无目标专用补丁目录，跳过: $PATCH_DIR"
           else
@@ -184,7 +201,7 @@ jobs:
 
           # 应用全局补丁（temp* 前缀的补丁失败仅警告，不中断）
           rm -rf v2ray-geodata
-          PATCH_DIR="$GITHUB_WORKSPACE/.github/package-feed/patches"
+          PATCH_DIR="$GITHUB_WORKSPACE/.github/packages-updater/patches"
           while IFS= read -r -d '' f; do
             echo "检查并应用全局补丁: $f"
             patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$f"
@@ -202,47 +219,22 @@ jobs:
           done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name 'temp*.patch' -print0 | sort -z)
 
       - name: 应用覆写层
-        run: |
-          set -euo pipefail
-          cd $GITHUB_WORKSPACE/${{matrix.target}}
-
-          # 覆写层：将 overwrite 目录中的文件按相对路径直接替换或新增到工作树。
-          # 优先级最高，在所有补丁之后应用；目录结构即仓库相对路径。
-          # 目录与 patches 平级：overwrite/global 为全局层，overwrite/<target> 为分支层。
-          apply_overwrite() {
-            local layer_dir="$1"
-            local layer_name="$2"
-            if [ ! -d "$layer_dir" ]; then
-              echo "ℹ️ 无覆写层目录，跳过: $layer_dir"
-              return 0
-            fi
-            local count=0
-            while IFS= read -r -d '' f; do
-              local rel="${f#"$layer_dir"/}"
-              mkdir -p "$(dirname "$rel")"
-              cp -f "$f" "$rel"
-              echo "覆写: $rel ($layer_name)"
-              count=$((count + 1))
-            done < <(find "$layer_dir" -type f -print0 | sort -z)
-            if [ "$count" -gt 0 ]; then
-              echo "- **$layer_name**: $count 个文件" >> $GITHUB_STEP_SUMMARY
-            fi
-          }
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📝 覆写层" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          apply_overwrite "$GITHUB_WORKSPACE/.github/package-feed/overwrite/global" "全局覆写"
-          apply_overwrite "$GITHUB_WORKSPACE/.github/package-feed/overwrite/${{matrix.target}}" "${{matrix.target}} 覆写"
+        uses: ./.github/actions/apply-overwrite
+        with:
+          overwrite-base-dir: ${{ github.workspace }}/.github/packages-updater/overwrite
+          target: ${{ matrix.target }}
+          working-directory: ${{ matrix.target }}
+          commit: "false"
 
       - name: 生成 README (仅 main 分支)
         if: matrix.target == 'main'
         run: |
           set -euo pipefail
-          python3 $GITHUB_WORKSPACE/.github/package-feed/scripts/generate_readme.py \
-            --manifest "$GITHUB_WORKSPACE/.github/package-feed/packages.yaml" \
-            --template "$GITHUB_WORKSPACE/.github/package-feed/readme-template.md" \
-            --output "$GITHUB_WORKSPACE/${{matrix.target}}/README.md"
+          python3 $GITHUB_WORKSPACE/.github/packages-updater/scripts/generate_readme.py \
+            --manifest "$GITHUB_WORKSPACE/.github/packages-updater/packages.yaml" \
+            --template "$GITHUB_WORKSPACE/.github/packages-updater/readme-template.md" \
+            --output "$GITHUB_WORKSPACE/${{matrix.target}}/README.md" \
+            --lockfile "$GITHUB_WORKSPACE/${{matrix.target}}/packages.lock.json"
 
       - name: 提交代码
         env:

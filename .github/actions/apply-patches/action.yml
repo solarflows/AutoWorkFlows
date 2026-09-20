@@ -42,10 +42,21 @@ runs:
             echo "检查补丁: $patch_name"
             if git apply --check --whitespace=nowarn "$patch_file" 2>/dev/null; then
               git apply --whitespace=nowarn "$patch_file"
-              git add .
-              git commit -m "${COMMIT_PREFIX}: ${patch_name}"
-              echo "✅ 成功应用补丁: $patch_name"
-              applied_count=$((applied_count + 1))
+              # 仅暂存已被 Git 跟踪的修改文件，坚决不盲目 git add .，防止误将嵌套仓库作为 gitlink (mode 160000) 提交
+              git add -u
+              # 若补丁创建了新文件，定向暂存补丁明确创建的文件
+              while IFS= read -r new_file; do
+                [ -n "$new_file" ] && git add -- "$new_file"
+              done < <(git apply --summary "$patch_file" 2>/dev/null | awk '/create mode/ {print $4}')
+              # 阻断性防御：若暂存区仍混入任何 160000 gitlink，立即移出暂存区
+              git diff --cached --raw 2>/dev/null | awk '$2 ~ /^160000/ || $1 ~ /^:160000/ {print $6}' | xargs -r git rm --cached -f 2>/dev/null || true
+              if ! git diff --cached --quiet; then
+                git commit -m "${COMMIT_PREFIX}: ${patch_name}"
+                echo "✅ 成功应用补丁: $patch_name"
+                applied_count=$((applied_count + 1))
+              else
+                echo "ℹ️ 补丁已应用且未产生额外变更: $patch_name"
+              fi
             else
               echo "ℹ️ 补丁已应用或无需应用: $patch_name"
             fi

@@ -1,6 +1,6 @@
 ---
 description: "AutoWorkflows 工作流 Agent 的通用修改、安全和验证规则。"
-applyTo: [".github/workflows/**", ".github/patches/**", ".github/overwrite/**", ".github/package-feed/**", ".github/agents/**", ".github/actions/**"]
+applyTo: [".github/workflows/**", ".github/sync-push/**", ".github/packages-updater/**", ".github/agents/**", ".github/actions/**"]
 ---
 
 # AutoWorkflows Workflow Agent Rules

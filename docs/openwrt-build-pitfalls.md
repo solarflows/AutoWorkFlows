@@ -145,7 +145,7 @@ make[4]: *** No targets specified and no makefile found.  Stop.
 
 ### Fix
 
-在 `OpenWRT_Packages_Updater.yml` 的全局补丁目录 `.github/package-feed/patches/` 添加 `fix-shadowsocksr-libev-configure.patch`, 修改包 Makefile, 注册一个 `Hooks/Prepare/Post` hook:
+在 `OpenWRT_Packages_Updater.yml` 的全局补丁目录 `.github/packages-updater/patches/` 添加 `fix-shadowsocksr-libev-configure.patch`, 修改包 Makefile, 注册一个 `Hooks/Prepare/Post` hook:
 
 ```makefile
 define ShadowsocksR/Fixup/Prepare
@@ -543,7 +543,7 @@ ipq60xx / ipq807x 上 smartdns 进程存活、CPU 正常, 但 DoH 上游解析�
 
 - `packages/overwrite/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch` (已随 `solarflows/packages@qualcommax` 生效): `ctx->status < 0` 时不再延迟关闭, 并把 ENOSPC 上报为连接错误。
 - `packages/overwrite/qualcommax/net/smartdns/patches/101-reap-stalled-http2-streams.patch` (commit bebecee): ① 延迟关闭增加 `close_defer_tick` + `HTTP2_STREAM_CLOSE_DEFER_TIMEOUT_MS` (5s), 超时即清 pending 并 `_http2_remove_stream(stream, 1)` 回收槽位; ② ENOSPC 分支置 `errno = ECONNRESET`, 命中 `case ECONNRESET` 走立即重建而非 60s prohibit。
-- mt798x 同补丁走 openwrt-packages 链路: `.github/package-feed/overwrite/mt798x/smartdns/patches/{100,101}` + `patches/mt798x/0009-smartdns-bump-48.4.patch` (该 target 的 smartdns 来自 `package/solarflows/smartdns` core 包, feeds 同名包不生效)。
+- mt798x 同补丁走 openwrt-packages 链路: `.github/packages-updater/overwrite/mt798x/smartdns/patches/{100,101}` + `patches/mt798x/0009-smartdns-bump-48.4.patch` (该 target 的 smartdns 来自 `package/solarflows/smartdns` core 包, feeds 同名包不生效)。
 
 ### Verification
 

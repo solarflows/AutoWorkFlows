@@ -3,10 +3,12 @@
 """
 generate_readme.py
 根据 packages.yaml 清单和模板，生成结构化、带中文描述与来源链接的 README.md。
+支持可选读取 packages.lock.json 展示各插件最新抓取提交（commit SHA 超链接）。
 """
 
 import argparse
 from datetime import datetime
+import json
 import os
 import sys
 import yaml
@@ -17,6 +19,7 @@ def main():
     parser.add_argument("--manifest", required=True, help="Path to packages.yaml")
     parser.add_argument("--template", required=True, help="Path to readme-template.md")
     parser.add_argument("--output", required=True, help="Output README.md path")
+    parser.add_argument("--lockfile", default=None, help="Optional path to packages.lock.json")
     args = parser.parse_args()
 
     if not os.path.exists(args.manifest):
@@ -32,6 +35,22 @@ def main():
 
     packages = data.get("packages", [])
 
+    # 读取 lockfile 中的 commit SHA 映射
+    commit_map = {}
+    if args.lockfile and os.path.exists(args.lockfile):
+        try:
+            with open(args.lockfile, "r", encoding="utf-8") as lf:
+                lock_data = json.load(lf)
+                targets_dict = lock_data.get("targets", {})
+                # 遍历所有 targets 聚合最新的 commit
+                for t, pkgs in targets_dict.items():
+                    for name, meta in pkgs.items():
+                        c = meta.get("commit")
+                        if c and c != "unknown":
+                            commit_map[name] = c
+        except Exception as e:
+            print(f"⚠️ 读取 lockfile 失败: {e}", file=sys.stderr)
+
     # 按名称正序排序
     packages.sort(key=lambda x: x.get("name", "").lower())
 
@@ -42,11 +61,19 @@ def main():
     for pkg in packages:
         name = pkg.get("name", "")
         desc = pkg.get("description", "").strip()
-        # 清理描述中的多余空格或注释前缀
         desc = " ".join(desc.split())
         repo = pkg.get("repo", "")
         repo_display = repo.replace("https://github.com/", "")
-        repo_link = f"[{repo_display}]({repo})" if repo else "-"
+        
+        sha = commit_map.get(name)
+        if repo:
+            if sha and repo.startswith("https://github.com/"):
+                repo_link = f"[{repo_display}]({repo}) ([`{sha[:7]}`]({repo}/commit/{sha}))"
+            else:
+                repo_link = f"[{repo_display}]({repo})"
+        else:
+            repo_link = "-"
+
         targets = pkg.get("targets", [])
         targets_display = ", ".join([f"`{t}`" for t in targets]) if targets else "-"
 

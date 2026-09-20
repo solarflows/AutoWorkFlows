@@ -20,11 +20,12 @@
 
 | 机制 | 目录 | 用途 |
 |:-----|:-----|:-----|
-| **补丁（patches）** | `.github/patches/<repo>/` | 对上游文件的小型行级修改（如 `qualcommax`、`lede`、`packages`、`luci`），按顺序应用 |
-| **覆写层（overwrite）** | `.github/overwrite/<repo>/` | 整文件替换或新增（含 OpenWrt 原生包补丁目录如 `smartdns/patches/*.patch`），在所有补丁之后应用，优先级最高 |
-| **自定义插件源** | `.github/package-feed/` | `OpenWRT_Packages_Updater` 专用声明式清单（`packages.yaml`）、专用补丁、覆盖层与收集引擎 |
+| **上游同步资源** | `.github/sync-push/` | `Sync_Push` 专用的补丁（`patches/{qualcommax,lede,packages,luci}/`）与覆写层（`overwrite/`） |
+| **插件源发布资源** | `.github/packages-updater/` | `OpenWRT_Packages_Updater` 专用声明式清单（`packages.yaml`）、专用补丁、覆写层与收集引擎 |
+| **自研工作流动作** | `.github/actions/` | 复合 Action（`git-auth`、`apply-patches`、`apply-overwrite`） |
+| **工作流自动化** | `.github/workflows/` | GitHub Actions 工作流核心入口 |
 
-- 源码树主工程补丁存放于 `.github/patches/<repo>/`（例如 `qualcommax/` 独立成一级目录）。
+- 源码树主工程补丁存放于 `.github/sync-push/patches/<repo>/`（例如 `qualcommax/` 独立成一级目录）。
 - 覆写层目录结构与目标仓库相对路径一致，CI 直接复制落位。
 - 被覆写的文件不再跟随上游自动更新，需手动维护。
 - `temp*.patch` 为临时补丁：应用失败仅告警跳过；其余补丁失败会中断流程。
