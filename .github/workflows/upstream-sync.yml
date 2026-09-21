@@ -597,175 +597,20 @@ jobs:
           git remote add upstream https://github.com/VIKINGYFY/immortalwrt.git
           git fetch --no-tags upstream main
 
-      - name: 检测上游是否有更新
-        id: check
+      - name: 声明式基线重置
+        id: reset-base
         working-directory: temp_rep
         run: |
           set -euo pipefail
-          # 获取当前分支 HEAD 的 commit SHA
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          # 获取上游 main 分支的最新 commit SHA
-          UPSTREAM_COMMIT=$(git rev-parse upstream/main)
-
-          echo "当前跟踪提交: $CURRENT_COMMIT"
-          echo "上游最新提交: $UPSTREAM_COMMIT"
-          echo "expected_remote_sha=$CURRENT_COMMIT" >> "$GITHUB_OUTPUT"
-
-          if git merge-base --is-ancestor "$UPSTREAM_COMMIT" "$CURRENT_COMMIT"; then
-            echo "🟢 上游最新提交已包含在当前分支，无需变基。"
-            echo "has_update=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "🔵 检测到上游更新，准备同步。"
-            echo "has_update=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 保存未同步快照 tag
-        if: steps.check.outputs.has_update == 'true'
-        id: save-snapshot
-        working-directory: temp_rep
-        env:
-          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          # 仅当触发上游 rebase（has_update=true，准备改写本地历史）时才保存快照；正常无需变基不做多余 tag。
-          # 去重依据是“内容”而非仅“名称”：先查同名 tag，再查远端是否有任意 tag 已指向相同 commit（相同内容），命中则跳过。
-          # 命名 YYMMDD-beforerebase-<SHA> 与其它固定版本发版 CI 的 tag 区分。
           CURRENT_SHA=$(git rev-parse HEAD)
-          SAVED_TAG=""
-          ASKPASS="$RUNNER_TEMP/git-askpass-save.sh"
-          cat > "$ASKPASS" <<'EOF'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *) printf '%s\n' "$ACCESS_TOKEN" ;;
-          esac
-          EOF
-          chmod 700 "$ASKPASS"
-          export GIT_ASKPASS="$ASKPASS"
-          export GIT_TERMINAL_PROMPT=0
-          if [ -n "$ACCESS_TOKEN" ]; then
-            TAG="$(date +'%y%m%d')-beforerebase-${CURRENT_SHA:0:8}"
-            if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "ℹ️ 远端已存在同名 tag $TAG，跳过保存"
-            else
-              # 搜索远端是否有任意 tag 已指向相同 commit（相同内容），有则无需再打
-              SAME_TAG=$(git ls-remote origin "refs/tags/*" 2>/dev/null | awk -v want="$CURRENT_SHA" '$1 == want { tag=$2; sub("^refs/tags/", "", tag); print tag; exit }')
-              if [ -n "$SAME_TAG" ]; then
-                echo "🟢 远端已有指向相同内容的 tag（$SAME_TAG），跳过保存"
-              else
-                git tag "$TAG" "$CURRENT_SHA"
-                if git push origin "refs/tags/$TAG" 2>&1; then
-                  echo "✅ 已保存未同步快照 tag: $TAG"
-                else
-                  echo "::warning::快照 tag $TAG 推送失败（本地已打，可后续手动推送）"
-                fi
-                SAVED_TAG="$TAG"
-              fi
-            fi
-          else
-            echo "::warning::ACCESS_TOKEN 未设置，跳过快照 tag 保存"
-          fi
-          echo "saved_tag=$SAVED_TAG" >> "$GITHUB_OUTPUT"
-          echo "saved_tag=$SAVED_TAG"
+          echo "current_sha=$CURRENT_SHA" >> "$GITHUB_OUTPUT"
+          echo "当前远端提交: $CURRENT_SHA"
+          echo "上游最新提交: $(git rev-parse upstream/main)"
 
-      - name: 尝试变基
-        if: steps.check.outputs.has_update == 'true'
-        id: rebase
-        working-directory: temp_rep
-        run: |
-          set -euo pipefail
-          echo "::group::尝试将 VIKINGYFY-main 变基到上游 main"
-          if git rebase upstream/main; then
-            echo "rebase_conflict=false" >> "$GITHUB_OUTPUT"
-            echo "✅ 变基成功"
-          else
-            echo "rebase_conflict=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::rebase 冲突（大概率上游历史被改写），先保存快照再强同步"
-            git rebase --abort || true
-          fi
-          echo "::endgroup::"
-
-      - name: 强同步并导出被丢弃提交
-        if: steps.rebase.outputs.rebase_conflict == 'true'
-        id: force-sync
-        working-directory: temp_rep
-        run: |
-          set -euo pipefail
-          # 强同步：放弃本地历史，采用上游最新，按序重放本地专属提交；
-          # 内容已被上游等效包含或冲突的自动跳过，并把被丢弃提交导出 .patch 证据，防止 debug 无从找起。
-          BEFORE_SHA=$(git rev-parse HEAD)
-          MERGE_BASE=$(git merge-base upstream/main HEAD)
-          LOCAL_COMMITS=$(git rev-list --reverse --no-merges "$MERGE_BASE"..HEAD)
-          SKIP_DIR="$RUNNER_TEMP/skipped-commits/${BEFORE_SHA:0:8}"
-          mkdir -p "$SKIP_DIR"
-          echo "本地专属提交（将被逐序重放，被跳过的会导出 .patch 证据）:"
-          for c in $LOCAL_COMMITS; do
-            echo "  $(git log -1 --format='%h %s' "$c")"
-          done
-
-          git reset --hard upstream/main
-
-          skipped=""
-          for c in $LOCAL_COMMITS; do
-            subj=$(git log -1 --format=%s "$c")
-            if git cherry-pick -n "$c" 2>/dev/null; then
-              if git diff --cached --quiet; then
-                git reset -q --hard
-                git format-patch -1 --stdout "$c" > "$SKIP_DIR/${c:0:8}-nochange.patch" 2>/dev/null || true
-                skipped="$skipped ${c:0:8}($subj,no-change) "
-                echo "ℹ️ 跳过（内容已被上游包含）: ${c:0:8} $subj"
-              else
-                git commit -q -m "$subj"
-                echo "✅ 重放本地提交: ${c:0:8} $subj"
-              fi
-            else
-              git cherry-pick --abort 2>/dev/null || git reset -q --hard
-              git format-patch -1 --stdout "$c" > "$SKIP_DIR/${c:0:8}-conflict.patch" 2>/dev/null || true
-              skipped="$skipped ${c:0:8}($subj,conflict) "
-              echo "⚠️ 跳过（与上游等效/冲突，快照 tag 可恢复）: ${c:0:8} $subj"
-            fi
-          done
-
-          if git status --porcelain | grep -q .; then
-            echo "::warning::强同步后仍有未提交残留，已强制清理"
-            git reset -q --hard
-          fi
-          if [ -n "$skipped" ]; then
-            echo "::warning::强同步跳过提交:$skipped"
-          fi
-
-          {
-            echo "强同步时间 (UTC): $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-            echo "快照 tag: ${{ steps.save-snapshot.outputs.saved_tag }}"
-            echo "强同步前 HEAD: $BEFORE_SHA"
-            echo "强同步后 HEAD: $(git rev-parse HEAD)"
-            echo "上游 main HEAD: $(git rev-parse upstream/main)"
-            echo ""
-            echo "本地专属提交清单:"
-            for c in $LOCAL_COMMITS; do
-              echo "  $c $(git log -1 --format='%s' "$c")"
-            done
-            echo ""
-            [ -z "$skipped" ] || echo "被跳过提交:$skipped"
-          } > "$SKIP_DIR/summary.txt"
-
-          if find "$SKIP_DIR" -name '*.patch' | grep -q .; then
-            echo "skips_exported=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skips_exported=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "✅ 强同步完成（本地专属提交已重放或跳过，被跳过差异见 artifact）"
-
-      - name: 上传强同步被丢弃提交证据
-        if: steps.force-sync.outputs.skips_exported == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: vikingyfy-skipped-commits-${{ steps.save-snapshot.outputs.saved_tag || 'unsaved' }}
-          path: ${{ runner.temp }}/skipped-commits/
-          if-no-files-found: error
+          # 以 upstream/main 为绝对干净基线，彻底消除历史残留与幽灵提交
+          git checkout -B VIKINGYFY-main upstream/main
 
       - name: 应用 Qualcomm 源码补丁
-        if: steps.check.outputs.has_update == 'true' || steps.check.outputs.has_update == 'false'
         id: apply-source-patch
         uses: ./.github/actions/apply-patches
         with:
@@ -773,8 +618,51 @@ jobs:
           working-directory: temp_rep
           commit-prefix: "qualcommax: apply"
 
+      - name: 检查变更并保存快照 tag
+        id: snapshot
+        working-directory: temp_rep
+        env:
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          CURRENT_REMOTE_SHA="${{ steps.reset-base.outputs.current_sha }}"
+          NEW_SHA=$(git rev-parse HEAD)
+          echo "构建后新提交: $NEW_SHA"
+
+          # 比对构建后与当前远端的内容树 (Tree SHA)
+          REMOTE_TREE=$(git rev-parse "${CURRENT_REMOTE_SHA}^{tree}" 2>/dev/null || true)
+          NEW_TREE=$(git rev-parse "${NEW_SHA}^{tree}" 2>/dev/null || true)
+
+          if [ -n "$REMOTE_TREE" ] && [ "$REMOTE_TREE" = "$NEW_TREE" ]; then
+            echo "🟢 目标分支内容树与当前远端完全一致 (${NEW_TREE:0:7})，跳过推送"
+            echo "need_push=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "🔵 检测到内容变更 (${REMOTE_TREE:0:7} -> ${NEW_TREE:0:7})，准备推送"
+            echo "need_push=true" >> "$GITHUB_OUTPUT"
+
+            # 仅在需要推送变更时，且仅对远端当前旧 SHA 保存快照 tag（按内容去重）
+            if [ -n "$ACCESS_TOKEN" ]; then
+              TAG="$(date +'%y%m%d')-beforesync-${CURRENT_REMOTE_SHA:0:8}"
+              if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+                echo "ℹ️ 远端已存在同名 tag $TAG，跳过保存"
+              else
+                SAME_TAG=$(git ls-remote origin "refs/tags/*" 2>/dev/null | awk -v want="$CURRENT_REMOTE_SHA" '$1 == want { tag=$2; sub("^refs/tags/", "", tag); print tag; exit }')
+                if [ -n "$SAME_TAG" ]; then
+                  echo "🟢 远端已有指向相同内容的 tag（$SAME_TAG），跳过保存"
+                else
+                  git tag "$TAG" "$CURRENT_REMOTE_SHA"
+                  if git push origin "refs/tags/$TAG" 2>&1; then
+                    echo "✅ 已保存旧版本快照 tag: $TAG"
+                  else
+                    echo "::warning::快照 tag $TAG 推送失败（本地已打，可后续手动推送）"
+                  fi
+                fi
+              fi
+            fi
+          fi
+
       - name: 推送更新到目标仓库
-        if: steps.check.outputs.has_update == 'true' || steps.apply-source-patch.outputs.patches-applied == 'true'
+        if: steps.snapshot.outputs.need_push == 'true'
         id: push
         working-directory: temp_rep
         env:
@@ -787,7 +675,7 @@ jobs:
           echo "::group::推送 VIKINGYFY-main 到远程仓库"
           if retry_push origin HEAD:refs/heads/VIKINGYFY-main; then
             echo "push_success=true" >> $GITHUB_OUTPUT
-            echo "✅ 已推送分支 VIKINGYFY-main"
+            echo "✅ 已声明式推送分支 VIKINGYFY-main"
           else
             echo "::error::推送失败（已重试）"
             exit 1
