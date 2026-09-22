@@ -98,11 +98,11 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 两类仓库职责不同：
 
 - `solarflows/packages` 是 OpenWrt/ImmortalWrt 的标准 packages feed。
-- `solarflows/openwrt-packages` 是本项目维护的插件 overlay，仍由 `OpenWRT_Packages_Updater.yml` 更新。
+- `solarflows/openwrt-packages` 是本项目维护的插件 overlay，仍由 `custom-feed.yml` 更新。
 
-Qualcomm 的 `VIKINGYFY-main` 源码由 `Sync_Push.yml` 持久化使用 `solarflows/packages.git;qualcommax`，该分支同时应用 net-snmp 的 `interface.*` trigger 修复。编译 workflow 会按 target 的 `standard_packages_repo` 与 `standard_packages_branch` 显式写入 `feeds.conf.default`，再更新并安装标准 feed；插件 overlay 仍单独放在 `package/solarflows`。
+Qualcomm 的 `VIKINGYFY-main` 源码由 `upstream-sync.yml` 持久化使用 `solarflows/packages.git;qualcommax`，该分支同时应用 net-snmp 的 `interface.*` trigger 修复。编译 workflow 会按 target 的 `standard_packages_repo` 与 `standard_packages_branch` 显式写入 `feeds.conf.default`，再更新并安装标准 feed；插件 overlay 仍单独放在 `package/solarflows`。
 
-mt798x 的 active 源是 `solarflows/immortalwrt-mt798x@test`，其中 `test` 分支由人工维护，不由 `Sync_Push.yml` 自动同步；`solarflows/lede` 仍是 legacy 镜像，不代表 mt798x 当前构建源。
+mt798x 的 active 源是 `solarflows/immortalwrt-mt798x@test`，其中 `test` 分支由人工维护，不由 `upstream-sync.yml` 自动同步；`solarflows/lede` 仍是 legacy 镜像，不代表 mt798x 当前构建源。
 
 ---
 

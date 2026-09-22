@@ -541,13 +541,13 @@ ipq60xx / ipq807x 上 smartdns 进程存活、CPU 正常, 但 DoH 上游解析�
 
 ### Fix
 
-- `packages/overwrite/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch` (已随 `solarflows/packages@qualcommax` 生效): `ctx->status < 0` 时不再延迟关闭, 并把 ENOSPC 上报为连接错误。
-- `packages/overwrite/qualcommax/net/smartdns/patches/101-reap-stalled-http2-streams.patch` (commit bebecee): ① 延迟关闭增加 `close_defer_tick` + `HTTP2_STREAM_CLOSE_DEFER_TIMEOUT_MS` (5s), 超时即清 pending 并 `_http2_remove_stream(stream, 1)` 回收槽位; ② ENOSPC 分支置 `errno = ECONNRESET`, 命中 `case ECONNRESET` 走立即重建而非 60s prohibit。
+- `.github/upstream-sync/overlay/packages/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch` (已随 `solarflows/packages@qualcommax` 生效): `ctx->status < 0` 时不再延迟关闭, 并把 ENOSPC 上报为连接错误。
+- `.github/upstream-sync/overlay/packages/qualcommax/net/smartdns/patches/101-reap-stalled-http2-streams.patch` (commit bebecee): ① 延迟关闭增加 `close_defer_tick` + `HTTP2_STREAM_CLOSE_DEFER_TIMEOUT_MS` (5s), 超时即清 pending 并 `_http2_remove_stream(stream, 1)` 回收槽位; ② ENOSPC 分支置 `errno = ECONNRESET`, 命中 `case ECONNRESET` 走立即重建而非 60s prohibit。
 - mt798x 同补丁走 openwrt-packages 链路: `.github/custom-feed/overlay/mt798x/smartdns/patches/{100,101}` + `patches/mt798x/0009-smartdns-bump-48.4.patch` (该 target 的 smartdns 来自 `package/solarflows/smartdns` core 包, feeds 同名包不生效)。
 
 ### Verification
 
-两补丁对 48.2 (`2b2b31f1`) 与 48.4 源码基线均可用 GNU `patch -p1` 干净应用 (行号 offset 自动适配), 版本升级与补丁互不阻塞; 0009 模拟 CI 顺序 `0007 → 0009 → overwrite` 全通过。真机侧观察 `logread` 是否出现 `http2 stream ... closed without sending pending data, drop it.`。
+两补丁对 48.2 (`2b2b31f1`) 与 48.4 源码基线均可用 GNU `patch -p1` 干净应用 (行号 offset 自动适配), 版本升级与补丁互不阻塞; 0009 模拟 CI 顺序 `0007 → 0009 → overlay` 全通过。真机侧观察 `logread` 是否出现 `http2 stream ... closed without sending pending data, drop it.`。
 
 ### Diagnostic Notes
 

@@ -27,11 +27,11 @@ flowchart TB
     end
 
     subgraph UP["上游同步（被 plan 触发并等待）"]
-        UPD["OpenWRT_Packages_Updater.yml<br/>插件 feed 生成"]
-        SYNC["Sync_Push.yml<br/>源码 fork 同步"]
+        UPD["custom-feed.yml<br/>插件 feed 生成"]
+        SYNC["upstream-sync.yml<br/>源码 fork 同步"]
     end
 
-    subgraph GEO["v2ray-geodataUpdater.yaml（独立）"]
+    subgraph GEO["geodata-updater.yml（独立）"]
         GEODATA["update job<br/>geodata 版本/资产"]
     end
 
@@ -84,8 +84,8 @@ flowchart TB
 ```mermaid
 flowchart TD
     A["1. sparse checkout<br/>仅 targets.json"] --> B["2. Resolve updater targets<br/>按 packages_branch 去重"]
-    B --> C["3. Trigger OpenWRT_Packages_Updater<br/>记录 before_ts → 轮询 run_id"]
-    C --> D["4. Trigger Sync_Push<br/>（trigger != sdk-packages 时）"]
+    B --> C["3. Trigger custom-feed<br/>记录 before_ts → 轮询 run_id"]
+    C --> D["4. Trigger upstream-sync<br/>（trigger != sdk-packages 时）"]
     D --> E["5. Purge stale draft releases"]
     E --> F["6. Wait for upstream workflows<br/>gh run watch --exit-status"]
     F --> G["7. Set build version<br/>V + YYMMDDHHMMSS"]
@@ -259,7 +259,7 @@ flowchart TD
 
 ## 5. 上游同步工作流
 
-### 5.1 `OpenWRT_Packages_Updater.yml`
+### 5.1 `custom-feed.yml`
 
 ```mermaid
 flowchart TD
@@ -271,7 +271,7 @@ flowchart TD
     F --> G["生成插件来源摘要"]
     G --> H["应用 patches/<target>/*.patch"]
     H --> I["应用全局 patch"]
-    I --> J["应用 overwrite 覆写层"]
+    I --> J["应用 overlay 叠加层"]
     J --> K["生成 README（仅 main）"]
     K --> L["git add -A → 检查 .rej → diff --check<br/>→ commit → force-with-lease push"]
 ```
@@ -280,7 +280,7 @@ flowchart TD
 - 推送使用 askpass + `--force-with-lease=<ref>:<expected>`，远端变化时**拒绝覆盖**。
 - `git diff --cached --check` 的 trailing whitespace 只 warning，Git 执行错误才硬失败。
 
-### 5.2 `Sync_Push.yml`
+### 5.2 `upstream-sync.yml`
 
 ```mermaid
 flowchart LR
@@ -300,7 +300,7 @@ flowchart LR
 - `sync_vikingyfy`：`git fetch upstream main` → `merge-base --is-ancestor` 判断更新 → `rebase` → 应用 `qualcommax/0001-use-solarflows-packages-feed.patch` → 推送。
 - `del_runs` 依赖 4 个同步 job（含失败也执行）。
 
-### 5.3 `v2ray-geodataUpdater.yaml`
+### 5.3 `geodata-updater.yml`
 
 ```mermaid
 flowchart TD
@@ -324,7 +324,7 @@ sequenceDiagram
     participant SCH as schedule/dispatch
     participant PLAN as plan
     participant UPD as Packages Updater
-    participant SYNC as Sync_Push
+    participant SYNC as upstream-sync
     participant SIB as run-sdk-ib
     participant PS as persist-state
     participant GH as GitHub Releases / Variable
@@ -370,7 +370,7 @@ sequenceDiagram
 | 低 | `firmware-build-unified.yml` | `PUB_FW`/`PUB_PKGS` 仅用于 summary 文案，实际发布由 executor 内 `if: success()` 控制 | 语义重复，非缺陷 |
 | 低 | `compile-packages.yml` | 无 `matrix_artifacts_keep_versions` 输入，SDK/IB 保留数只在 full 侧生效 | 设计如此（SDK 不发布 artifacts） |
 
-> 已处理（2026-09-18 核对）：原先列出的三个"无 `timeout-minutes`"项已补齐（`OpenWRT_Packages_Updater` 5/15、`Sync_Push` 20/20/15/15/10、`v2ray-geodataUpdater` 30）；`HAS_KERNEL` 冗余变量已移除；`publish_sdk_ib` 已由 unified 显式传 `true`。
+> 已处理（2026-09-18 核对）：原先列出的三个"无 `timeout-minutes`"项已补齐（`custom-feed` 5/15、`upstream-sync` 20/20/15/15/10、`geodata-updater` 30）；`HAS_KERNEL` 冗余变量已移除；`publish_sdk_ib` 已由 unified 显式传 `true`。
 
 ### 7.3 已知的刻意为之处（勿误改）
 
