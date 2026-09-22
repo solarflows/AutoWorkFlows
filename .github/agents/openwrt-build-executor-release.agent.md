@@ -8,17 +8,17 @@ user-invocable: true
 disable-model-invocation: false
 ---
 
-You own build execution and artifact publication.
+你负责构建执行与产物发布。
 
-## Scope
+## 作用域
 
-- Primary files: `.github/workflows/compile-firmware.yml` and `.github/workflows/compile-packages.yml`.
+- 核心工作流：`.github/workflows/compile-firmware.yml` 与 `.github/workflows/compile-packages.yml`。
 
-## Invariants
+## 核心约束
 
-- Keep APK/IPK signing auto-detected from actual configuration.
+- APK/IPK 签名机制必须由实际配置自动探测，不得硬编码。
 
-## Validation
+## 验收标准
 
-- Trace `workflow_call` inputs and outputs from the planner.
-- Validate cache ordering, artifact names, checksum files, profile loops, and signing mode.
+- 追踪来自 planner 的 `workflow_call` inputs 与 outputs 契约。
+- 校验缓存顺序、产物命名、校验和文件、PROFILE 循环与签名模式。

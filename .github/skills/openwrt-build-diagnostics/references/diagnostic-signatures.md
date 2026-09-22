@@ -1,90 +1,90 @@
-# Diagnostic Signatures
+# 诊断特征库
 
-## `time:` Line Cannot Identify Failed Packages
+## `time:` 行不能判定失败包
 
-Evidence:
+证据：
 
-- A failed `compile.txt` ends with `time: package/.../compile#...`
-- A job or summary claims no failed package was found, but the build clearly failed
+- 失败的 `compile.txt` 以 `time: package/.../compile#...` 结尾
+- job 或摘要声称未发现失败包，但构建明显失败
 
-Interpretation: `scripts/time.pl` prints its timing line **regardless of the command's exit status** — it computes the elapsed time, prints `%s#%.2f#%.2f#%.2f\n`, and only then exits with the child's status. A failed build therefore also ends with a `time:` line. The authoritative failed-package source is `logs*/<pkg>/error.txt` (`ERROR: <pkg> failed to build.`). Treat the last-line check as a fallback for interrupted logs only.
+解读：`scripts/time.pl` **无论命令退出状态如何**都会打印计时行——它计算耗时、打印 `%s#%.2f#%.2f#%.2f\n`，然后才以子进程状态退出。失败的构建因此也以 `time:` 行结尾。失败包的权威来源是 `logs*/<pkg>/error.txt`（`ERROR: <pkg> failed to build.`）。末行检查仅作为中断日志的兜底。
 
-## Generic Environment Variable Leakage
+## 通用环境变量泄漏
 
-Evidence:
+证据：
 
 - `continue configure in default builddir "./<matrix-target>"`
 - `--enable-builddir=<matrix-target>`
-- A workflow or process exports a generic `TARGET`, `HOST`, or `BUILD` value
+- 某 workflow 或进程导出了通用的 `TARGET`、`HOST` 或 `BUILD` 值
 
-Interpretation: an inherited environment variable changed Autoconf or another build tool's documented input. Verify the source environment before changing package code.
+解读：被继承的环境变量改变了 Autoconf 或其它构建工具的约定输入。改动包代码前先核实来源环境。
 
-## libffi InstallDev Header Missing
+## libffi InstallDev 头文件缺失
 
-Evidence:
+证据：
 
 - `cp: cannot stat .../<gnu-target>/fficonfig.h`
-- First-pass configure selected a directory named after the firmware matrix target
-- The retry `compile.txt` is very small or immediately reaches InstallDev
+- 首轮 configure 选择了以固件矩阵 target 命名的目录
+- 重试的 `compile.txt` 很小或直接跳到 InstallDev
 
-Interpretation: libffi generated `fficonfig.h` under the wrong build directory. In the verified mt798x case, job-level `TARGET=mt798x` overrode the expected Autoconf target directory.
+解读：libffi 在错误的构建目录下生成了 `fficonfig.h`。已验证的 mt798x 案例中，job 级 `TARGET=mt798x` 覆盖了 Autoconf 预期的 target 目录。
 
-## Stamp-Skipped Retry
+## Stamp 跳过重试
 
-Evidence:
+证据：
 
-- Retry log is much smaller than the matching first-pass log
-- Retry reaches staging or InstallDev without configure and compile output
-- `logs.1` contains the earlier configure or compiler activity
+- 重试日志远小于对应的首轮日志
+- 重试直接到达 staging 或 InstallDev，没有 configure 与编译输出
+- `logs.1` 包含更早的 configure 或编译器活动
 
-Interpretation: the retry reused stamps and does not contain the original cause. Diagnose `logs.1` first.
+解读：重试复用了 stamp，不含原始失败原因。优先诊断 `logs.1`。
 
-## ccache Environment Mismatch
+## ccache 环境不匹配
 
-Evidence:
+证据：
 
-- Wrapper variables remain exported while cache restore or ccache setup is disabled
-- Compiler commands are unexpectedly double-wrapped
-- An empty or incompatible cache coincides with wrapper configuration changes
+- 缓存恢复或 ccache 设置被禁用时，包装器变量仍在导出
+- 编译器命令意外地被双重包装
+- 空缓存或不兼容缓存与包装器配置变更同时出现
 
-Interpretation: inspect seed-level `CONFIG_CCACHE`, workflow wrapper export, restore behavior, and strategy selection independently. Do not infer causation from low cache hit rate alone.
+解读：独立检查 seed 级 `CONFIG_CCACHE`、workflow 包装器导出、恢复行为与策略选择。不要仅凭低命中率推断因果。
 
-## GitHub `needs` Skip
+## GitHub `needs` 跳过
 
-Evidence:
+证据：
 
-- A downstream job is skipped without running its own condition
-- Its `needs` includes a job that was skipped
+- 下游 job 未评估自身条件即被跳过
+- 其 `needs` 包含一个被跳过的 job
 
-Interpretation: GitHub implicitly skips jobs that depend on skipped jobs. Use `always()` and explicit result checks only when that dependency result is required.
+解读：GitHub 会隐式跳过依赖了被跳过 job 的 job。仅当确实需要依赖结果时才用 `always()` 加显式结果判断。
 
-## Non-Executable `src/configure` Silently Skips Configure
+## 不可执行的 `src/configure` 被静默跳过
 
-Evidence:
+证据：
 
-- `make[4]: *** No targets specified and no makefile found. Stop.` in the compile phase, the only package with this signature in the whole build
-- First-pass `compile.txt` shows patch + autoreconf, then jumps straight to `make[4]` with no `checking for...` configure output
-- The package Makefile has no `PKG_SOURCE_URL`; sources come from the repository `src/` directory (`unpack.mk` treats an empty `PKG_SOURCE` as `PKG_UNPACK=true`; `package-defaults.mk` copies `src/.` into the build dir)
-- `src/configure` is mode 100644 in the feed git tree (verify via the GitHub trees API)
+- 编译阶段出现 `make[4]: *** No targets specified and no makefile found. Stop.`，且是整个构建中唯一出现该特征的包
+- 首轮 `compile.txt` 显示 patch + autoreconf，随后直接跳到 `make[4]`，没有任何 `checking for...` 的 configure 输出
+- 包 Makefile 没有 `PKG_SOURCE_URL`；源码来自仓库内的 `src/` 目录（`unpack.mk` 把空 `PKG_SOURCE` 视为 `PKG_UNPACK=true`；`package-defaults.mk` 把 `src/.` 拷入构建目录）
+- `src/configure` 在 feed git 树中的模式是 100644（可通过 GitHub trees API 验证）
 
-Interpretation: `Build/Configure/Default` guards on `if [ -x ./configure ]`; a non-executable configure is silently skipped (no output, exit 0, `.configured` stamp still created), so the compile phase finds no Makefile. With `PKG_FIXUP:=autoreconf`, the root `autoconf` step can also be skipped when a quilt patch re-touches the configure file (`|| true` swallows the error), so the stale configure is never regenerated. `chmod +x` alone is insufficient if the configure content is stale (e.g. pcre v1 detection while the dependency is `+libpcre2`): it then fails with a visible configure error. Fix: register a `Hooks/Prepare/Post` in the package Makefile that removes `$(PKG_BUILD_DIR)/configure` after quilt applies all patches, forcing autoreconf to regenerate from `configure.ac` (correct content, executable bit set by autoconf). Do not delete `src/configure` in the feed directly: the 0001 quilt patch patches that file during the build, so removal breaks patch application. Verified case: run 31559354153 (mt798x), package `shadowsocksr-libev` from `Openwrt-Passwall/openwrt-passwall-packages`.
+解读：`Build/Configure/Default` 以 `if [ -x ./configure ]` 为守卫；不可执行的 configure 被静默跳过（无输出、exit 0、`.configured` stamp 照常创建），于是编译阶段找不到 Makefile。带 `PKG_FIXUP:=autoreconf` 时，若 quilt 补丁重新触及 configure 文件，根目录的 `autoconf` 步骤也会被跳过（`|| true` 吞掉错误），陈旧的 configure 永远不会重新生成。仅 `chmod +x` 不够——若 configure 内容已陈旧（如依赖是 `+libpcre2` 却在检测 pcre v1），它会以可见的 configure 错误失败。修复：在包 Makefile 注册 `Hooks/Prepare/Post`，在 quilt 应用完全部补丁后删除 `$(PKG_BUILD_DIR)/configure`，强制 autoreconf 从 `configure.ac` 重新生成（内容正确且 autoconf 会设置可执行位）。不要直接在 feed 里删除 `src/configure`：构建时 0001 quilt 补丁会修改该文件，删除会破坏补丁应用。已验证案例：run 31559354153（mt798x），包 `shadowsocksr-libev` 来自 `Openwrt-Passwall/openwrt-passwall-packages`。
 
-## Toolchain Rebuild Despite Cache Hit
+## 缓存命中仍重编工具链
 
-Evidence:
+证据：
 
-- `Restore toolchain cache` logs `Cache restored from key: immwrt-v2-toolchain-...` (a real hit, not a prefix miss)
-- The `Prepare toolchain & ccache` step still shows `make[2] -C tools/... compile` and `make[2] -C toolchain/... compile` lines and takes tens of minutes
-- Warm-cache and cold-run `Prepare` durations are comparable (verified run 34805493661: ipq807x 40m 28s warm vs 46m 37s cold; GCC 14 targets are worst)
+- `Restore toolchain cache` 日志显示 `Cache restored from key: immwrt-v2-toolchain-...`（真实命中，不是前缀未命中）
+- `Prepare toolchain & ccache` 步骤仍出现 `make[2] -C tools/... compile` 与 `make[2] -C toolchain/... compile` 行，且耗时几十分钟
+- warm-cache 与冷运行的 `Prepare` 耗时接近（已验证 run 34805493661：ipq807x warm 40m28s vs cold 46m37s；GCC 14 目标最严重）
 
-Interpretation: a restored toolchain cache contains only `staging_dir/host*` + `staging_dir/tool*`, not `build_dir/`, where each host tool's `.built` marker lives (`HOST_STAMP_BUILT` in `include/host-build.mk`). Running a subdirectory goal (`make tools/compile toolchain/compile`) bypasses the top-level `$(tools/stamp-compile)` / `$(toolchain/stamp-compile)` gate, so make checks every tool's `.built` dependency against the empty `build_dir` and rebuilds the whole toolchain. Only the default `make` goal (`world` → `prepare`) consults the stamps via `timestamp.pl` and skips the whole subtree in seconds. Fix direction: never call subdirectory goals on warm cache; rely on top-level stamps; build only `tools/ccache/compile` when `staging_dir/host/bin/ccache` is genuinely missing.
+解读：恢复的工具链缓存只含 `staging_dir/host*` + `staging_dir/tool*`，不含 `build_dir/`——各 host 工具的 `.built` 标记在 `build_dir/` 里（`include/host-build.mk` 的 `HOST_STAMP_BUILT`）。执行子目录目标（`make tools/compile toolchain/compile`）会绕过顶层 `$(tools/stamp-compile)` / `$(toolchain/stamp-compile)` 守门，make 逐工具检查空 `build_dir` 中缺失的 `.built` 依赖并重编整个工具链。只有默认 `make` 目标（`world` → `prepare`）通过 `timestamp.pl` 查询 stamp 并在数秒内跳过整棵子树。修复方向：缓存命中时绝不调用子目录目标；依赖顶层 stamp；仅当 `staging_dir/host/bin/ccache` 确实缺失时才构建 `tools/ccache/compile`。
 
-## Recursive `dl` Cleanup Corrupts Go/Rust Module Caches
+## 递归 `dl` 清理破坏 Go/Rust 模块缓存
 
-Evidence:
+证据：
 
-- Go packages fail with `pattern <file>.binpb: no matching files found` inside `dl/go-mod-cache/<module>@<version>/` (verified: protobuf `editions_defaults.binpb`, run 34940720655)
-- Rust fails with `failed to calculate checksum of: .../vendor/<crate>/Cargo.toml.orig` / `No such file or directory` (verified: `cc-1.2.28`)
-- Failures cluster on Go/Rust-heavy packages (`sing-box`, `hysteria`, `v2ray-plugin`, `xray-core`, `geoview`, `rust [host]`) while C/C++ packages in the same run succeed
+- Go 包在 `dl/go-mod-cache/<module>@<version>/` 内报 `pattern <file>.binpb: no matching files found`（已验证：protobuf `editions_defaults.binpb`，run 34940720655）
+- Rust 报 `failed to calculate checksum of: .../vendor/<crate>/Cargo.toml.orig` / `No such file or directory`（已验证：`cc-1.2.28`）
+- 失败集中在 Go/Rust 密集型包（`sing-box`、`hysteria`、`v2ray-plugin`、`xray-core`、`geoview`、`rust [host]`），同 run 的 C/C++ 包成功
 
-Interpretation: a residual download cleanup ran `find dl -size -1024c` without `-maxdepth`, recursing into `dl/go-mod-cache` and `dl/cargo` (shared module caches that contain many legitimate sub-1KB files: Go `//go:embed` assets, cargo checksum companions). Each loop iteration re-deletes, so one retry poisons every later Go/Rust package. Scope such cleanups to `find dl -maxdepth 1 -type f -size -1024c`.
+解读：残损下载清理执行了不带 `-maxdepth` 的 `find dl -size -1024c`，递归进入 `dl/go-mod-cache` 与 `dl/cargo`（共享模块缓存，含大量合法的小于 1KB 文件：Go `//go:embed` 资源、cargo checksum 伴随文件）。每次循环迭代都重新删除，一次重试就毒害后续所有 Go/Rust 包。此类清理必须限定为 `find dl -maxdepth 1 -type f -size -1024c`。

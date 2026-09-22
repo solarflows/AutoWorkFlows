@@ -3,20 +3,20 @@ description: "AutoWorkflows 工作流 Agent 的通用修改、安全和验证规
 applyTo: [".github/workflows/**", ".github/upstream-sync/**", ".github/custom-feed/**", ".github/agents/**", ".github/actions/**"]
 ---
 
-# AutoWorkflows Workflow Agent Rules
+# AutoWorkflows 工作流 Agent 通用规则
 
-- Read `AGENTS.md` and the applicable file-specific instructions before editing.
-- Keep edits scoped to the requested workflow, script, patch, or documentation.
-- Do not commit, push, rebase, tag, trigger remote workflows, modify Releases, or delete remote data.
-- Never read, print, copy, or expose secrets such as `ACCESS_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `APK_BUILD_KEY`, or `USIGN_KEY`.
-- Never export `TARGET`, `HOST`, or `BUILD` into OpenWrt-related processes.
-- Treat `.github/archive/workflows/` as historical reference only.
-- Preserve meaningful failures. Do not hide errors with broad `|| true`, discarded stderr, or unconditional success fallbacks.
-- After edits, validate the narrowest relevant surface first:
-  - Parse workflow YAML.
-  - Run `bash -n` on changed multiline `run:` blocks.
-  - Run `git apply --check` for changed patches when a source fixture is available.
-  - Verify generated names, checksums, paths, and workflow input/output contracts when applicable.
-- Use `.diagnostics/` for temporary downloaded or extracted evidence on Windows.
-- For real OpenWrt build logs, use the `openwrt-build-diagnostics` skill instead of duplicating its procedure.
-- Report blocking findings first, ordered by severity, followed by assumptions, validation results, residual risks, and a short change summary.
+- 编辑前先读 `AGENTS.md` 与适用的 file-specific instructions。
+- 改动限定在被请求的 workflow、脚本、补丁或文档范围内。
+- 不执行 commit、push、rebase、tag、触发远端 workflow、修改 Release 或删除远端数据。
+- 绝不读取、打印、复制或暴露 `ACCESS_TOKEN`、`GH_TOKEN`、`GITHUB_TOKEN`、`APK_BUILD_KEY`、`USIGN_KEY` 等 secret。
+- 绝不向 OpenWrt 相关进程导出 `TARGET`、`HOST`、`BUILD`（详见 [project-constraints.instructions.md](project-constraints.instructions.md) § 环境变量禁令）。
+- `.github/archive/workflows/` 仅作历史参考。
+- 保留有意义的失败。不得用宽泛的 `|| true`、丢弃 stderr 或无条件成功兜底来掩盖错误。
+- 编辑后先验证最小相关面：
+  - 解析 workflow YAML。
+  - 对改动的多行 `run:` 块执行 `bash -n`。
+  - 有源码 fixture 时对改动的补丁执行 `git apply --check`。
+  - 适用时校验生成的名称、校验和、路径与 workflow 输入/输出契约。
+- Windows 上临时下载或解压的证据放入 `.diagnostics/`。
+- 真实 OpenWrt 构建日志使用 `openwrt-build-diagnostics` skill，不要重复其流程。
+- 报告时先列阻断性发现（按严重度排序），再列假设、验证结果、残余风险与简短改动摘要。

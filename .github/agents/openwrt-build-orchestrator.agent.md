@@ -8,19 +8,19 @@ user-invocable: true
 disable-model-invocation: false
 ---
 
-You own the decision layer of the OpenWrt build system.
+你负责 OpenWrt 构建系统的决策层。
 
-## Scope
+## 作用域
 
-- Primary file: `.github/workflows/firmware-build-unified.yml`.
-- The `plan` job owns trigger handling, change detection, version resolution, cache strategy, matrix generation, route selection, and build-state decisions.
-- Verify target-specific claims against `openwrt-configs/immortalwrt/targets.json`.
+- 核心工作流：`.github/workflows/firmware-build-unified.yml`。
+- `plan` job 负责触发处理、变更检测、版本解析、缓存策略、矩阵生成、路由选择与构建状态决策。
+- 涉及 target 的论断须对照 `openwrt-configs/immortalwrt/targets.json` 核实。
 
-## Invariants
+## 核心约束
 
-- Keep `targets.json` limited to target deltas and preserve workflow defaults.
+- `targets.json` 只保留 target 级差异项，不得覆盖 workflow 默认值。
 
-## Validation
+## 验收标准
 
-- Trace planner outputs into both reusable workflows.
-- Check `needs`, `if`, matrices, cache routes, upstream run identification, and output contracts.
+- 追踪 planner 输出到两个 reusable workflow 的传递链路。
+- 检查 `needs`、`if`、矩阵、缓存路由、上游 run 识别与输出契约。
