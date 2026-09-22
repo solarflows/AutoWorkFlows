@@ -199,14 +199,17 @@ jobs:
                 continue
               fi
 
-              # 2. 正向应用（未打过补丁或包已拉取新版本）
+              # 2. 正向应用（未打过补丁或包已拉取新版本）；失败时立即清理
+              #    patch 产生的 .rej/.orig（reversed hunk 与冲突均会写 .rej）
               if patch -d './' -p1 -E --forward --batch --no-backup-if-mismatch < "$f" >/dev/null 2>&1; then
                 any_applied=1
               # 3. 反向检测（该文件在增量模式下被跳过，已处于打过补丁状态）
               elif patch -R -d './' -p1 -E --batch --no-backup-if-mismatch --dry-run < "$f" >/dev/null 2>&1; then
+                find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
                 any_skipped=1
               # 4. 正向与反向均失败，判定为真实冲突
               else
+                find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
                 any_conflict=1
               fi
             done
@@ -276,8 +279,10 @@ jobs:
               if patch -d './' -p1 -E --forward --batch --no-backup-if-mismatch < "$f" >/dev/null 2>&1; then
                 any_applied=1
               elif patch -R -d './' -p1 -E --batch --no-backup-if-mismatch --dry-run < "$f" >/dev/null 2>&1; then
+                find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
                 any_skipped=1
               else
+                find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
                 any_conflict=1
               fi
             done
