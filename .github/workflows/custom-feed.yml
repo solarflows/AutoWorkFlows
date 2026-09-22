@@ -178,37 +178,57 @@ jobs:
             local patch_name
             patch_name=$(basename "$patch_file")
 
-            # 1. 检测目标软件包目录是否存在于当前 target 工作区
-            local target_pkg
-            target_pkg=$(awk '/^(---|\+\+\+) [ab]\// {split($2, a, "/"); print a[2]; exit}' "$patch_file")
-            if [ -n "$target_pkg" ] && [ ! -d "$target_pkg" ]; then
-              echo "ℹ️ 目标软件包 [$target_pkg] 不存在于当前分支，跳过补丁: $patch_name"
-              return 0
+            # 多文件补丁按 diff --git 头拆分为单文件补丁逐个应用：
+            # 跨仓库多文件补丁在增量模式下可能部分应用（部分包重拉、部分跳过），
+            # 整体双向探测无法判定，拆分后单文件内不会部分应用，双向探测恢复适用。
+            local split_dir="$PWD/.split_$$"
+            rm -rf "$split_dir" 2>/dev/null || true
+            mkdir -p "$split_dir"
+            awk '/^diff --git /{n++; file=sprintf("%s/%03d.patch", d, n)} n{print > file}' d="$split_dir" "$patch_file" 2>/dev/null
+
+            local any_applied=0 any_skipped=0 any_conflict=0
+            local f
+            for f in "$split_dir"/*.patch; do
+              [ -e "$f" ] || continue
+
+              # 1. 检测目标软件包目录是否存在于当前 target 工作区
+              local target_pkg
+              target_pkg=$(awk '/^(---|\+\+\+) [ab]\// {split($2, a, "/"); print a[2]; exit}' "$f")
+              if [ -n "$target_pkg" ] && [ ! -d "$target_pkg" ]; then
+                any_skipped=1
+                continue
+              fi
+
+              # 2. 正向应用（未打过补丁或包已拉取新版本）
+              if patch -d './' -p1 -E --forward --batch --no-backup-if-mismatch < "$f" >/dev/null 2>&1; then
+                any_applied=1
+              # 3. 反向检测（该文件在增量模式下被跳过，已处于打过补丁状态）
+              elif patch -R -d './' -p1 -E --batch --no-backup-if-mismatch --dry-run < "$f" >/dev/null 2>&1; then
+                any_skipped=1
+              # 4. 正向与反向均失败，判定为真实冲突
+              else
+                any_conflict=1
+              fi
+            done
+            rm -rf "$split_dir" 2>/dev/null || true
+
+            if [ "$any_conflict" = "1" ]; then
+              if [ "$is_temp" = "true" ]; then
+                find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
+                echo "::warning::临时补丁冲突，跳过且不提交: $patch_name"
+                return 0
+              else
+                echo "::error::补丁冲突或目标文件校验失败: $patch_name"
+                return 1
+              fi
             fi
 
-            # 2. 跟随增量策略：正向应用检测（未打过补丁或包已拉取新版本）
-            if patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$patch_file" >/dev/null 2>&1; then
-              patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$patch_file"
+            if [ "$any_applied" = "1" ]; then
               echo "✅ 成功应用补丁: $patch_name"
-              return 0
-            fi
-
-            # 3. 跟随增量策略：反向检测（包在增量模式下被跳过，已处于打过补丁状态）
-            if patch -R -d './' -p1 -E --dry-run --no-backup-if-mismatch < "$patch_file" >/dev/null 2>&1; then
-              echo "⚡ [增量跳过] 补丁已处于应用状态: $patch_name"
-              return 0
-            fi
-
-            # 4. 正向与反向均失败，判定为真实冲突
-            if [ "$is_temp" = "true" ]; then
-              find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
-              echo "::warning::临时补丁检查失败，跳过且不提交: $patch_name"
-              return 0
             else
-              echo "::error::补丁冲突或目标文件校验失败: $patch_name"
-              patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$patch_file" || true
-              return 1
+              echo "⚡ [增量跳过] 补丁已处于应用状态: $patch_name"
             fi
+            return 0
           }
 
           # 应用目标专属补丁
@@ -235,33 +255,51 @@ jobs:
             local patch_name
             patch_name=$(basename "$patch_file")
 
-            local target_pkg
-            target_pkg=$(awk '/^(---|\+\+\+) [ab]\// {split($2, a, "/"); print a[2]; exit}' "$patch_file")
-            if [ -n "$target_pkg" ] && [ ! -d "$target_pkg" ]; then
-              echo "ℹ️ 目标软件包 [$target_pkg] 不存在于当前分支，跳过补丁: $patch_name"
-              return 0
+            # 多文件补丁按 diff --git 头拆分为单文件补丁逐个应用（同目标专属补丁逻辑）
+            local split_dir="$PWD/.split_$$"
+            rm -rf "$split_dir" 2>/dev/null || true
+            mkdir -p "$split_dir"
+            awk '/^diff --git /{n++; file=sprintf("%s/%03d.patch", d, n)} n{print > file}' d="$split_dir" "$patch_file" 2>/dev/null
+
+            local any_applied=0 any_skipped=0 any_conflict=0
+            local f
+            for f in "$split_dir"/*.patch; do
+              [ -e "$f" ] || continue
+
+              local target_pkg
+              target_pkg=$(awk '/^(---|\+\+\+) [ab]\// {split($2, a, "/"); print a[2]; exit}' "$f")
+              if [ -n "$target_pkg" ] && [ ! -d "$target_pkg" ]; then
+                any_skipped=1
+                continue
+              fi
+
+              if patch -d './' -p1 -E --forward --batch --no-backup-if-mismatch < "$f" >/dev/null 2>&1; then
+                any_applied=1
+              elif patch -R -d './' -p1 -E --batch --no-backup-if-mismatch --dry-run < "$f" >/dev/null 2>&1; then
+                any_skipped=1
+              else
+                any_conflict=1
+              fi
+            done
+            rm -rf "$split_dir" 2>/dev/null || true
+
+            if [ "$any_conflict" = "1" ]; then
+              if [ "$is_temp" = "true" ]; then
+                find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
+                echo "::warning::全局临时补丁冲突，跳过且不提交: $patch_name"
+                return 0
+              else
+                echo "::error::全局补丁冲突或目标文件校验失败: $patch_name"
+                return 1
+              fi
             fi
 
-            if patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$patch_file" >/dev/null 2>&1; then
-              patch -d './' -p1 -E --forward --no-backup-if-mismatch < "$patch_file"
+            if [ "$any_applied" = "1" ]; then
               echo "✅ 成功应用全局补丁: $patch_name"
-              return 0
-            fi
-
-            if patch -R -d './' -p1 -E --dry-run --no-backup-if-mismatch < "$patch_file" >/dev/null 2>&1; then
-              echo "⚡ [增量跳过] 全局补丁已处于应用状态: $patch_name"
-              return 0
-            fi
-
-            if [ "$is_temp" = "true" ]; then
-              find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
-              echo "::warning::全局临时补丁检查失败，跳过且不提交: $patch_name"
-              return 0
             else
-              echo "::error::全局补丁冲突或目标文件校验失败: $patch_name"
-              patch -d './' -p1 -E --forward --dry-run --no-backup-if-mismatch < "$patch_file" || true
-              return 1
+              echo "⚡ [增量跳过] 全局补丁已处于应用状态: $patch_name"
             fi
+            return 0
           }
 
           # 应用全局补丁

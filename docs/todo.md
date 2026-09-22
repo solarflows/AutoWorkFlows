@@ -55,14 +55,15 @@
 
 | ID | 项目 | 状态 | 证据 | 备注 |
 |---|---|---|---|---|
-| U1 | `Sync_Push` 定向 fetch + `--force-with-lease` + askpass | ✅ | `Sync_Push.yml` | |
-| U2 | `OpenWRT_Packages_Updater` 提交前 `diff --cached --check` | ✅ | `OpenWRT_Packages_Updater.yml` | trailing whitespace 仅 warning |
+| U1 | `upstream-sync` 定向 fetch + `--force-with-lease` + askpass | ✅ | `upstream-sync.yml` | |
+| U2 | `custom-feed` 提交前 `diff --cached --check` | ✅ | `custom-feed.yml` | trailing whitespace 仅 warning |
 | U3 | `checkout_partial_code` 缺失路径硬失败 | 🚫 | `openwrt-packages/core` | 刻意为：硬失败才能让上游删包立刻暴露，不要改成告警 |
-| U4 | geodata 固定 geoview 版本 + SHA256 校验 | ✅ | `v2ray-geodataUpdater.yaml` | `latest` 不可复现 |
-| U5 | smartdns H2 补丁（qualcommax）+ 101 流槽位回收 | 🟨 | `packages/overwrite/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch`（已同步，feed blob `79b8a106` 与本地逐字节一致）、新增 `101-reap-stalled-http2-streams.patch`（本地 GNU patch 在 48.4 源树 100→101 依次应用通过） | 101 修两处：① `http2_stream_close` 延迟关闭加 5s 时限（发送窗口永不恢复时回收 `active_local_streams` 槽位）；② 饱和连接以 `ECONNRESET` 返回，走 `_dns_client_send_one_packet` 的立即重建分支（裸 `ENOSPC` 只会 `prohibit=1` 屏蔽上游 60s）。上游 master 未修（开放 PR #2458/#2422 均未合），待真实构建验证 |
-| U6 | mt798x smartdns bump 48.4 + 同补丁 | 🟨 | `openwrt-packages/patches/mt798x/0009-smartdns-bump-48.4.patch`（git→tarball 48.4，`PKG_HASH=b07abba9…`，与 qualcommax 同源同版本）、`openwrt-packages/overwrite/mt798x/smartdns/patches/{100,101}`（与 qualcommax 版逐字节一致）；已失效的 `temp-fix-smartdns-hash.patch` 移入 `patches_remove` | mt798x 的 smartdns 来自 `package/solarflows/smartdns`（pymumu 源，core 包不被 feeds 覆盖），此前停在 48.2 且无补丁——48.3 才引入流上限强制（`6f9da63`）故旧版症状隐蔽。**版本升级为手动控制**：唯一控制点 = 编辑 `0009` 的版本/哈希字段（mt798x 分支每轮被脚本全量重生成，直接改分支持久不了）；已验证 100/101 对 48.2 与 48.4 基线均可应用（GNU patch 行号偏移自动适配），故升级版本不阻塞补丁；pymumu Makefile 的 `Build/Prepare` 调用 `Default`，`smartdns/patches/` 会被构建系统自动应用。待真实构建验证 |
+| U4 | geodata 固定 geoview 版本 + SHA256 校验 | ✅ | `geodata-updater.yml` | `latest` 不可复现 |
+| U5 | smartdns H2 补丁（qualcommax）+ 101 流槽位回收 | 🟨 | `upstream-sync/overlay/packages/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch`（已同步，feed blob `79b8a106` 与本地逐字节一致）、新增 `101-reap-stalled-http2-streams.patch`（本地 GNU patch 在 48.4 源树 100→101 依次应用通过） | 101 修两处：① `http2_stream_close` 延迟关闭加 5s 时限（发送窗口永不恢复时回收 `active_local_streams` 槽位）；② 饱和连接以 `ECONNRESET` 返回，走 `_dns_client_send_one_packet` 的立即重建分支（裸 `ENOSPC` 只会 `prohibit=1` 屏蔽上游 60s）。上游 master 未修（开放 PR #2458/#2422 均未合），待真实构建验证 |
+| U6 | mt798x smartdns bump 48.4 + 同补丁 | 🟨 | `custom-feed/patches/mt798x/0009-smartdns-bump-48.4.patch`（git→tarball 48.4，`PKG_HASH=b07abba9…`，与 qualcommax 同源同版本）、`custom-feed/overlay/mt798x/smartdns/patches/{100,101}`（与 qualcommax 版逐字节一致）；已失效的 `temp-fix-smartdns-hash.patch` 移入 `patches-remove` | mt798x 的 smartdns 来自 `package/solarflows/smartdns`（pymumu 源，core 包不被 feeds 覆盖），此前停在 48.2 且无补丁——48.3 才引入流上限强制（`6f9da63`）故旧版症状隐蔽。**版本升级为手动控制**：唯一控制点 = 编辑 `0009` 的版本/哈希字段（mt798x 分支每轮被脚本全量重生成，直接改分支持久不了）；已验证 100/101 对 48.2 与 48.4 基线均可应用（GNU patch 行号偏移自动适配），故升级版本不阻塞补丁；pymumu Makefile 的 `Build/Prepare` 调用 `Default`，`smartdns/patches/` 会被构建系统自动应用。待真实构建验证 |
 | U7 | `upstream-sync` VIKINGYFY 声明式同步与快照安全推送（方向 1） | 🟨 | `upstream-sync.yml` `sync_vikingyfy`：以 `upstream/main` 声明式基线重置 + 纯补丁应用 + 内容树比对跳过空推送 + 快照 tag 保护 + `--force-with-lease` | 彻底废除旧的 `LOCAL_COMMITS` 累积 cherry-pick 与变基循环，避免已剔除补丁死灰复燃与上游改写时的变基地狱；与 `sync_lede`/`sync_luci`/`sync_packages` 对齐为统一的声明式架构 |
 | U8 | `custom-feed` 增量跳过模式下补丁幂等与包存在性检查 | ✅ | commit `27ba75d1`, run `35557363052`, run `35557361719` | 修复前增量跳过保留已打补丁文件致 patch --forward 报 Reversed (or previously applied) 退出 1；增加正向/反向 dry-run 双向探测与包目录存在性检查 |
+| U10 | `custom-feed` 跨仓库多文件补丁部分应用状态修复 | 🟨 | 本地 GNU patch 2.7.6 实测 6/6 用例通过（含真实上游内容与故障场景模拟）；待 push 触发远端验证 | 修复前 `0006-filebrowser.patch` 跨 `immortalwrt/packages` 与 `immortalwrt/luci` 两仓库，增量模式下前者重拉（未打补丁）后者跳过（已打补丁），整体双向探测双失败误判真实冲突，连续 3 次 run 失败（`35633843900`/`35681463052`/`35752106631`）。修复：① `apply_patch_file` 用 awk 按 `diff --git` 头拆分为单文件补丁逐个走双向探测（单文件内不会部分应用）；② `0006` 拆分为 `0006-filebrowser` + `0007-luci-app-filebrowser` 各对应一个包。注意：GNU patch `--forward` 对 reversed hunk 也写 `.rej` 且中止后续文件，故 `.rej` 检测不可行（本地实测推翻） |
 | U9 | Fork 分支自动化补丁指纹追踪与 Revert 机制（方向 2 储备） | ❓ | 见待决 5 | 针对需严格保留下游线性历史的分支，通过 CI 追踪补丁清单并自动生成 revert 提交。目前 VIKINGYFY 选用方向 1（声明式），本方案作为储备设计 |
 
 ## E. 文档体系
@@ -85,7 +86,7 @@
 1. **裁 `sdk-hostpkg` 快照里的 `dl/rustc` / `dl/cargo` / `tmp/go-build`** — 单代 3.10GB，是稳态 8.51GB 的大头。选项：A 只裁 `dl/rustc`（只在 rust 重建时被读，可重新下载）；B 先看 C6 实测数据再定；C 不动。注意：改 path 列表会改 cache version，三处声明必须同步（`compile-packages.yml` restore + save、`compile-firmware.yml` save）。
 2. **10GB 配额逼近** — 稳态 8.51GB/10GB，余量约 1.4GB。选项：A 提高仓库上限（~$2.8/50GB/月）；B 减量（联合待决 1）；C 维持现状靠平台 LRU 兜底。
 3. **是否用 hooks 做确定性拦截** — 台账目前靠 `AGENTS.md` 指令，非强制。选项：A 不做（倾向，指令已够）；B 加 `SessionStart` 提醒；C `PreToolUse` 拦截 workflow 编辑（易误报）。
-4. **SONiC fullcone 对 LuCI feed 的硬耦合** — `include/toplevel.mk` 的 `prepare-tmpinfo` 会调用 `apply-luci-feed.sh`，向 `feeds/luci` 的两个文件打补丁（`luci-base` 的 `rpcd/ucode/luci` 删一行、`luci-app-firewall` 的 `zones.js` 删一段）；补丁已应用则跳过，**上下文不匹配则 `exit 1` 直接中断构建**。而我们的 luci feed 是上游滚动的 `immortalwrt/luci`（`feeds.conf.default`，未经我们固化）。选项：A 接受风险，失败时按日志手修（当前）；B 在我们的 `Sync_Push` 里把 luci feed 固定到已验证的 commit（改 `feeds.conf.default` 的 luci 行）；C 向 fork 提上游反馈要求降耦合。
+4. **SONiC fullcone 对 LuCI feed 的硬耦合** — `include/toplevel.mk` 的 `prepare-tmpinfo` 会调用 `apply-luci-feed.sh`，向 `feeds/luci` 的两个文件打补丁（`luci-base` 的 `rpcd/ucode/luci` 删一行、`luci-app-firewall` 的 `zones.js` 删一段）；补丁已应用则跳过，**上下文不匹配则 `exit 1` 直接中断构建**。而我们的 luci feed 是上游滚动的 `immortalwrt/luci`（`feeds.conf.default`，未经我们固化）。选项：A 接受风险，失败时按日志手修（当前）；B 在 `upstream-sync.yml` 里把 luci feed 固定到已验证的 commit（改 `feeds.conf.default` 的 luci 行）；C 向 fork 提上游反馈要求降耦合。
 5. **方向 2 备选架构：Fork 分支自动化补丁指纹追踪与 Revert 机制** — 针对未来若有需要严格保留下游 commit 历史的分支：CI 维护补丁应用清单，当检测到本地补丁删除时自动触发 `git revert` 逆向消除，避免手写反向补丁与变基地狱。目前作为备选架构方案储备，未来如需持久化分支历史时启用。
 
 - `docs/ci-flow.md` 讲"怎么跑"，`docs/openwrt-build-pitfalls.md` 讲"为什么坏过"，本文件讲"现在到底有没有"。
