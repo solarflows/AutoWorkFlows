@@ -21,6 +21,7 @@ on:
       matrix_artifacts_release_repo: { required: true, type: string }
       matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_artifacts_keep_versions: { required: false, type: number, default: 7 }
+      matrix_config_sha:    { required: false, type: string, default: '' }
       # ── 默认值（workflow 内置;调用方不传则用这里,见 firmware-build-unified env）──
       defaults_repo:        { required: false, type: string, default: 'solarflows/AutoWorkflows' }
       defaults_ref:         { required: false, type: string, default: 'main' }
@@ -1440,8 +1441,13 @@ jobs:
             FEEDS_MD_JSON=$(echo "$FEEDS_MD_RAW" | jq -Rs '.')
           fi
 
-          TARGET_CONFIG_JSON=$(jq -c --arg t "${IMMWRT_TARGET}" '.targets[] | select(.target == $t)' "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/targets.json" 2>/dev/null || echo "")
-          CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
+          # config_sha 由 plan 计算并通过 matrix_config_sha 传入以保证 plan↔exec↔persist 闭环一致；
+          # 若外部调用方未传（向后兼容），则本地用与 plan 相同的公式（原始 targets.json + 绝对路径）计算。
+          CONFIG_SHA="${{ inputs.matrix_config_sha }}"
+          if [ -z "$CONFIG_SHA" ]; then
+            TARGET_CONFIG_JSON=$(jq -c --arg t "${IMMWRT_TARGET}" '.targets[] | select(.target == $t)' "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/targets.json" 2>/dev/null || echo "")
+            CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
+          fi
 
           cat > build-info.json <<JSONEOF
           {

@@ -80,7 +80,7 @@ jobs:
   plan:
     name: Plan build
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     outputs:
       firmware_matrix_json:     ${{ steps.decision.outputs.firmware_matrix_json }}
       sdk_ib_matrix_json:       ${{ steps.decision.outputs.sdk_ib_matrix_json }}
@@ -486,8 +486,11 @@ jobs:
             fi
 
             # ── 目标配置文件变更检测 (seed 种子目录 + targets.json 配置定义) ──
-            CURR_TARGET_CFG=$(jq -c --arg t "$MATRIX_TARGET" '.[] | select(.target == $t)' /tmp/filtered_targets.json 2>/dev/null || echo "")
-            CURR_CFG=$( (echo "$CURR_TARGET_CFG"; find "AutoWorkFlows/openwrt-configs/immortalwrt/${MATRIX_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 )
+            # 使用原始 targets.json（不含 jq 默认值注入）+ 绝对路径，与 executor
+            # 侧公式一致。CURR_CFG 会一并传入 executor 写入 build-info.json，
+            # 再由 persist-state 回写 state，确保 plan→exec→persist 闭环一致。
+            CURR_TARGET_CFG=$(jq -c --arg t "$MATRIX_TARGET" '.targets[] | select(.target == $t)' "$JSON_FILE" 2>/dev/null || echo "")
+            CURR_CFG=$( (echo "$CURR_TARGET_CFG"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${MATRIX_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 )
             LAST_CFG=$(jq -r ".\"${MATRIX_TARGET}\".config_sha // empty" build-state.json)
             CONFIG_CHANGED=false
             if [ -n "$LAST_CFG" ] && [ "$LAST_CFG" = "$CURR_CFG" ]; then
@@ -753,6 +756,7 @@ jobs:
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_artifacts_keep_versions: ${{ matrix.artifacts_keep_versions }}
+      matrix_config_sha:          ${{ matrix.current_config_sha }}
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
@@ -790,6 +794,7 @@ jobs:
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_build_sdk_ib:       true
+      matrix_config_sha:          ${{ matrix.current_config_sha }}
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
@@ -824,6 +829,7 @@ jobs:
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_sdk_packages:       ${{ matrix.sdk_packages }}
+      matrix_config_sha:          ${{ matrix.current_config_sha }}
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}

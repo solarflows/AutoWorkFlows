@@ -20,6 +20,7 @@ on:
       matrix_artifacts_release_repo: { required: true, type: string }
       matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_sdk_packages:       { required: false, type: string, default: '*' }
+      matrix_config_sha:       { required: false, type: string, default: '' }
       # ── 默认值（workflow 内置）──
       defaults_repo:             { required: false, type: string, default: 'solarflows/AutoWorkflows' }
       defaults_ref:              { required: false, type: string, default: 'main' }
@@ -924,8 +925,21 @@ jobs:
             FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
           fi
 
-          TARGET_CONFIG_JSON=$(jq -c --arg t "${IMMWRT_TARGET}" '.targets[] | select(.target == $t)' "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/targets.json" 2>/dev/null || echo "")
-          CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
+          # config_sha 仅 sdk-ib 模式（发布固件）允许回写：纯 packages 模式若回写新值，
+          # 会把 seed 变更的"强制全量"信号吞掉（plan 决策依赖 config_changed），
+          # 下次 smart 触发将不再全量，固件永远缺新配置。置空后 persist-state 的
+          # `if $cfg != ""` 保护会保留 state 旧值，信号得以存活。
+          # sdk-ib 模式由 plan 决策顺序保证 config_changed=false 才可达，回写无害。
+          CONFIG_SHA=""
+          if [ "${{ inputs.matrix_build_sdk_ib }}" = "true" ]; then
+            # config_sha 由 plan 计算并通过 matrix_config_sha 传入以保证 plan↔exec↔persist 闭环一致；
+            # 若外部调用方未传（向后兼容），则本地用与 plan 相同的公式（原始 targets.json + 绝对路径）计算。
+            CONFIG_SHA="${{ inputs.matrix_config_sha }}"
+            if [ -z "$CONFIG_SHA" ]; then
+              TARGET_CONFIG_JSON=$(jq -c --arg t "${IMMWRT_TARGET}" '.targets[] | select(.target == $t)' "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/targets.json" 2>/dev/null || echo "")
+              CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
+            fi
+          fi
 
           cat > build-info.json <<JSONEOF
           {
@@ -943,7 +957,7 @@ jobs:
             "sdk_version": "${{ steps.resolve.outputs.sdk_version }}",
             "plan_version": "${{ inputs.version }}",
             "sdk_file": "${{ steps.resolve.outputs.sdk_file }}",
-            "build_mode": "sdk",
+            "build_mode": "${{ inputs.matrix_build_sdk_ib == 'true' && 'sdk-ib' || 'sdk' }}",
             "release_tag": "${FIRMWARE_RELEASE_TAG}",
             "passwall_repo": "${{ inputs.matrix_passwall_repo }}",
             "passwall_tag": "${{ inputs.matrix_passwall_tag }}",
