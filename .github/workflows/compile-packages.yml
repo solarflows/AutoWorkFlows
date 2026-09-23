@@ -450,6 +450,20 @@ jobs:
             echo "ccache_enabled=false" >> $GITHUB_OUTPUT
           fi
 
+          # ── 禁止 SDK 重编内核模块 ──
+          # SDK tarball 已含全量编译阶段预置的全部 kmod ipk（kernel 版本一致）；
+          # 若 .config 残留 CONFIG_PACKAGE_kmod-*=y，make 检测 stamp 失效后会
+          # 触发 package/kernel/linux 全模块重编 → 失败(ignored)覆盖预置 ipk
+          # → IB 固件组装阶段报 "kmod-leds-pwm (no such package)"。
+          # 禁用所有 kmod 包选项后重跑 defconfig 补全依赖，仅保留自定义 feed
+          # 可能定义的 kernel 模块（如 kmod-fullconenat）。
+          echo "::group::🔒 Freeze kernel modules (prevent SDK recompilation)"
+          grep '^CONFIG_PACKAGE_kmod-' .config | while IFS='=' read -r opt _; do
+            sed -i "s/^${opt}=.*$/# ${opt} is not set/" .config
+          done
+          make defconfig 2>&1
+          echo "::endgroup::"
+
           # ── ccache 包装器变量级验证 (rules.mk val.% 目标) ──
           # 同时检查 target/host 的 C/C++ 包装器及 NOCACHE 原值，避免只验证
           # TARGET_CC 却让 TARGET_CXX 或 host 编译绕过 ccache。
