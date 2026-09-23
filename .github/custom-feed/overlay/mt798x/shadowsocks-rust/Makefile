@@ -7,7 +7,11 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shadowsocks-rust
 PKG_VERSION:=1.25.0
-PKG_RELEASE:=1
+# PKG_RELEASE bump 记录:
+#   2: 100-disable-broken-crypto-backend.patch（shadowsocks-crypto 0.8.0
+#      的 ring/aws-lc 分支有发布 bug——ring 分支缺 Aes128Gcm 类型定义，
+#      aws-lc 分支同样 E0432，唯一可编译路径是纯 Rust fallback）
+PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/shadowsocks/shadowsocks-rust/tar.gz/v$(PKG_VERSION)?
