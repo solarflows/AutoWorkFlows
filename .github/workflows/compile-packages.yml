@@ -144,91 +144,8 @@ jobs:
       # SDK cache 与 full toolchain cache 放进同一个 restore-keys。先恢复 SDK
       # 自有快照；只有完全未命中时，第二个 restore 才使用 full workflow 的
       # 原样 path，避免把“前缀命中”误当成 SDK 专用缓存。
-      - name: Find SDK and shared cache snapshots
-        id: sdk-cache-lookup
-        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all'
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          # actions/cache/restore exposes only cache-hit; it does not expose the
-          # key selected by restore-keys. Resolve an accessible immutable key first,
-          # then restore that key exactly. If the API lookup fails or misses, do not
-          # assume an SDK snapshot was restored; use the independent full fallback.
-          set -uo pipefail
-          ANNOTATIONS_FILE="${GITHUB_WORKSPACE}/.ci-annotations.md"
-          : > "$ANNOTATIONS_FILE"
-          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
-          REPO="${{ github.repository }}"
-          CURRENT_REF="${GITHUB_REF:-}"
-          DEFAULT_BRANCH=$(gh repo view "$REPO" --json defaultBranchRef --jq '.defaultBranchRef.name')
-          DEFAULT_BRANCH_RC=$?
-          if [ "$DEFAULT_BRANCH_RC" -eq 0 ] && [ -n "$DEFAULT_BRANCH" ]; then
-            DEFAULT_REF="refs/heads/${DEFAULT_BRANCH}"
-          else
-            DEFAULT_REF=""
-            echo "::warning title=cache lookup::无法读取默认分支，仅查询当前 ref: ${CURRENT_REF:-unknown}"
-            printf '%s\n' '- 无法读取默认分支，缓存查询仅使用当前 ref。' >> "$ANNOTATIONS_FILE"
-          fi
-
-          lookup_cache() {
-            local prefix="$1" pattern="$2"
-            local cache_json lookup_rc
-            cache_json=$(gh cache list --repo "$REPO" --key "$prefix" --limit 100 \
-              --sort created_at --order desc --json key,ref,createdAt)
-            lookup_rc=$?
-            if [ "$lookup_rc" -ne 0 ]; then
-              return 2
-            fi
-            printf '%s\n' "$cache_json" | jq -r \
-              --arg pattern "$pattern" --arg current "$CURRENT_REF" --arg default_ref "$DEFAULT_REF" '
-                [ .[] | select((.key | test($pattern)) and (.ref == $current or (.ref == $default_ref and $default_ref != ""))) ]
-                | sort_by(.createdAt)
-                | if length == 0 then empty else last | [.key, .ref] | @tsv end
-              '
-          }
-
-          resolve_cache() {
-            local label="$1" prefix="$2" pattern="$3" fallback_key="$4" result rc key ref
-            result=$(lookup_cache "$prefix" "$pattern")
-            rc=$?
-            if [ "$rc" -eq 0 ] && [ -n "$result" ]; then
-              IFS=$'\t' read -r key ref <<< "$result"
-              echo "${label}_found=true" >> "$GITHUB_OUTPUT"
-              echo "${label}_key=$key" >> "$GITHUB_OUTPUT"
-              echo "${label}_ref=$ref" >> "$GITHUB_OUTPUT"
-              echo "${label}_restore_key=$key" >> "$GITHUB_OUTPUT"
-              echo "${label}_restore_keys=" >> "$GITHUB_OUTPUT"
-              echo "✅ 找到 ${label} 缓存: ${key} (${ref})"
-            elif [ "$rc" -eq 2 ]; then
-              echo "${label}_found=false" >> "$GITHUB_OUTPUT"
-              echo "${label}_key=" >> "$GITHUB_OUTPUT"
-              echo "${label}_ref=" >> "$GITHUB_OUTPUT"
-              echo "${label}_restore_key=$fallback_key" >> "$GITHUB_OUTPUT"
-              echo "${label}_restore_keys=$prefix" >> "$GITHUB_OUTPUT"
-              echo "${label}_lookup=failed" >> "$GITHUB_OUTPUT"
-              echo "::warning title=${label} cache lookup::查询 ${label} 缓存失败，回退到前缀模糊匹配"
-              printf '%s\n' "- ${label} 缓存 API 查询失败，回退到前缀模糊匹配。" >> "$ANNOTATIONS_FILE"
-            else
-              echo "${label}_found=false" >> "$GITHUB_OUTPUT"
-              echo "${label}_key=" >> "$GITHUB_OUTPUT"
-              echo "${label}_ref=" >> "$GITHUB_OUTPUT"
-              echo "${label}_restore_key=$fallback_key" >> "$GITHUB_OUTPUT"
-              echo "${label}_restore_keys=$prefix" >> "$GITHUB_OUTPUT"
-              echo "${label}_lookup=miss" >> "$GITHUB_OUTPUT"
-              echo "::notice title=${label} cache lookup::未找到精确 ${label} 缓存，回退到前缀模糊匹配"
-              printf '%s\n' "- 未找到精确 ${label} 缓存，回退到前缀模糊匹配。" >> "$ANNOTATIONS_FILE"
-            fi
-          }
-
-          SDK_PREFIX="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-"
-          SDK_PATTERN="^immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-[0-9]+$"
-          FULL_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
-          FULL_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
-          CCACHE_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
-          CCACHE_PATTERN="^immwrt-v2-ccache-${IMMWRT_TARGET}-[0-9]+$"
-          resolve_cache sdk "$SDK_PREFIX" "$SDK_PATTERN" "${SDK_PREFIX}${GITHUB_RUN_ID}"
-          resolve_cache full "${FULL_PREFIX}" "$FULL_PATTERN" "${FULL_PREFIX}sdk-fallback-${GITHUB_RUN_ID}"
-          resolve_cache ccache "$CCACHE_PREFIX" "$CCACHE_PATTERN" "${CCACHE_PREFIX}${GITHUB_RUN_ID}"
+      # 与 compile-firmware.yml 一致：直接用 actions/cache 原生 restore-keys
+      # 前缀匹配最近快照，cache-hit 输出驱动 SDK→full 两级回退。
 
       # ───────── ccache 恢复（与 compile-firmware 完全共享同一 namespace）─────────
       - name: Restore ccache
@@ -237,21 +154,24 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: ${{ steps.sdk-cache-lookup.outputs.ccache_restore_key }}
+          # run_id 后缀保证本 run 内绝不重复；restore-keys 前缀命中最近一次
+          # 成功保存的 ccache 快照（由 purge 保留最近 1 份）。
+          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           restore-keys: |
-            ${{ steps.sdk-cache-lookup.outputs.ccache_restore_keys }}
             immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
           path: openwrt/.ccache
 
       - name: Restore SDK hostpkg cache
         id: cache-hostpkg-restore
-        if: steps.sdk-cache-lookup.outputs.sdk_found == 'true' && inputs.cache_strategy != 'clean-toolchain'
+        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          # The public restore action exposes only cache-hit. Resolve the
-          # immutable snapshot key first, then restore it exactly.
-          key: ${{ steps.sdk-cache-lookup.outputs.sdk_restore_key }}
+          # key 与保存端 (immwrt-v2-sdk-hostpkg-<target>-<run_id>) 同构；
+          # restore-keys 前缀命中最近一次成功保存的 SDK hostpkg 快照。
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          restore-keys: |
+            immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-
           path: |
             openwrt/staging_dir/hostpkg
             openwrt/staging_dir/target-*/host
@@ -263,13 +183,14 @@ jobs:
         id: cache-sdk-toolchain-fallback
         # Use the full cache only when the target-specific SDK snapshot was not
         # restored exactly. The path list remains identical to the full producer.
-        if: (steps.sdk-cache-lookup.outputs.sdk_found != 'true' || steps.cache-hostpkg-restore.outputs.cache-hit != 'true') && inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
+        if: steps.cache-hostpkg-restore.outputs.cache-hit != 'true' && inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: ${{ steps.sdk-cache-lookup.outputs.full_restore_key }}
+          # key 为本 run 唯一占位（命中概率为 0）；restore-keys 前缀命中
+          # compile-firmware 保存的最近一份 full toolchain 快照（内容哈希 key）。
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-sdk-fallback-${{ github.run_id }}
           restore-keys: |
-            ${{ steps.sdk-cache-lookup.outputs.full_restore_keys }}
             immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-
           path: |
             openwrt/staging_dir/host*
@@ -759,30 +680,26 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # ── 缓存命中信息 (供 summary 展示) ──
-          # cache-hit 只能确认 exact-key 命中；前缀回退时公开 action 不提供实际 key，
-          # 因此展示预查到的 key，或明确标注 prefix/best-effort，禁止引用内部 state。
-          CC_LOOKUP_KEY="${{ steps.sdk-cache-lookup.outputs.ccache_key || '' }}"
-          CC_LOOKUP_PREFIX="${{ steps.sdk-cache-lookup.outputs.ccache_restore_keys || '' }}"
-          if [ -n "$CC_LOOKUP_KEY" ]; then
-            CC_RESTORE_KEY="$CC_LOOKUP_KEY"
-          elif [ "${{ steps.cache-cc-restore.outputs.cache-hit || 'false' }}" = "true" ]; then
-            CC_RESTORE_KEY="$CC_LOOKUP_PREFIX (exact key unavailable)"
-          elif [ -n "$CC_LOOKUP_PREFIX" ]; then
-            CC_RESTORE_KEY="$CC_LOOKUP_PREFIX (prefix/best-effort)"
-          else
-            CC_RESTORE_KEY="未命中"
-          fi
+          # actions/cache 只输出 cache-hit (exact key 命中)；restore-keys 前缀
+          # 命中的实际 key 不对外暴露，summary 只展示已确认信息与固定命名约定。
+          CC_RESTORE_KEY="immwrt-v2-ccache-${IMMWRT_TARGET}-${{ github.run_id }}"
+          CC_RESTORE_STATE="${{ steps.cache-cc-restore.outcome || 'skipped' }}"
+          CC_HIT="${{ steps.cache-cc-restore.outputs.cache-hit || 'false' }}"
+          [ "$CC_RESTORE_STATE" = "success" ] || CC_RESTORE_STATE="跳过/失败"
+          [ "$CC_HIT" = "true" ] && CC_RESTORE_STATE="${CC_RESTORE_STATE} (exact hit)"
 
-          SDK_RESTORE_KEY="${{ steps.sdk-cache-lookup.outputs.sdk_key || '' }}"
-          [ -n "$SDK_RESTORE_KEY" ] || SDK_RESTORE_KEY="未命中"
-          FULL_LOOKUP_KEY="${{ steps.sdk-cache-lookup.outputs.full_key || '' }}"
-          FULL_LOOKUP_PREFIX="${{ steps.sdk-cache-lookup.outputs.full_restore_keys || '' }}"
+          SDK_RESTORE_KEY="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-${{ github.run_id }}"
+          SDK_HIT="${{ steps.cache-hostpkg-restore.outputs.cache-hit || 'false' }}"
+          SDK_RESTORE_STATE="${{ steps.cache-hostpkg-restore.outcome || 'skipped' }}"
+          [ "$SDK_RESTORE_STATE" = "success" ] || SDK_RESTORE_STATE="跳过/失败"
+          [ "$SDK_HIT" = "true" ] && SDK_RESTORE_STATE="${SDK_RESTORE_STATE} (exact hit)"
+
           if [ "${{ steps.cache-sdk-toolchain-fallback.outcome || 'skipped' }}" = "skipped" ]; then
             FULL_FALLBACK_KEY="未使用"
-          elif [ -n "$FULL_LOOKUP_KEY" ]; then
-            FULL_FALLBACK_KEY="$FULL_LOOKUP_KEY"
-          elif [ -n "$FULL_LOOKUP_PREFIX" ]; then
-            FULL_FALLBACK_KEY="$FULL_LOOKUP_PREFIX (prefix/best-effort)"
+          elif [ "${{ steps.cache-sdk-toolchain-fallback.outputs.cache-hit || 'false' }}" = "true" ]; then
+            FULL_FALLBACK_KEY="exact key 命中"
+          elif [ "${{ steps.cache-sdk-toolchain-fallback.outcome || '' }}" = "success" ]; then
+            FULL_FALLBACK_KEY="前缀命中 (restore-keys, 实际 key 不对外暴露)"
           else
             FULL_FALLBACK_KEY="未命中"
           fi
@@ -820,8 +737,8 @@ jobs:
             echo "### 📦 缓存命中 (SDK 增量编译)"
             echo "| 缓存 | 恢复来源 | 保存 key |"
             echo "|---|---|---|"
-            echo "| **ccache** (C/C++ 对象) | \`${CC_RESTORE_KEY}\` | \`${CCACHE_SAVE_KEY}\` (${CCACHE_SAVE_STATE}); 全量与 SDK 共享 |"
-            echo "| **SDK host/tool** (rustc/go/node) | \`${SDK_RESTORE_KEY}\` | \`${SDK_SAVE_KEY}\` (${SDK_SAVE_STATE}) |"
+            echo "| **ccache** (C/C++ 对象) | \`${CC_RESTORE_KEY}\` (${CC_RESTORE_STATE}) | \`${CCACHE_SAVE_KEY}\` (${CCACHE_SAVE_STATE}); 全量与 SDK 共享 |"
+            echo "| **SDK host/tool** (rustc/go/node) | \`${SDK_RESTORE_KEY}\` (${SDK_RESTORE_STATE}) | \`${SDK_SAVE_KEY}\` (${SDK_SAVE_STATE}) |"
             echo "| **full toolchain fallback** | \`${FULL_FALLBACK_KEY}\` | 仅恢复,不由 SDK 保存 |"
           } >> "$GITHUB_STEP_SUMMARY"
 
