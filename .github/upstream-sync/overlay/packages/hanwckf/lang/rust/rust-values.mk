@@ -85,7 +85,15 @@ ifeq ($(ARCH),arm)
 endif
 
 ifeq ($(ARCH),aarch64)
+  # -mno-outline-atomics 是 GCC 10+ 选项（GCC 10 起为 aarch64 默认启用
+  # outline-atomics，需显式禁用以适配 musl 静态链接）。21.02 的 GCC 8.4
+  # 不识别该选项且无 outline-atomics 行为，传入会导致所有 target 侧 C
+  # 依赖（aws-lc-sys/ring 的 C 代码）编译报 unrecognized command line
+  # option。仅当目标 GCC 主版本 >= 10 时才加。
+  TARGET_GCC_MAJOR:=$(shell $(TARGET_CC) -dumpversion 2>/dev/null | cut -d. -f1)
+  ifeq ($(shell test $(TARGET_GCC_MAJOR) -ge 10 2>/dev/null && echo y),y)
     RUSTC_CFLAGS:=-mno-outline-atomics
+  endif
 endif
 
 # The same flags have to reach the std that rust/host builds for the target,
