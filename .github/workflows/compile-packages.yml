@@ -468,23 +468,6 @@ jobs:
           echo "📌 标准 packages feed: ${STANDARD_PACKAGES_REPO}@${STANDARD_PACKAGES_BRANCH} (${STANDARD_PKG_SHA_FULL})"
           echo "standard_packages_sha=${STANDARD_PKG_SHA_FULL}" >> "$GITHUB_OUTPUT"
 
-          # ── rust host 包 .orig 兼容修复 (openwrt/packages#27485 / PR#27487) ──
-          # scripts/patch-kernel.sh 应用 quilt 补丁后删除所有 *.orig，但 rust
-          # 上游 tarball 的 vendor/ 自带 Cargo.toml.orig 且计入 cargo 校验清单，
-          # 删除后 vendor 校验报 "failed to calculate checksum of ... .orig"。
-          # 上游修复 = rust Makefile 覆盖 Host/Patch 跳过 .orig 清理；旧 SDK 的
-          # feeds/packages/lang/rust 无此定义，此处幂等注入（已有则跳过）。
-          RUST_MK="feeds/packages/lang/rust/Makefile"
-          RUST_FIX="${{ github.workspace }}/AutoWorkFlows/.github/scripts/rust-host-patch-orig-fix.mk"
-          if [ -f "$RUST_MK" ] && ! grep -q '^define Host/Patch' "$RUST_MK"; then
-            cat "$RUST_FIX" >> "$RUST_MK"
-            echo "🔧 已注入 rust Host/Patch 修复 (跳过 vendor .orig 清理)"
-          elif [ -f "$RUST_MK" ]; then
-            echo "ℹ️ rust Makefile 已含 Host/Patch 定义，跳过注入"
-          else
-            echo "ℹ️ 无 rust 包 (feeds/packages/lang/rust)，跳过注入"
-          fi
-
 
           # ── ccache: 复用 SDK 原生机制并与全量编译共享 .ccache ──
           # SDK tarball 内置的 host/bin 工具优先于 runner 系统工具；这同时使
