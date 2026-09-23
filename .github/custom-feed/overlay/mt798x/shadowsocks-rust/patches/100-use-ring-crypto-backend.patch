@@ -1,0 +1,27 @@
+--- a/crates/shadowsocks/Cargo.toml
++++ b/crates/shadowsocks/Cargo.toml
+@@ -28,13 +28,13 @@ trust-dns = ["hickory-dns"]
+ # Users should always avoid using these ciphers in practice
+ stream-cipher = [
+     "shadowsocks-crypto/v1-stream",
+-    "shadowsocks-crypto/aws-lc",
++    "shadowsocks-crypto/ring",
+ ]
+ 
+ # Enable AEAD ciphers
+ aead-cipher = [
+     "shadowsocks-crypto/v1-aead",
+-    "shadowsocks-crypto/aws-lc",
++    "shadowsocks-crypto/ring",
+ ]
+ 
+ # Enable extra AEAD ciphers
+@@ -43,7 +43,7 @@ aead-cipher-extra = ["aead-cipher", "shadowsocks-crypto/v1-aead-extra"]
+ 
+ aead-cipher-2022 = [
+     "shadowsocks-crypto/v2",
+-    "shadowsocks-crypto/aws-lc",
++    "shadowsocks-crypto/ring",
+     "rand",
+     "aes",
+     "lru_time_cache",
