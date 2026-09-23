@@ -352,6 +352,7 @@ jobs:
           for MATRIX_TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
             SRC_STATUS="—"; PKG_STATUS="—"; STD_PKG_STATUS="—"; KERNEL_STATUS="—"
             SOURCE_CHANGED=false; PACKAGES_CHANGED=false; STANDARD_PACKAGES_CHANGED=false; KERNEL_CHANGED=false
+            CHANGED_PACKAGES_FINAL="*"; IB_PACKAGES=""; IB_PROFILES=""
 
             CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .repo')
             CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .ref')
@@ -506,13 +507,72 @@ jobs:
               CFG_STATUS="🟣 无基准"
             fi
 
+            # ── 包级指纹变更检测（plan 侧计算变更包子集）──
+            # 从 solarflows/openwrt-packages 分支读取 packages.lock.json,
+            # 与 build-state 逐包 commit 比对，算出变更包集合。
+            # 仅 smart 触发 + feed 级变更标记为真时才计算；显式触发 (full/sdk-packages)
+            # 传 * 给 executor 由 sdk.config 控制全量。
+            CURR_TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
+            if [ "$CURR_TRIGGER" = "smart" ] && [ "$PACKAGES_CHANGED" = "true" ]; then
+              echo "  🔍 [${MATRIX_TARGET}] 包级指纹检测 (packages.lock.json@${CURR_PKG_BRANCH})..."
+              PKG_LOCK_JSON=$(gh api -H "Accept: application/vnd.github.raw+json" \
+                "repos/${CURR_PKG_REPO}/contents/packages.lock.json?ref=${CURR_PKG_BRANCH}" 2>/dev/null || echo '{}')
+
+              CURR_PKG_MAP=$(echo "$PKG_LOCK_JSON" | jq -r --arg t "$MATRIX_TARGET" '.targets[$t] // {}' 2>/dev/null)
+              LAST_PKG_MAP=$(jq -r ".\"${MATRIX_TARGET}\".packages // {}" build-state.json 2>/dev/null || echo '{}')
+
+              if [ "$CURR_PKG_MAP" != "{}" ]; then
+                TEMP_CHANGED=""
+                for pkg_name in $(echo "$CURR_PKG_MAP" | jq -r 'keys[]'); do
+                  curr_commit=$(echo "$CURR_PKG_MAP" | jq -r ".\"$pkg_name\".commit // empty")
+                  last_commit=$(echo "$LAST_PKG_MAP" | jq -r ".\"$pkg_name\" // empty")
+                  if [ -z "$last_commit" ] || [ "$last_commit" != "$curr_commit" ]; then
+                    TEMP_CHANGED="$TEMP_CHANGED $pkg_name"
+                  fi
+                done
+                TEMP_CHANGED=$(echo "$TEMP_CHANGED" | xargs | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+                if [ -n "$TEMP_CHANGED" ]; then
+                  echo "  🟡 [${MATRIX_TARGET}] $(echo "$TEMP_CHANGED" | wc -w) 个包变更: ${TEMP_CHANGED}"
+                  CHANGED_PACKAGES_FINAL="$TEMP_CHANGED"
+                  PKG_STATUS="🟡 $(echo "$TEMP_CHANGED" | wc -w)个"
+                else
+                  echo "  ✅ [${MATRIX_TARGET}] 包级指纹一致——撤销 feed 级变更信号"
+                  PACKAGES_CHANGED=false
+                  PKG_STATUS="✅ 包级一致"
+                  CHANGED_PACKAGES_FINAL=""
+                fi
+              else
+                echo "  ⚠️ [${MATRIX_TARGET}] packages.lock.json 无 ${MATRIX_TARGET} 条目，回退全量"
+                CHANGED_PACKAGES_FINAL="*"
+              fi
+            fi
+
+            # ── 提取 IB packages 与 profiles（从 seed 文件在 plan 侧预计算，executor 直接收）──
+            # seed 已在 sparse checkout 中；提取公式与 executor 原逻辑一致，
+            # 使 executor 的 Build firmware via IB 步骤从"自算"改为"忠实执行"。
+            SEED_DIR="${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${MATRIX_TARGET}"
+            if [ -d "$SEED_DIR" ]; then
+              IB_PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
+                grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
+                sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+              IB_EXCLUDES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
+                grep -E '^# CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+ is not set$' | \
+                sed -E 's/^# CONFIG_PACKAGE_([^ ]+) is not set$/-\1/' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+              IB_PACKAGES="${IB_PACKAGES} ${IB_EXCLUDES}"
+              IB_PACKAGES=$(echo "$IB_PACKAGES" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+              IB_PROFILES=$(grep -hoE '^CONFIG_TARGET_(DEVICE_)?[A-Za-z0-9_]+_DEVICE_[A-Za-z0-9_-]+=y$' "$SEED_DIR"/*.seed 2>/dev/null | \
+                sed -E 's/^CONFIG_TARGET_(DEVICE_)?.*_DEVICE_([^=]+)=y/\2/' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+            fi
+
             jq --arg t "$MATRIX_TARGET" --arg src "$CURR_SRC" --arg pkg "$CURR_PKG" --arg std_pkg "$CURR_STD_PKG" \
               --arg cfg "$CURR_CFG" \
+              --arg sdk_pkgs "$CHANGED_PACKAGES_FINAL" \
+              --arg ib_pkgs "$IB_PACKAGES" --arg ib_profiles "$IB_PROFILES" \
               --argjson src_changed "$SOURCE_CHANGED" --argjson pkg_changed "$PACKAGES_CHANGED" \
               --argjson standard_packages_changed "$STANDARD_PACKAGES_CHANGED" \
               --argjson kernel_changed "$KERNEL_CHANGED" \
               --argjson config_changed "$CONFIG_CHANGED" \
-              '. + [{target:$t, current_source_sha:$src, current_packages_sha:$pkg, current_standard_packages_sha:$std_pkg, current_config_sha:$cfg, source_changed:$src_changed, packages_changed:$pkg_changed, standard_packages_changed:$standard_packages_changed, kernel_changed:$kernel_changed, config_changed:$config_changed}]' \
+              '. + [{target:$t, current_source_sha:$src, current_packages_sha:$pkg, current_standard_packages_sha:$std_pkg, current_config_sha:$cfg, sdk_packages:$sdk_pkgs, ib_packages:$ib_pkgs, ib_profiles:$ib_profiles, source_changed:$src_changed, packages_changed:$pkg_changed, standard_packages_changed:$standard_packages_changed, kernel_changed:$kernel_changed, config_changed:$config_changed}]' \
               /tmp/target_changes.json > /tmp/target_changes.new
             mv /tmp/target_changes.new /tmp/target_changes.json
             echo "${MATRIX_TARGET}|${SRC_STATUS}|${PKG_STATUS}|${STD_PKG_STATUS}|${KERNEL_STATUS}|${CFG_STATUS}" >> /tmp/change_report.txt
@@ -676,7 +736,8 @@ jobs:
               --argjson fw "$SHOULD_FW" --argjson sdk_ib "$SHOULD_SDK_IB" --argjson pkgs "$SHOULD_SDK_PKGS" \
               --argjson pub_fw "$SHOULD_PUB_FW" --argjson pub_pkgs "$SHOULD_PUB_PKGS" \
               --argjson change "$CHANGE" \
-              '. + [$config + $change + {sdk_ready:$sdk_ready, ib_ready:$ib_ready, build_mode:$mode, build_firmware:$fw, build_sdk_ib:$sdk_ib, build_sdk_pkgs:$pkgs, publish_firmware:$pub_fw, publish_pkgs:$pub_pkgs}]' \
+              --arg planned_pkgs "$(echo "$CHANGE" | jq -r '.sdk_packages // "*"')" \
+              '. + [$config + $change + {sdk_packages:$planned_pkgs, sdk_ready:$sdk_ready, ib_ready:$ib_ready, build_mode:$mode, build_firmware:$fw, build_sdk_ib:$sdk_ib, build_sdk_pkgs:$pkgs, publish_firmware:$pub_fw, publish_pkgs:$pub_pkgs}]' \
               /tmp/target_plan.json > /tmp/target_plan.new
             mv /tmp/target_plan.new /tmp/target_plan.json
           done
@@ -794,6 +855,11 @@ jobs:
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_build_sdk_ib:       true
+      # sdk-ib 模式需要把所有 sdk.config 包重编译注入 IB（固件必须完整）；
+      # 纯 packages 模式才使用 plan 计算的变更子集（matrix.sdk_packages）。
+      matrix_sdk_packages:     '*'
+      ib_packages:             ${{ matrix.ib_packages }}
+      ib_profiles:             ${{ matrix.ib_profiles }}
       matrix_config_sha:          ${{ matrix.current_config_sha }}
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
@@ -891,11 +957,13 @@ jobs:
             STD_PKG_BRANCH=$(jq -r '.standard_packages_branch // empty' "$info" 2>/dev/null)
             STD_PKG_SHA=$(jq -r '.standard_packages_sha // empty' "$info" 2>/dev/null)
             CFG_SHA=$(jq -r '.config_sha // empty' "$info" 2>/dev/null)
+            PKG_COMMITS_JSON=$(jq -c '.packages // {}' "$info" 2>/dev/null || echo '{}')
             [ -z "$STATE_TARGET" ] && continue
             echo "ℹ️ 合并状态来自 $(basename "$(dirname "$info")") → ${STATE_TARGET}"
             jq --arg target "$STATE_TARGET" --arg src "$SRC_SHA" --arg pkg "$PKG_SHA" \
               --arg std_pkg_repo "$STD_PKG_REPO" --arg std_pkg_branch "$STD_PKG_BRANCH" --arg std_pkg_sha "$STD_PKG_SHA" \
               --arg cfg "$CFG_SHA" \
+              --argjson pkg_commits "$PKG_COMMITS_JSON" \
               --arg mode "$(jq -r '.build_mode // "unknown"' "$info" 2>/dev/null)" \
               --arg now "$(date +'%Y-%m-%d %H:%M:%S')" \
               '.[$target] = ((.[$target] // {})
@@ -905,6 +973,7 @@ jobs:
                 + (if $std_pkg_branch != "" then {standard_packages_branch:$std_pkg_branch} else {} end)
                 + (if $std_pkg_sha != "" then {standard_packages_sha:$std_pkg_sha} else {} end)
                 + (if $cfg != "" then {config_sha:$cfg} else {} end)
+                + (if ($pkg_commits | length) > 0 then {packages:$pkg_commits} else {} end)
                 + {last_build:$now, last_mode:$mode})' \
               build-state.json > build-state.new
             mv build-state.new build-state.json

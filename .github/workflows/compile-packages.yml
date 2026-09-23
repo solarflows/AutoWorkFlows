@@ -21,6 +21,9 @@ on:
       matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_sdk_packages:       { required: false, type: string, default: '*' }
       matrix_config_sha:       { required: false, type: string, default: '' }
+      # ── plan 预计算下传 (IB 组装参数; 为空时 executor 回退自提取) ──
+      ib_packages:               { required: false, type: string, default: '' }
+      ib_profiles:               { required: false, type: string, default: '' }
       # ── 默认值（workflow 内置）──
       defaults_repo:             { required: false, type: string, default: 'solarflows/AutoWorkflows' }
       defaults_ref:              { required: false, type: string, default: 'main' }
@@ -300,28 +303,34 @@ jobs:
       - name: Resolve SDK packages
         id: resolve-pkgs
         run: |
+          # 包列表由 plan 侧 (firmware-build-unified.yml) 计算并通过 matrix_sdk_packages 传入。
+          # 兼容旧路径: 若传入 "*" (plan 未计算或无变更检测)，回退读取 sdk.config。
           SDK_PKGS="${{ inputs.matrix_sdk_packages }}"
           if [ "$SDK_PKGS" = "*" ]; then
             CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_target }}/sdk.config"
             if [ -f "$CONFIG_FILE" ]; then
-              # 只提取小写包名; CONFIG_PACKAGE_ 前缀也覆盖 INCLUDE/Basic_Core
-              # 等大写 Kconfig 选择项, 这些选项不是可直接 make 的包目录。
               SDK_PKGS=$(grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]*=[ym]$' "$CONFIG_FILE" | sed -E 's/CONFIG_PACKAGE_(.*)=[ym]/\1/' | tr '\n' ' ')
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/shadowsocksr-libev-ssr-[^ ]*/shadowsocksr-libev/g')
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/simple-obfs-client/simple-obfs/g')
               SDK_PKGS=$(echo "$SDK_PKGS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
-              # 传给 make 的列表: 移除 luci-i18n-* (随父 luci app 自动编译)
-              BUILD_PKGS=$(echo "$SDK_PKGS" | sed 's/luci-i18n-[^ ]*//g' | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
             else
-              echo "::warning::sdk.config 不存在"
+              echo "::warning::sdk.config 不存在 (plan 未传入包列表且无本地 sdk.config)"
               SDK_PKGS=""
-              BUILD_PKGS=""
             fi
+          elif [ "$SDK_PKGS" = "" ]; then
+            echo "ℹ️ 计划阶段判定无变更包，跳过 SDK 编译"
+            SDK_PKGS=""
           else
-            BUILD_PKGS="$SDK_PKGS"
+            echo "📋 plan 下传包列表: ${SDK_PKGS}"
           fi
+          # 传给 make 的列表: 移除 luci-i18n-* (随父 luci app 自动编译)
+          BUILD_PKGS=$(echo "$SDK_PKGS" | sed 's/luci-i18n-[^ ]*//g' | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+          # 收集列表: 必须包含 luci-i18n-* 等不直接编译但需要收集的子包。
+          # 当 plan 下传变更子集时，收集范围 = 编译范围 (luci-i18n 随父自动产出)；
+          # 当 sdk-ib 模式 (*) 走 sdk.config 全量时，收集范围已含 luci-i18n。
+          COLLECT_PKGS="$SDK_PKGS"
           echo "packages=${BUILD_PKGS}" >> $GITHUB_OUTPUT
-          echo "collect_packages=${SDK_PKGS}" >> $GITHUB_OUTPUT
+          echo "collect_packages=${COLLECT_PKGS}" >> $GITHUB_OUTPUT
 
       - name: Build packages via SDK
         if: steps.resolve-pkgs.outputs.packages != ''
@@ -515,8 +524,21 @@ jobs:
 
           FAILED_PACKAGES=""
           # Compile each requested package and fail after collecting diagnostics.
+          # 逐包数据采集: 每个包记录墙钟耗时、make 退出码、compile.txt 的
+          # real/user/sys 时间与产物文件名, 供 Summary 报表与状态回写使用。
+          PACKAGES_REPORT='[]'
+          # packages.lock.json 由 custom-feed.yml 生成并提交到 feed 分支，
+          # 记录每个包的上游源 commit SHA（与 plan 侧指纹检测同源）。
+          # 扁平化为 {pkg: "commit"} 格式与 plan/build-state 保持一致。
+          PKG_LOCK_FILE="${{ github.workspace }}/pkgs-feed/packages.lock.json"
+          PKG_LOCK_RAW=$(if [ -f "$PKG_LOCK_FILE" ]; then jq -c --arg t "${IMMWRT_TARGET}" '.targets[$t] // {}' "$PKG_LOCK_FILE" 2>/dev/null; else echo '{}'; fi)
+          # notebook: pkgs-feed 在 checkout 时即已拉取，其内 packages.lock.json 已在
+          # custom-feed.yml 中通过 --lockfile packages.lock.json 生成并随分支提交，
+          # 此处直接读取即可，无需再次调用 gh api。
+          PACKAGE_COMMITS=$(echo "$PKG_LOCK_RAW" | jq 'with_entries(.value |= (.commit // ""))')
           for pkg in $PACKAGES; do
             echo "::group::📦 Compile $pkg"
+            PKG_T0=$(date +%s)
             # 软件包源码下载与重试机制 (应对 GitHub 频率限制或网络抖动)
             echo "📥 下载 $pkg 源码包..."
             if ! timeout 300 make package/"$pkg"/download V=sc 2>&1; then
@@ -527,13 +549,48 @@ jobs:
             fi
             find dl -maxdepth 1 -type f -size -1024c -exec rm -f {} + 2>/dev/null || true
 
+            # 提取包版本 (make val.PKG_VERSION 只读 Makefile，不需编译)
+            PKG_VERSION=$(make -s package/"$pkg"/val.PKG_VERSION V=s 2>/dev/null | tail -1 || true)
+
+            PKG_RC=0
             if ! make package/"$pkg"/compile \
               BUILD_LOG=1 V=sc -j$(nproc 2>/dev/null || echo 4) 2>&1; then
               echo "::error::⚠️ $pkg build failed"
+              PKG_RC=1
               FAILED_PACKAGES="$FAILED_PACKAGES $pkg"
             fi
+            PKG_T1=$(date +%s)
+            PKG_WALL=$((PKG_T1 - PKG_T0))
+
+            # 提取构建出的产物文件名 (编译后查询)
+            PKG_ARTIFACTS=$(find bin/packages -type f \( -name "${pkg}_*.ipk" -o -name "${pkg}_*.apk" \) 2>/dev/null | sed 's|^.*/||' | sort -u | tr '\n' ' ' | sed 's/ *$//' || true)
+
+            # 提取 compile.txt 的 time: 行 (real#user#sys 格式)
+            PKG_TIME=""
+            if [ -f "logs/$pkg/compile.txt" ]; then
+              PKG_TIME=$(tail -n 1 "logs/$pkg/compile.txt" 2>/dev/null | grep -o 'time: .*' | head -1 || true)
+            fi
+
+            PACKAGES_REPORT=$(echo "$PACKAGES_REPORT" | jq \
+              --arg pkg "$pkg" --argjson rc "$PKG_RC" --argjson wall "$PKG_WALL" \
+              --arg time "$PKG_TIME" --arg version "$PKG_VERSION" --arg artifacts "$PKG_ARTIFACTS" \
+              '. + [{pkg:$pkg, exit:$rc, wall_sec:$wall, compile_time:$time, version:$version, artifacts:$artifacts}]')
             echo "::endgroup::"
           done
+
+          echo "packages_report=$(echo "$PACKAGES_REPORT" | jq -c .)" >> "$GITHUB_OUTPUT"
+          echo "package_commits=$(echo "$PACKAGE_COMMITS" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+          # ── 逐包报表 (Markdown 表格写入 Summary) ──
+          {
+            echo ""
+            echo "### 📊 逐包编译报表 (SDK)"
+            echo ""
+            echo "| 包 | 结果 | 墙钟耗时 | 版本 | 产物 |"
+            echo "|---|---|---|---|---|"
+            echo "$PACKAGES_REPORT" | jq -r '.[] | "| `\(.pkg)` | \(if .exit == 0 then "✅" else "❌" end) | \(.wall_sec)s | \(.version // "—") | \(.artifacts // "—") |"'
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if [ -n "$FAILED_PACKAGES" ]; then
             echo "::error::SDK packages failed:$FAILED_PACKAGES"
@@ -882,6 +939,7 @@ jobs:
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${PKG_COMMIT_FULL}",
             "packages_commit": "${PKG_COMMIT}",
+            "packages": ${{ steps.compile.outputs.package_commits || '{}' }},
             "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
             "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
             "standard_packages_sha": "${{ steps.compile.outputs.standard_packages_sha }}",
@@ -1007,15 +1065,22 @@ jobs:
         id: build-ib
         run: |
           set -euo pipefail
+          # 包清单与设备列表优先使用 plan 侧预计算结果 (firmware-build-unified.yml
+          # 的 ib_packages/ib_profiles input)；为空时才回退本地 seed 提取 (向后兼容)。
           SEED_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_target }}"
-          PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
-            grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
-            sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | sort -u | tr '\n' ' ')
-          EXCLUDES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
-            grep -E '^# CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+ is not set$' | \
-            sed -E 's/^# CONFIG_PACKAGE_([^ ]+) is not set$/-\1/' | sort -u | tr '\n' ' ')
-          PACKAGES="${PACKAGES} ${EXCLUDES}"
-          PACKAGES=$(echo "$PACKAGES" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+          PACKAGES="${{ inputs.ib_packages }}"
+          if [ -z "$PACKAGES" ]; then
+            PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
+              grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
+              sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | sort -u | tr '\n' ' ')
+            EXCLUDES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
+              grep -E '^# CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+ is not set$' | \
+              sed -E 's/^# CONFIG_PACKAGE_([^ ]+) is not set$/-\1/' | sort -u | tr '\n' ' ')
+            PACKAGES="${PACKAGES} ${EXCLUDES}"
+            PACKAGES=$(echo "$PACKAGES" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+          else
+            echo "📋 IB 包清单来自 plan: ${PACKAGES}"
+          fi
           # IB 固件签名: 与 SDK 共用同一对密钥 (通过 BUILD_KEY_APK_* 注入 make image)
           # fingerprint=none 表示密钥缺失/无效, IB 固件同样跳过签名
           SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
@@ -1043,8 +1108,13 @@ jobs:
           # 故从 seed 提取全部设备行, 逐个 PROFILE 构建。兼容两种格式:
           #   mt798x:    CONFIG_TARGET_DEVICE_mediatek_mt7981_DEVICE_jcg_q30-pro=y
           #   qualcommax: CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_link_nn6000-v2=y
-          PROFILES=$(grep -hoE '^CONFIG_TARGET_(DEVICE_)?[A-Za-z0-9_]+_DEVICE_[A-Za-z0-9_-]+=y$' "$SEED_DIR"/*.seed \
-            | sed -E 's/^CONFIG_TARGET_(DEVICE_)?.*_DEVICE_([^=]+)=y/\2/' | sort -u | tr '\n' ' ')
+          PROFILES="${{ inputs.ib_profiles }}"
+          if [ -z "$PROFILES" ]; then
+            PROFILES=$(grep -hoE '^CONFIG_TARGET_(DEVICE_)?[A-Za-z0-9_]+_DEVICE_[A-Za-z0-9_-]+=y$' "$SEED_DIR"/*.seed \
+              | sed -E 's/^CONFIG_TARGET_(DEVICE_)?.*_DEVICE_([^=]+)=y/\2/' | sort -u | tr '\n' ' ')
+          else
+            echo "📋 IB PROFILE 列表来自 plan: ${PROFILES}"
+          fi
           if [ -z "$PROFILES" ]; then
             echo "⚠️ seed 未提取到设备列表, 回退默认 (IB 仅构建首个设备)"
             PROFILES="_default_"
