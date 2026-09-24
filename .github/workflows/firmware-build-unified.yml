@@ -532,9 +532,34 @@ jobs:
                 done
                 TEMP_CHANGED=$(echo "$TEMP_CHANGED" | xargs | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
                 if [ -n "$TEMP_CHANGED" ]; then
-                  echo "  🟡 [${MATRIX_TARGET}] $(echo "$TEMP_CHANGED" | wc -w) 个包变更: ${TEMP_CHANGED}"
-                  CHANGED_PACKAGES_FINAL="$TEMP_CHANGED"
-                  PKG_STATUS="🟡 $(echo "$TEMP_CHANGED" | wc -w)个"
+                  # 求变更包 ∩ sdk.config 包的交集: SDK 只能编译 sdk.config 清单内的包
+                  # (package 目录已固化); 不在清单内的包 (如 tailscale/wrtbwmon) 只能
+                  # 由全量编译产出, 变更时需升级为全量而非 SDK 增量。
+                  CONFIG_FILE="${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${MATRIX_TARGET}/sdk.config"
+                  SDK_CONFIG_PKGS=$(if [ -f "$CONFIG_FILE" ]; then
+                    grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]*=[ym]$' "$CONFIG_FILE" | sed -E 's/CONFIG_PACKAGE_(.*)=[ym]/\1/' | sed 's/luci-i18n-[^ ]*//g' | tr '\n' ' ' | sed 's/^ *//;s/ *$//'
+                  else echo ""; fi)
+                  OUTSIDE_SDK=""
+                  INTERSECT=""
+                  for pkg_name in $TEMP_CHANGED; do
+                    if echo " $SDK_CONFIG_PKGS " | grep -q " $pkg_name "; then
+                      INTERSECT="$INTERSECT $pkg_name"
+                    else
+                      OUTSIDE_SDK="$OUTSIDE_SDK $pkg_name"
+                    fi
+                  done
+                  INTERSECT=$(echo "$INTERSECT" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+                  OUTSIDE_SDK=$(echo "$OUTSIDE_SDK" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+                  if [ -n "$OUTSIDE_SDK" ]; then
+                    echo "  🔴 [${MATRIX_TARGET}] $(echo "$OUTSIDE_SDK" | wc -w) 个变更包不在 sdk.config 内 (${OUTSIDE_SDK}) → 升级全量编译"
+                    PACKAGES_CHANGED=false
+                    PKG_STATUS="🟠 需全量"
+                    CHANGED_PACKAGES_FINAL="*"
+                  else
+                    echo "  🟡 [${MATRIX_TARGET}] $(echo "$INTERSECT" | wc -w) 个包变更: ${INTERSECT}"
+                    CHANGED_PACKAGES_FINAL="$INTERSECT"
+                    PKG_STATUS="🟡 $(echo "$INTERSECT" | wc -w)个"
+                  fi
                 else
                   echo "  ✅ [${MATRIX_TARGET}] 包级指纹一致——撤销 feed 级变更信号"
                   PACKAGES_CHANGED=false
@@ -855,9 +880,8 @@ jobs:
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_build_sdk_ib:       true
-      # sdk-ib 模式需要把所有 sdk.config 包重编译注入 IB（固件必须完整）；
-      # 纯 packages 模式才使用 plan 计算的变更子集（matrix.sdk_packages）。
-      matrix_sdk_packages:     '*'
+      # sdk-ib 只重编变更包 (plan 计算 ∩ sdk.config 范围)，IB 基线保留其余包的旧版本
+      matrix_sdk_packages:     ${{ matrix.sdk_packages }}
       ib_packages:             ${{ matrix.ib_packages }}
       ib_profiles:             ${{ matrix.ib_profiles }}
       matrix_config_sha:          ${{ matrix.current_config_sha }}
