@@ -24,6 +24,13 @@ on:
       # ── plan 预计算下传 (IB 组装参数; 为空时 executor 回退自提取) ──
       ib_packages:               { required: false, type: string, default: '' }
       ib_profiles:               { required: false, type: string, default: '' }
+      # ── P2: plan 预计算下传 (SDK/IB 文件解析; 为空时 executor 本地回退自解析) ──
+      matrix_sdk_file:           { required: false, type: string, default: '' }
+      matrix_sdk_version:        { required: false, type: string, default: '' }
+      matrix_sdk_sha256:         { required: false, type: string, default: '' }
+      matrix_sdk_source_sha:     { required: false, type: string, default: '' }
+      matrix_ib_file:            { required: false, type: string, default: '' }
+      matrix_ib_version:         { required: false, type: string, default: '' }
       # ── 默认值（workflow 内置）──
       defaults_repo:             { required: false, type: string, default: 'solarflows/AutoWorkflows' }
       defaults_ref:              { required: false, type: string, default: 'main' }
@@ -69,40 +76,52 @@ jobs:
           path: pkgs-feed
           fetch-depth: 1
 
+      # P2: SDK 文件选择是 plan 的决策 (probe_index 已校验 file/sha256/source_sha
+      # 与资产存在性)。plan 值缺失时回退 executor 本地自解析 (向后兼容)。
       - name: Resolve SDK file name
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
-          TAG="${{ inputs.matrix_artifacts_release_tag }}"
-          REPO="${{ inputs.matrix_artifacts_release_repo }}"
+          SDK_FILE="${{ inputs.matrix_sdk_file }}"
+          SDK_VERSION="${{ inputs.matrix_sdk_version }}"
+          SDK_SHA256="${{ inputs.matrix_sdk_sha256 }}"
+          SDK_SOURCE_SHA="${{ inputs.matrix_sdk_source_sha }}"
 
-          mkdir -p /tmp/sdk_index
-          (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "sdk-index.json" 2>/dev/null) || {
-            echo "::error::sdk-index.json 不存在，SDK 增量路径不可用（需先跑 full 生成 SDK）"
-            exit 1
-          }
+          if [ -n "$SDK_FILE" ] && [ -n "$SDK_VERSION" ] && [ -n "$SDK_SHA256" ] && [ -n "$SDK_SOURCE_SHA" ]; then
+            echo "📌 SDK 由 plan 指定: ${SDK_VERSION} / ${SDK_FILE}"
+          else
+            TAG="${{ inputs.matrix_artifacts_release_tag }}"
+            REPO="${{ inputs.matrix_artifacts_release_repo }}"
 
-          # index.json 的 key 是源码 VERSION_NUMBER (如 21.02.7 / SNAPSHOT-20260801),
-          # 与本次 run 的计划版本无关,故取 built_at 最新的一条.
-          VERSION=$(jq -r 'to_entries | sort_by(.value.built_at) | last | .key // empty' /tmp/sdk_index/sdk-index.json)
-          SDK_FILE=$(jq -r --arg v "$VERSION" '.[$v].file // empty' /tmp/sdk_index/sdk-index.json)
-          if [ -z "$SDK_FILE" ]; then
-            echo "::error::SDK index.json 中无可用版本"
-            jq . /tmp/sdk_index/sdk-index.json
-            exit 1
-          fi
-          echo "📌 选用最新 SDK 版本: ${VERSION}"
-          SDK_SHA256=$(jq -r --arg v "$VERSION" '.[$v].sha256 // empty' /tmp/sdk_index/sdk-index.json)
-          SDK_SOURCE_SHA=$(jq -r --arg v "$VERSION" '.[$v].source_sha // empty' /tmp/sdk_index/sdk-index.json)
-          if [ -z "$SDK_SHA256" ] || [ -z "$SDK_SOURCE_SHA" ]; then
-            echo "::error::SDK index.json 的 ${VERSION} 记录缺少 sha256 或 source_sha"
-            exit 1
+            mkdir -p /tmp/sdk_index
+            (cd /tmp/sdk_index && gh release download "$TAG" --repo "$REPO" --pattern "sdk-index.json" 2>/dev/null) || {
+              echo "::error::sdk-index.json 不存在，SDK 增量路径不可用（需先跑 full 生成 SDK）"
+              exit 1
+            }
+
+            # index.json 的 key 是源码 VERSION_NUMBER (如 21.02.7 / SNAPSHOT-20260801),
+            # 与本次 run 的计划版本无关,故取 built_at 最新的一条.
+            VERSION=$(jq -r 'to_entries | sort_by(.value.built_at) | last | .key // empty' /tmp/sdk_index/sdk-index.json)
+            SDK_FILE=$(jq -r --arg v "$VERSION" '.[$v].file // empty' /tmp/sdk_index/sdk-index.json)
+            if [ -z "$SDK_FILE" ]; then
+              echo "::error::SDK index.json 中无可用版本"
+              jq . /tmp/sdk_index/sdk-index.json
+              exit 1
+            fi
+            echo "📌 选用最新 SDK 版本: ${VERSION}"
+            SDK_SHA256=$(jq -r --arg v "$VERSION" '.[$v].sha256 // empty' /tmp/sdk_index/sdk-index.json)
+            SDK_SOURCE_SHA=$(jq -r --arg v "$VERSION" '.[$v].source_sha // empty' /tmp/sdk_index/sdk-index.json)
+            if [ -z "$SDK_SHA256" ] || [ -z "$SDK_SOURCE_SHA" ]; then
+              echo "::error::SDK index.json 的 ${VERSION} 记录缺少 sha256 或 source_sha"
+              exit 1
+            fi
+            SDK_VERSION="$VERSION"
           fi
 
           echo "sdk_file=${SDK_FILE}" >> $GITHUB_OUTPUT
           echo "sdk_sha256=${SDK_SHA256}" >> $GITHUB_OUTPUT
-          echo "sdk_version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "sdk_version=${SDK_VERSION}" >> $GITHUB_OUTPUT
           echo "sdk_source_sha=${SDK_SOURCE_SHA}" >> $GITHUB_OUTPUT
           echo "📋 SDK: ${SDK_FILE}"
 
@@ -976,6 +995,8 @@ jobs:
           path: build-info.json
           retention-days: 7
 
+      # P2: IB 文件选择是 plan 的决策 (plan 已验证与 SDK 同源同版本)。
+      # plan 值缺失时回退 executor 本地自解析 (向后兼容)。
       - name: Resolve IB file for combined build
         if: inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
         id: resolve-ib
@@ -983,26 +1004,36 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/ib_index
-          gh release download "${{ inputs.matrix_artifacts_release_tag }}" \
-            --repo "${{ inputs.matrix_artifacts_release_repo }}" \
-            --pattern ib-index.json --dir /tmp/ib_index
+          IB_FILE="${{ inputs.matrix_ib_file }}"
+          IB_VERSION="${{ inputs.matrix_ib_version }}"
           VERSION="${{ steps.resolve.outputs.sdk_version }}"
-          SDK_SOURCE_SHA="${{ steps.resolve.outputs.sdk_source_sha }}"
-          IB_FILE=$(jq -r --arg v "$VERSION" --arg src "$SDK_SOURCE_SHA" \
-            '.[$v] | select(.source_sha == $src) | .file // empty' /tmp/ib_index/ib-index.json)
-          [ -n "$IB_FILE" ] || {
-            echo "::error::没有与 SDK ${VERSION} (${SDK_SOURCE_SHA}) 同源的 IB"
-            exit 1
-          }
+
+          if [ -n "$IB_FILE" ]; then
+            # plan 已校验 IB 与 SDK 同版本同 source_sha, 直接透传
+            IB_VERSION="${IB_VERSION:-$VERSION}"
+            echo "📌 IB 由 plan 指定: ${IB_VERSION} / ${IB_FILE}"
+          else
+            mkdir -p /tmp/ib_index
+            gh release download "${{ inputs.matrix_artifacts_release_tag }}" \
+              --repo "${{ inputs.matrix_artifacts_release_repo }}" \
+              --pattern ib-index.json --dir /tmp/ib_index
+            SDK_SOURCE_SHA="${{ steps.resolve.outputs.sdk_source_sha }}"
+            IB_FILE=$(jq -r --arg v "$VERSION" --arg src "$SDK_SOURCE_SHA" \
+              '.[$v] | select(.source_sha == $src) | .file // empty' /tmp/ib_index/ib-index.json)
+            [ -n "$IB_FILE" ] || {
+              echo "::error::没有与 SDK ${VERSION} (${SDK_SOURCE_SHA}) 同源的 IB"
+              exit 1
+            }
+            IB_VERSION="$VERSION"
+          fi
           echo "ib_file=$IB_FILE" >> "$GITHUB_OUTPUT"
-          echo "ib_version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "ib_version=$IB_VERSION" >> "$GITHUB_OUTPUT"
           {
             echo ""
             echo "### 📌 IB artifact 版本"
             echo "| 项目 | 版本/文件 |"
             echo "|---|---|"
-            echo "| 实际 IB artifact | \`${VERSION}\` |"
+            echo "| 实际 IB artifact | \`${IB_VERSION}\` |"
             echo "| IB 文件 | \`${IB_FILE}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 

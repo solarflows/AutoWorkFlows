@@ -756,13 +756,37 @@ jobs:
             elif [ "$SHOULD_SDK_PKGS" = "true" ]; then BUILD_MODE=packages
             fi
 
+            # ── P2: plan 下传 SDK/IB 文件解析 (executor 不再自行选文件) ──
+            # probe_index 成功时 selected.json 已含 {key: 版本, value: {file, sha256, source_sha}};
+            # 未探测 (skip/firmware 模式) 时字段留空, 不写入 plan。
+            SDK_FILE=""; SDK_VERSION=""; SDK_SHA256=""; SDK_SOURCE_SHA=""; IB_FILE=""; IB_VERSION=""
+            if [ -f "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json" ]; then
+              SDK_FILE=$(jq -r '.value.file // empty' "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json")
+              SDK_VERSION=$(jq -r '.key // empty' "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json")
+              SDK_SHA256=$(jq -r '.value.sha256 // empty' "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json")
+              SDK_SOURCE_SHA=$(jq -r '.value.source_sha // empty' "/tmp/sdk-probe-${MATRIX_TARGET}/selected.json")
+            fi
+            if [ -f "/tmp/ib-probe-${MATRIX_TARGET}/selected.json" ]; then
+              IB_FILE=$(jq -r '.value.file // empty' "/tmp/ib-probe-${MATRIX_TARGET}/selected.json")
+              IB_VERSION=$(jq -r '.key // empty' "/tmp/ib-probe-${MATRIX_TARGET}/selected.json")
+            fi
+
             jq --argjson config "$TARGET_CONFIG" --arg mode "$BUILD_MODE" \
               --argjson sdk_ready "$SDK_READY" --argjson ib_ready "$IB_READY" \
               --argjson fw "$SHOULD_FW" --argjson sdk_ib "$SHOULD_SDK_IB" --argjson pkgs "$SHOULD_SDK_PKGS" \
               --argjson pub_fw "$SHOULD_PUB_FW" --argjson pub_pkgs "$SHOULD_PUB_PKGS" \
               --argjson change "$CHANGE" \
               --arg planned_pkgs "$(echo "$CHANGE" | jq -r '.sdk_packages // "*"')" \
-              '. + [$config + $change + {sdk_packages:$planned_pkgs, sdk_ready:$sdk_ready, ib_ready:$ib_ready, build_mode:$mode, build_firmware:$fw, build_sdk_ib:$sdk_ib, build_sdk_pkgs:$pkgs, publish_firmware:$pub_fw, publish_pkgs:$pub_pkgs}]' \
+              --arg sdk_file "$SDK_FILE" --arg sdk_version "$SDK_VERSION" \
+              --arg sdk_sha256 "$SDK_SHA256" --arg sdk_source_sha "$SDK_SOURCE_SHA" \
+              --arg ib_file "$IB_FILE" --arg ib_version "$IB_VERSION" \
+              '. + [$config + $change + {sdk_packages:$planned_pkgs, sdk_ready:$sdk_ready, ib_ready:$ib_ready, build_mode:$mode, build_firmware:$fw, build_sdk_ib:$sdk_ib, build_sdk_pkgs:$pkgs, publish_firmware:$pub_fw, publish_pkgs:$pub_pkgs}
+                + (if $sdk_file != "" then {sdk_file:$sdk_file} else {} end)
+                + (if $sdk_version != "" then {sdk_version:$sdk_version} else {} end)
+                + (if $sdk_sha256 != "" then {sdk_sha256:$sdk_sha256} else {} end)
+                + (if $sdk_source_sha != "" then {sdk_source_sha:$sdk_source_sha} else {} end)
+                + (if $ib_file != "" then {ib_file:$ib_file} else {} end)
+                + (if $ib_version != "" then {ib_version:$ib_version} else {} end)]' \
               /tmp/target_plan.json > /tmp/target_plan.new
             mv /tmp/target_plan.new /tmp/target_plan.json
           done
@@ -884,6 +908,13 @@ jobs:
       matrix_sdk_packages:     ${{ matrix.sdk_packages }}
       ib_packages:             ${{ matrix.ib_packages }}
       ib_profiles:             ${{ matrix.ib_profiles }}
+      # P2: SDK/IB 文件解析由 plan 完成, executor 透传 (本地回退仅兜底)
+      matrix_sdk_file:         ${{ matrix.sdk_file }}
+      matrix_sdk_version:      ${{ matrix.sdk_version }}
+      matrix_sdk_sha256:       ${{ matrix.sdk_sha256 }}
+      matrix_sdk_source_sha:   ${{ matrix.sdk_source_sha }}
+      matrix_ib_file:          ${{ matrix.ib_file }}
+      matrix_ib_version:       ${{ matrix.ib_version }}
       matrix_config_sha:          ${{ matrix.current_config_sha }}
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
@@ -919,6 +950,11 @@ jobs:
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_sdk_packages:       ${{ matrix.sdk_packages }}
+      # P2: SDK 文件解析由 plan 完成, executor 透传 (本地回退仅兜底)
+      matrix_sdk_file:           ${{ matrix.sdk_file }}
+      matrix_sdk_version:        ${{ matrix.sdk_version }}
+      matrix_sdk_sha256:         ${{ matrix.sdk_sha256 }}
+      matrix_sdk_source_sha:     ${{ matrix.sdk_source_sha }}
       matrix_config_sha:          ${{ matrix.current_config_sha }}
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}

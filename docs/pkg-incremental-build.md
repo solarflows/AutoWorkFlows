@@ -1,6 +1,6 @@
 # 按需编译演进计划（Package-Grained Incremental Build）
 
-> 状态：设计已定稿，P1 已实现待验证，P2/P3 未实施
+> 状态：设计已定稿，P1/P2 已实现待验证，P3 未实施
 > 关联：`firmware-build-unified.yml`（plan）、`compile-packages.yml`（executor）、`docs/todo.md`（台账）
 > 最后核对：2026-09-24
 
@@ -62,16 +62,18 @@ executor 编译循环对每个包记录：
 
 输出：`📊 逐包编译报表` Markdown 表格写入 step summary；JSON 通过 `packages_report` output 传递。
 
-## 4. P2：plan 下传 SDK/IB 文件解析（已设计未实现）
+## 4. P2：plan 下传 SDK/IB 文件解析（已实现，🟨）
 
 ### 动机
-executor 目前自下载 `sdk-index.json`/`ib-index.json` 并 jq 排序选最新条目，这是决策（选哪个文件）而非执行（下载文件）。
+executor 原本自下载 `sdk-index.json`/`ib-index.json` 并 jq 排序选最新条目，这是决策（选哪个文件）而非执行（下载文件）。
 
-### 方案
-- plan `Decide build mode` 已用 `probe_index` 下载并校验 index，扩展其提取 file/version/sha256/source_sha 写入 matrix
-- executor 新增 input：`matrix_sdk_file`/`matrix_sdk_version`/`matrix_sdk_sha256`/`matrix_sdk_source_sha`/`matrix_ib_file`
-- executor 的 `Resolve SDK file name`（约 97 行）删减为直接透传 output；`Resolve IB file`（约 26 行）同理
-- 预计净 -70 行
+### 实现
+- plan `Decide build mode`：`probe_index` 成功后，从 `/tmp/{sdk,ib}-probe-<target>/selected.json` 提取 `file`/`key`(version)/`sha256`/`source_sha`，写入 `target_plan.json` 并传至 `run-sdk-ib`/`run-packages` matrix 字段
+- executor 新增 input：`matrix_sdk_file`/`matrix_sdk_version`/`matrix_sdk_sha256`/`matrix_sdk_source_sha`/`matrix_ib_file`/`matrix_ib_version`
+- executor `Resolve SDK file name`：plan 值不为空时直接透传 output（跳过 gh release download + jq 排序）；为空时保留本地自解析回退
+- executor `Resolve IB file`：同上
+- `Setup Signing Key` 不移动（需读取实际 SDK tarball 的 `Config-build.in`，plan 无该数据）
+- 净效果：plan 侧新增 6 个变量提取与 6 个 jq 条件字段；executor 侧 `Resolve SDK file name`/`Resolve IB file` 变为"plan 值优先透传 + 本地回退"结构，删除了独立的二次决策逻辑
 
 ## 5. P3：保留 executor 自治的部分（有意为之）
 
@@ -98,10 +100,14 @@ executor 目前自下载 `sdk-index.json`/`ib-index.json` 并 jq 排序选最新
 | `4c0d45c4` | 移除 sdk-cache-lookup 冗余预查步骤 |
 | `455421e0` | SDK 编译前屏蔽 kmod 包防止触发内核全模块重编 |
 | `1dad4519` | 包级指纹变更检测 + plan 下传包子集 + 逐包数据采集 + persist-state 回写 |
+| `87473989` | sdk-ib 接受 plan 下传变更包子集并求 sdk.config 交集 |
+| `b816ebe4` | 本计划文档落地 |
+| 本组提交 | P2：SDK/IB 文件解析上移 plan，executor 透传（保留本地回退） |
 
 ## 8. 待验证项
 
 - [ ] sdk-ib 真实触发一次验证：变更包子集 + IB 注入 + 未变更包保留旧版本
 - [ ] smart 无变更路径：plan 判定跳过，0 executor
 - [ ] 变更包在 sdk.config 之外 → 升级全量的分支
-- [ ] P2 实施（SDK/IB 文件解析上移）
+- [ ] P2 透传路径：plan 指定 SDK/IB 文件后 executor 跳过 index 自解析（本地回退分支也应保持可用）
+- [ ] G10（残余 bug）：PKG_ARTIFACTS 采集时机移到编译后

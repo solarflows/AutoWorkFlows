@@ -12,7 +12,7 @@
 | ❓ | 待决：附选项，讨论不从头开始 |
 | 🚫 | 已否决：保留理由，防止重复提议 |
 
-最后核对：2026-09-19
+最后核对：2026-09-24
 
 ---
 
@@ -83,6 +83,23 @@
 | F2 | mt798x 无法使用 SONiC fullcone | 🚫 | 仓库 `solarflows/immortalwrt-mt798x@test` 为 `KERNEL_PATCHVER:=5.4`，无 `hack-6.18`；包带 `@LINUX_6_18` | 已有旧版 `fullconenat`/`kmod-ipt-fullconenat`（fw3），继续保留；不要提议给 mt798x 加 sonic |
 | F3 | LuCI feed 耦合风险（sonic 补丁桥） | ❓ | `fullconenat-sonic/patches/apply-luci-feed.sh` 在补丁上下文不匹配时 `exit 1` | 见待决 4 |
 
+## G. 包粒度增量编译（按需编译演进计划）
+
+设计文档：`docs/pkg-incremental-build.md`（P1/P2/P3 全貌与数据流）
+
+| ID | 项目 | 状态 | 证据 | 备注 |
+|---|---|---|---|---|
+| G1 | 移除 sdk-cache-lookup 冗余预查步骤 | ✅ | commit `4c0d45c4`，run `35861454202` | 修复前每次 run 先预查 SDK 缓存再被正式 restore 覆盖 |
+| G2 | SDK 编译前屏蔽 kmod 包（防内核全模块重编） | 🟨 | commit `455421e0`，`compile-packages.yml` `🔒 Freeze kernel modules` | 修复前 SDK `.config` 保留 `CONFIG_PACKAGE_kmod-*=y`，任一 make 触发 stale-stamp 内核重编摧毁预编译 kmod ipk（ipq807x 根因，见 pitfalls） |
+| G3 | 包级指纹变更检测（plan 侧） | 🟨 | commit `1dad4519`，`firmware-build-unified.yml` `Load targets & check changes` | `packages.lock.json` 逐包 commit 比对；全一致撤销 feed 变更信号 |
+| G4 | plan 下传变更包子集 + sdk.config 交集 | 🟨 | commit `87473989` | 变更包 ∩ sdk.config；交集为空→升级全量（SDK 无该包目录）；lock 无条目→`*` |
+| G5 | 逐包编译数据采集与报表 | 🟨 | commit `1dad4519`，`compile-packages.yml` 编译循环 | wall_sec/exit/compile_time/version/artifacts；报表写 step summary |
+| G6 | 状态回写闭环（.packages 字段） | 🟨 | commit `1dad4519`，`persist-state` merge 步骤 | executor 扁平化 `{pkg: commit}` → build-info.json → IMMWRT_BUILD_STATE |
+| G7 | IB 组装参数由 plan 下传 | 🟨 | commit `87473989`，`run-sdk-ib` 传 `ib_packages`/`ib_profiles` | 为空时 executor 回退 seed 提取（向后兼容） |
+| G8 | P2：SDK/IB 文件解析上移 plan | 🟨 | commit（本组提交），`firmware-build-unified.yml` `Decide build mode` 提取 `selected.json` → `run-sdk-ib`/`run-packages` 新 matrix 字段；`compile-packages.yml` `Resolve SDK file name`/`Resolve IB file` 改为透传（保留本地回退） | plan 已用 `probe_index` 校验 file/sha256/source_sha 与资产存在性；executor 不再自行选文件 |
+| G9 | sdk-ib 真实构建验证（变更包子集 + IB 注入） | ⬜ | 无 run 证据 | 验证项见 `pkg-incremental-build.md` § 待验证项：smart 无变更跳过 / sdk.config 之外变更包升级全量 / P2 透传路径 |
+| G10 | PKG_ARTIFACTS 采集时机修复 | ⬜ | `compile-packages.yml` 编译循环 | 已知残余问题：artifacts 当前在编译前采集，应在编译后重扫 |
+
 ## 待决
 
 1. **裁 `sdk-hostpkg` 快照里的 `dl/rustc` / `dl/cargo` / `tmp/go-build`** — 单代 3.10GB，是稳态 8.51GB 的大头。选项：A 只裁 `dl/rustc`（只在 rust 重建时被读，可重新下载）；B 先看 C6 实测数据再定；C 不动。注意：改 path 列表会改 cache version，三处声明必须同步（`compile-packages.yml` restore + save、`compile-firmware.yml` save）。
@@ -90,5 +107,6 @@
 3. **是否用 hooks 做确定性拦截** — 台账目前靠 `AGENTS.md` 指令，非强制。选项：A 不做（倾向，指令已够）；B 加 `SessionStart` 提醒；C `PreToolUse` 拦截 workflow 编辑（易误报）。
 4. **SONiC fullcone 对 LuCI feed 的硬耦合** — `include/toplevel.mk` 的 `prepare-tmpinfo` 会调用 `apply-luci-feed.sh`，向 `feeds/luci` 的两个文件打补丁（`luci-base` 的 `rpcd/ucode/luci` 删一行、`luci-app-firewall` 的 `zones.js` 删一段）；补丁已应用则跳过，**上下文不匹配则 `exit 1` 直接中断构建**。而我们的 luci feed 是上游滚动的 `immortalwrt/luci`（`feeds.conf.default`，未经我们固化）。选项：A 接受风险，失败时按日志手修（当前）；B 在 `upstream-sync.yml` 里把 luci feed 固定到已验证的 commit（改 `feeds.conf.default` 的 luci 行）；C 向 fork 提上游反馈要求降耦合。
 5. **方向 2 备选架构：Fork 分支自动化补丁指纹追踪与 Revert 机制** — 针对未来若有需要严格保留下游 commit 历史的分支：CI 维护补丁应用清单，当检测到本地补丁删除时自动触发 `git revert` 逆向消除，避免手写反向补丁与变基地狱。目前作为备选架构方案储备，未来如需持久化分支历史时启用。
+6. **G10：PKG_ARTIFACTS 采集时机** — 当前编译循环在 `make` 之前 `find bin/packages` 采集 ipk/apk 列表，采集到的是旧产物。选项：A 在编译后重扫一次并覆盖输出；B 在编译后增量 diff。倾向 A（单次重扫成本可忽略）。
 
 - `docs/ci-flow.md` 讲"怎么跑"，`docs/openwrt-build-pitfalls.md` 讲"为什么坏过"，本文件讲"现在到底有没有"。
