@@ -552,7 +552,9 @@ jobs:
                   OUTSIDE_SDK=$(echo "$OUTSIDE_SDK" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
                   if [ -n "$OUTSIDE_SDK" ]; then
                     echo "  🔴 [${MATRIX_TARGET}] $(echo "$OUTSIDE_SDK" | wc -w) 个变更包不在 sdk.config 内 (${OUTSIDE_SDK}) → 升级全量编译"
-                    PACKAGES_CHANGED=false
+                    # 保持 PACKAGES_CHANGED=true: feed 级检测已确认 HEAD 变了,
+                    # 包级指纹确认具体包变了; Stage 2 会根据 sdk_packages="*" 把本 target
+                    # 路由到全量固件编译而非 SDK 增量。
                     PKG_STATUS="🟠 需全量"
                     CHANGED_PACKAGES_FINAL="*"
                   else
@@ -738,7 +740,12 @@ jobs:
               if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "false" ]; then
                 :
               elif [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ]; then
-                if [ "$SDK_READY" = "true" ] && [ "$IB_READY" = "true" ]; then
+                PLANNED_PKGS=$(echo "$CHANGE" | jq -r '.sdk_packages // "*"')
+                if [ "$PLANNED_PKGS" = "*" ]; then
+                  # 包级指纹判定需全量 (变更包不在 sdk.config 内, Stage 1 设 sdk_packages="*")
+                  echo "🟠 [${MATRIX_TARGET}] 变更包不在 sdk.config 内,升级全量编译"
+                  SHOULD_FW=true; SHOULD_PUB_FW=true
+                elif [ "$SDK_READY" = "true" ] && [ "$IB_READY" = "true" ]; then
                   SHOULD_SDK_PKGS=true; SHOULD_SDK_IB=true
                   SHOULD_PUB_PKGS=true; SHOULD_PUB_FW=true
                 else
