@@ -110,4 +110,3 @@ executor 原本自下载 `sdk-index.json`/`ib-index.json` 并 jq 排序选最新
 - [ ] smart 无变更路径：plan 判定跳过，0 executor
 - [ ] 变更包在 sdk.config 之外 → 升级全量的分支
 - [ ] P2 透传路径：plan 指定 SDK/IB 文件后 executor 跳过 index 自解析（本地回退分支也应保持可用）
-- [ ] G10（残余 bug）：PKG_ARTIFACTS 采集时机移到编译后
