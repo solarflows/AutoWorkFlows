@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ESNext"
+  },
+  "exclude": [
+    ".diagnostics",
+    ".local",
+    ".codegraph"
+  ]
+}
