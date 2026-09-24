@@ -4,6 +4,8 @@
 
 **维护流程**：改动使某行状态变化时，在同一提交内更新该行；证据用 run ID / commit SHA / 文件行，写不出证据的记 🟨 而不是 ✅；🚫 行不得无新证据重复提议，❓ 行在其选项上继续。
 
+优先级定义：**P0** = 可能造成数据损坏/错误结果；**P1** = 确定性问题；**P2** = 性能与维护性优化。
+
 | 状态 | 含义 |
 |---|---|
 | ✅ | 已实现，真实运行验证过 |
@@ -18,87 +20,87 @@
 
 ## A. 缓存治理
 
-| ID | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|
-| C1 | 工具链快照命中即跳过重复 save | 🟨 | `compile-firmware.yml` `Check existing toolchain snapshot` | 修复前每轮固定报 `Unable to reserve cache`（内容寻址 key 不可覆盖，与配额无关） |
-| C2 | 全量执行器收敛自己写入的 sdk-hostpkg 种子快照 | 🟨 | `compile-firmware.yml` `Purge stale SDK hostpkg snapshots` | 修复前该 namespace 只写不清理，每轮净增 0.5~1.7GB/target |
-| C3 | 三个命名空间均为"每 target 最新 1 份" | ✅ | 两个 executor 各自的 purge 步骤 | 锚定正则 + 显式排除当前 key |
-| C4 | 保存顺序保持 save → purge | 🚫 | pitfalls § Cache Quota and Eviction | 否决"先删后存"：会破坏"新快照保存成功后才删旧"的兜底 |
-| C5 | 平台驱逐机制（配额驱动 + last-access 有序） | ✅ | run `35313768877` 配额时间线 | 平台不是乱删，但只认"最近是否被读过"，故写入方仍须自约束 |
-| C6 | 可缓存路径逐项体量诊断 | 🟨 | `compile-firmware.yml` `📦 可缓存路径体量` | 为 C7 提供实测数据 |
-| C7 | 裁剪 `dl/rustc` / `dl/cargo` / `tmp/go-build` | ❓ | 待决 1 | |
-| C8 | 仓库缓存配额（10GB）逼近策略 | ❓ | 待决 2 | |
-| C9 | 7 天未访问自动过期（低频 target） | ⬜ | 官方规则 | 目前仅靠每轮 restore 被动刷新 |
-| C10 | SDK 与全量共享 ccache 命名空间 | ✅ | commit `b57d87d` | |
+| ID | P | 项目 | 状态 | 证据 | 备注 |
+|---|---|---|---|---|---|---|
+| C1 | P2 | 工具链快照命中即跳过重复 save | 🟨 | `compile-firmware.yml` `Check existing toolchain snapshot` | 修复前每轮固定报 `Unable to reserve cache`（内容寻址 key 不可覆盖，与配额无关） |
+| C2 | P2 | 全量执行器收敛自己写入的 sdk-hostpkg 种子快照 | 🟨 | `compile-firmware.yml` `Purge stale SDK hostpkg snapshots` | 修复前该 namespace 只写不清理，每轮净增 0.5~1.7GB/target |
+| C3 | P2 | 三个命名空间均为"每 target 最新 1 份" | ✅ | 两个 executor 各自的 purge 步骤 | 锚定正则 + 显式排除当前 key |
+| C4 | P2 | 保存顺序保持 save → purge | 🚫 | pitfalls § Cache Quota and Eviction | 否决"先删后存"：会破坏"新快照保存成功后才删旧"的兜底 |
+| C5 | P2 | 平台驱逐机制（配额驱动 + last-access 有序） | ✅ | run `35313768877` 配额时间线 | 平台不是乱删，但只认"最近是否被读过"，故写入方仍须自约束 |
+| C6 | P2 | 可缓存路径逐项体量诊断 | 🟨 | `compile-firmware.yml` `📦 可缓存路径体量` | 为 C7 提供实测数据 |
+| C7 | P1 | 裁剪 `dl/rustc` / `dl/cargo` / `tmp/go-build` | ❓ | 待决 1 | |
+| C8 | P1 | 仓库缓存配额（10GB）逼近策略 | ❓ | 待决 2 | |
+| C9 | P2 | 7 天未访问自动过期（低频 target） | ⬜ | 官方规则 | 目前仅靠每轮 restore 被动刷新 |
+| C10 | P2 | SDK 与全量共享 ccache 命名空间 | ✅ | commit `b57d87d` | |
 
 ## B. Release 与产物
 
-| ID | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|
-| R1 | 固件目录排除 `*-sdk-*` / `*-imagebuilder-*` | ✅ | commit `ae76ca7` | 修复前 SDK/IB 混入固件 Release，致上传 43 分钟后 502 |
-| R2 | Release 资产上传逐文件重试（3 次退避） | ✅ | commit `ae76ca7` | 覆盖固件、Passwall、SDK/IB、index.json |
-| R3 | 空固件目录拒绝创建 Release | ✅ | `compile-firmware.yml` `Publish firmware release` | |
-| R4 | SDK/IB 版本索引与保留数 | ✅ | `compile-firmware.yml`；`ARTIFACTS_KEEP_VERSIONS=7` | |
+| ID | P | 项目 | 状态 | 证据 | 备注 |
+|---|---|---|---|---|---|---|
+| R1 | P1 | 固件目录排除 `*-sdk-*` / `*-imagebuilder-*` | ✅ | commit `ae76ca7` | 修复前 SDK/IB 混入固件 Release，致上传 43 分钟后 502 |
+| R2 | P1 | Release 资产上传逐文件重试（3 次退避） | ✅ | commit `ae76ca7` | 覆盖固件、Passwall、SDK/IB、index.json |
+| R3 | P1 | 空固件目录拒绝创建 Release | ✅ | `compile-firmware.yml` `Publish firmware release` | |
+| R4 | P1 | SDK/IB 版本索引与保留数 | ✅ | `compile-firmware.yml`；`ARTIFACTS_KEEP_VERSIONS=7` | |
 
 ## C. 构建正确性
 
-| ID | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|
-| B1 | 工具链缓存命中时不得显式调子目录目标 | ✅ | commit `273fc79` | 显式 `make tools/compile toolchain/compile` 绕过 stamp → 重编 40+ 分钟 |
-| B2 | `dl/` 残损清理限定 `-maxdepth 1` | ✅ | commit `273fc79` | 递归破坏 `dl/go-mod-cache`、`dl/cargo` |
-| B3 | defconfig 后刷新工具链 stamp 时间戳 | ✅ | commit `530bb50` | 否则 stamp 早于 `.config`，缓存命中失效 |
-| B4 | ccache 包装器变量级验证（`make val.*`） | ✅ | `compile-firmware.yml` `🔨 5. Build Firmware` | 校验通过才保存共享 ccache |
-| B5 | persist-state 不使用 `merge-multiple` | ✅ | `firmware-build-unified.yml` | 同名 `build-info.json` 会互相覆盖 |
-| B6 | 版本号解析 4 级纯字符串顺序 + make 表达式防御 | ✅ | `version-extraction.instructions.md` | exit 127 根因 |
+| ID | P | 项目 | 状态 | 证据 | 备注 |
+|---|---|---|---|---|---|---|
+| B1 | P1 | 工具链缓存命中时不得显式调子目录目标 | ✅ | commit `273fc79` | 显式 `make tools/compile toolchain/compile` 绕过 stamp → 重编 40+ 分钟 |
+| B2 | P1 | `dl/` 残损清理限定 `-maxdepth 1` | ✅ | commit `273fc79` | 递归破坏 `dl/go-mod-cache`、`dl/cargo` |
+| B3 | P1 | defconfig 后刷新工具链 stamp 时间戳 | ✅ | commit `530bb50` | 否则 stamp 早于 `.config`，缓存命中失效 |
+| B4 | P1 | ccache 包装器变量级验证（`make val.*`） | ✅ | `compile-firmware.yml` `🔨 5. Build Firmware` | 校验通过才保存共享 ccache |
+| B5 | P1 | persist-state 不使用 `merge-multiple` | ✅ | `firmware-build-unified.yml` | 同名 `build-info.json` 会互相覆盖 |
+| B6 | P1 | 版本号解析 4 级纯字符串顺序 + make 表达式防御 | ✅ | `version-extraction.instructions.md` | exit 127 根因 |
 
 ## D. 上游同步与 Feed
 
-| ID | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|
-| U1 | `upstream-sync` 定向 fetch + `--force-with-lease` + askpass | ✅ | `upstream-sync.yml` | |
-| U2 | `custom-feed` 提交前 `diff --cached --check` | ✅ | `custom-feed.yml` | trailing whitespace 仅 warning |
-| U3 | `checkout_partial_code` 缺失路径硬失败 | 🚫 | `openwrt-packages/core` | 刻意为：硬失败才能让上游删包立刻暴露，不要改成告警 |
-| U4 | geodata 固定 geoview 版本 + SHA256 校验 | ✅ | `geodata-updater.yml` | `latest` 不可复现 |
-| U5 | smartdns H2 补丁（qualcommax）+ 101 流槽位回收 | 🟨 | `upstream-sync/overlay/packages/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch`（已同步，feed blob `79b8a106` 与本地逐字节一致）、新增 `101-reap-stalled-http2-streams.patch`（本地 GNU patch 在 48.4 源树 100→101 依次应用通过） | 101 修两处：① `http2_stream_close` 延迟关闭加 5s 时限（发送窗口永不恢复时回收 `active_local_streams` 槽位）；② 饱和连接以 `ECONNRESET` 返回，走 `_dns_client_send_one_packet` 的立即重建分支（裸 `ENOSPC` 只会 `prohibit=1` 屏蔽上游 60s）。上游 master 未修（开放 PR #2458/#2422 均未合），待真实构建验证 |
-| U6 | mt798x smartdns bump 48.4 + 同补丁 | 🟨 | `custom-feed/patches/mt798x/0009-smartdns-bump-48.4.patch`（git→tarball 48.4，`PKG_HASH=b07abba9…`，与 qualcommax 同源同版本）、`custom-feed/overlay/mt798x/smartdns/patches/{100,101}`（与 qualcommax 版逐字节一致）；已失效的 `temp-fix-smartdns-hash.patch` 移入 `patches-remove` | mt798x 的 smartdns 来自 `package/solarflows/smartdns`（pymumu 源，core 包不被 feeds 覆盖），此前停在 48.2 且无补丁——48.3 才引入流上限强制（`6f9da63`）故旧版症状隐蔽。**版本升级为手动控制**：唯一控制点 = 编辑 `0009` 的版本/哈希字段（mt798x 分支每轮被脚本全量重生成，直接改分支持久不了）；已验证 100/101 对 48.2 与 48.4 基线均可应用（GNU patch 行号偏移自动适配），故升级版本不阻塞补丁；pymumu Makefile 的 `Build/Prepare` 调用 `Default`，`smartdns/patches/` 会被构建系统自动应用。待真实构建验证 |
-| U7 | `upstream-sync` VIKINGYFY 声明式同步与快照安全推送（方向 1） | 🟨 | `upstream-sync.yml` `sync_vikingyfy`：以 `upstream/main` 声明式基线重置 + 纯补丁应用 + 内容树比对跳过空推送 + 快照 tag 保护 + `--force-with-lease` | 彻底废除旧的 `LOCAL_COMMITS` 累积 cherry-pick 与变基循环，避免已剔除补丁死灰复燃与上游改写时的变基地狱；与 `sync_lede`/`sync_luci`/`sync_packages` 对齐为统一的声明式架构 |
-| U8 | `custom-feed` 增量跳过模式下补丁幂等与包存在性检查 | ✅ | commit `27ba75d1`, run `35557363052`, run `35557361719` | 修复前增量跳过保留已打补丁文件致 patch --forward 报 Reversed (or previously applied) 退出 1；增加正向/反向 dry-run 双向探测与包目录存在性检查 |
-| U10 | `custom-feed` 跨仓库多文件补丁部分应用状态修复 | ✅ | commit `ed35aabb`+`e4d38328`，run `35755020516`（全量 5/5 success）、run `35755197154`（增量模式 success，0006/0007 幂等跳过且无 .rej 残留）；本地 GNU patch 2.7.6 实测 6/6 用例通过 | 修复前 `0006-filebrowser.patch` 跨 `immortalwrt/packages` 与 `immortalwrt/luci` 两仓库，增量模式下前者重拉（未打补丁）后者跳过（已打补丁），整体双向探测双失败误判真实冲突，连续 3 次 run 失败（`35633843900`/`35681463052`/`35752106631`）。修复：① `apply_patch_file` 用 awk 按 `diff --git` 头拆分为单文件补丁逐个走双向探测（单文件内不会部分应用），失败分支即时清理 `.rej`/`.orig`（否则被提交前检查拦截，见 run `35754763032` 教训）；② `0006` 拆分为 `0006-filebrowser` + `0007-luci-app-filebrowser` 各对应一个包。注意：GNU patch `--forward` 对 reversed hunk 也写 `.rej` 且中止后续文件，故 `.rej` 检测不可行（本地实测推翻）；awk 段头须兼容无 `diff --git` 头的传统格式（`7279cba0`，否则 `fix-shadowsocksr-libev-configure.patch` 被静默丢弃，曾致 feed mt798x 分支 Fixup 段丢失、run `35757189235` shadowsocksr-libev 构建失败） |
-| U11 | mt798x rust 工具链修复（vendor .orig + GCC 8.4 flag）| ✅ | commit `bb1e3120`（rust Makefile Host/Patch，openwrt/packages#27485/#27487）、commit `eacc826f`（rust-values.mk `-mno-outline-atomics` 加 GCC>=10 条件），run `35826391595` 证实 aws-lc-sys C 代码编译通过 | 两层根因：① `scripts/patch-kernel.sh` 删 `*.orig` 与 rust tarball vendor 自带 `Cargo.toml.orig` 冲突（上游已知，overlay rust Makefile 覆盖 Host/Patch 跳过清理）；② overlay `rust-values.mk` aarch64 无条件 `RUSTC_CFLAGS:=-mno-outline-atomics`（GCC 10+ 选项）毒死 21.02 GCC 8.4 的所有 target 侧 C 依赖（aws-lc-sys 与 ring 同样中招——这解释了为何换后端无效）。教训：`TARGET_CFLAGS` 污染是系统性问题，不是单个 crate 的问题 |
-| U12 | mt798x passwall 启用 ss-rust（shadowsocks-crypto 0.8.0 后端 bug 绕过）| ✅ | commit `6933e334`（seed：passwall INCLUDE_Shadowsocks_Rust_Client=y + sslocal=y/ssserver=m + sdk.config）、commit `3320805b`（100-disable-broken-crypto-backend.patch 纯 Rust fallback + PKG_RELEASE=2），run `35834497780` success，产物 `shadowsocks-rust-sslocal_1.25.0-2_aarch64_cortex-a53.ipk` | 本地 cargo 复现实证：shadowsocks-crypto 0.8.0 的 ring 与 aws-lc 后端分支均有发布 bug（ring 分支仅改名导入未定义 Aes128Gcm 类型，aws-lc 分支同样 E0432），唯一可编译路径是纯 Rust fallback（删除三处 `shadowsocks-crypto/aws-lc` feature）。附带发现：feed Makefile 变更不触发 prepare 重跑（stamp 机制），PKG_RELEASE bump 是可靠失效手段。纯 Rust 实现性能略低但无 C 代码，天然规避 GCC 8.4 兼容问题 |
-| U9 | Fork 分支自动化补丁指纹追踪与 Revert 机制（方向 2 储备） | ❓ | 见待决 5 | 针对需严格保留下游线性历史的分支，通过 CI 追踪补丁清单并自动生成 revert 提交。目前 VIKINGYFY 选用方向 1（声明式），本方案作为储备设计 |
+| ID | P | 项目 | 状态 | 证据 | 备注 |
+|---|---|---|---|---|---|---|
+| U1 | P1 | `upstream-sync` 定向 fetch + `--force-with-lease` + askpass | ✅ | `upstream-sync.yml` | |
+| U2 | P1 | `custom-feed` 提交前 `diff --cached --check` | ✅ | `custom-feed.yml` | trailing whitespace 仅 warning |
+| U3 | P1 | `checkout_partial_code` 缺失路径硬失败 | 🚫 | `openwrt-packages/core` | 刻意为：硬失败才能让上游删包立刻暴露，不要改成告警 |
+| U4 | P1 | geodata 固定 geoview 版本 + SHA256 校验 | ✅ | `geodata-updater.yml` | `latest` 不可复现 |
+| U5 | P1 | smartdns H2 补丁（qualcommax）+ 101 流槽位回收 | 🟨 | `upstream-sync/overlay/packages/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch`（已同步，feed blob `79b8a106` 与本地逐字节一致）、新增 `101-reap-stalled-http2-streams.patch`（本地 GNU patch 在 48.4 源树 100→101 依次应用通过） | 101 修两处：① `http2_stream_close` 延迟关闭加 5s 时限（发送窗口永不恢复时回收 `active_local_streams` 槽位）；② 饱和连接以 `ECONNRESET` 返回，走 `_dns_client_send_one_packet` 的立即重建分支（裸 `ENOSPC` 只会 `prohibit=1` 屏蔽上游 60s）。上游 master 未修（开放 PR #2458/#2422 均未合），待真实构建验证 |
+| U6 | P1 | mt798x smartdns bump 48.4 + 同补丁 | 🟨 | `custom-feed/patches/mt798x/0009-smartdns-bump-48.4.patch`（git→tarball 48.4，`PKG_HASH=b07abba9…`，与 qualcommax 同源同版本）、`custom-feed/overlay/mt798x/smartdns/patches/{100,101}`（与 qualcommax 版逐字节一致）；已失效的 `temp-fix-smartdns-hash.patch` 移入 `patches-remove` | mt798x 的 smartdns 来自 `package/solarflows/smartdns`（pymumu 源，core 包不被 feeds 覆盖），此前停在 48.2 且无补丁——48.3 才引入流上限强制（`6f9da63`）故旧版症状隐蔽。**版本升级为手动控制**：唯一控制点 = 编辑 `0009` 的版本/哈希字段（mt798x 分支每轮被脚本全量重生成，直接改分支持久不了）；已验证 100/101 对 48.2 与 48.4 基线均可应用（GNU patch 行号偏移自动适配），故升级版本不阻塞补丁；pymumu Makefile 的 `Build/Prepare` 调用 `Default`，`smartdns/patches/` 会被构建系统自动应用。待真实构建验证 |
+| U7 | P1 | `upstream-sync` VIKINGYFY 声明式同步与快照安全推送（方向 1） | 🟨 | `upstream-sync.yml` `sync_vikingyfy`：以 `upstream/main` 声明式基线重置 + 纯补丁应用 + 内容树比对跳过空推送 + 快照 tag 保护 + `--force-with-lease` | 彻底废除旧的 `LOCAL_COMMITS` 累积 cherry-pick 与变基循环，避免已剔除补丁死灰复燃与上游改写时的变基地狱；与 `sync_lede`/`sync_luci`/`sync_packages` 对齐为统一的声明式架构 |
+| U8 | P1 | `custom-feed` 增量跳过模式下补丁幂等与包存在性检查 | ✅ | commit `27ba75d1`, run `35557363052`, run `35557361719` | 修复前增量跳过保留已打补丁文件致 patch --forward 报 Reversed (or previously applied) 退出 1；增加正向/反向 dry-run 双向探测与包目录存在性检查 |
+| U10 | P1 | `custom-feed` 跨仓库多文件补丁部分应用状态修复 | ✅ | commit `ed35aabb`+`e4d38328`，run `35755020516`（全量 5/5 success）、run `35755197154`（增量模式 success，0006/0007 幂等跳过且无 .rej 残留）；本地 GNU patch 2.7.6 实测 6/6 用例通过 | 修复前 `0006-filebrowser.patch` 跨 `immortalwrt/packages` 与 `immortalwrt/luci` 两仓库，增量模式下前者重拉（未打补丁）后者跳过（已打补丁），整体双向探测双失败误判真实冲突，连续 3 次 run 失败（`35633843900`/`35681463052`/`35752106631`）。修复：① `apply_patch_file` 用 awk 按 `diff --git` 头拆分为单文件补丁逐个走双向探测（单文件内不会部分应用），失败分支即时清理 `.rej`/`.orig`（否则被提交前检查拦截，见 run `35754763032` 教训）；② `0006` 拆分为 `0006-filebrowser` + `0007-luci-app-filebrowser` 各对应一个包。注意：GNU patch `--forward` 对 reversed hunk 也写 `.rej` 且中止后续文件，故 `.rej` 检测不可行（本地实测推翻）；awk 段头须兼容无 `diff --git` 头的传统格式（`7279cba0`，否则 `fix-shadowsocksr-libev-configure.patch` 被静默丢弃，曾致 feed mt798x 分支 Fixup 段丢失、run `35757189235` shadowsocksr-libev 构建失败） |
+| U11 | P1 | mt798x rust 工具链修复（vendor .orig + GCC 8.4 flag）| ✅ | commit `bb1e3120`（rust Makefile Host/Patch，openwrt/packages#27485/#27487）、commit `eacc826f`（rust-values.mk `-mno-outline-atomics` 加 GCC>=10 条件），run `35826391595` 证实 aws-lc-sys C 代码编译通过 | 两层根因：① `scripts/patch-kernel.sh` 删 `*.orig` 与 rust tarball vendor 自带 `Cargo.toml.orig` 冲突（上游已知，overlay rust Makefile 覆盖 Host/Patch 跳过清理）；② overlay `rust-values.mk` aarch64 无条件 `RUSTC_CFLAGS:=-mno-outline-atomics`（GCC 10+ 选项）毒死 21.02 GCC 8.4 的所有 target 侧 C 依赖（aws-lc-sys 与 ring 同样中招——这解释了为何换后端无效）。教训：`TARGET_CFLAGS` 污染是系统性问题，不是单个 crate 的问题 |
+| U12 | P1 | mt798x passwall 启用 ss-rust（shadowsocks-crypto 0.8.0 后端 bug 绕过）| ✅ | commit `6933e334`（seed：passwall INCLUDE_Shadowsocks_Rust_Client=y + sslocal=y/ssserver=m + sdk.config）、commit `3320805b`（100-disable-broken-crypto-backend.patch 纯 Rust fallback + PKG_RELEASE=2），run `35834497780` success，产物 `shadowsocks-rust-sslocal_1.25.0-2_aarch64_cortex-a53.ipk` | 本地 cargo 复现实证：shadowsocks-crypto 0.8.0 的 ring 与 aws-lc 后端分支均有发布 bug（ring 分支仅改名导入未定义 Aes128Gcm 类型，aws-lc 分支同样 E0432），唯一可编译路径是纯 Rust fallback（删除三处 `shadowsocks-crypto/aws-lc` feature）。附带发现：feed Makefile 变更不触发 prepare 重跑（stamp 机制），PKG_RELEASE bump 是可靠失效手段。纯 Rust 实现性能略低但无 C 代码，天然规避 GCC 8.4 兼容问题 |
+| U9 | P2 | Fork 分支自动化补丁指纹追踪与 Revert 机制（方向 2 储备） | ❓ | 见待决 5 | 针对需严格保留下游线性历史的分支，通过 CI 追踪补丁清单并自动生成 revert 提交。目前 VIKINGYFY 选用方向 1（声明式），本方案作为储备设计 |
 
 ## E. 文档体系
 
-| ID | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|
-| D1 | `handoff.md`（一次性交接文档） | 🚫 | 2026-09-19 核对后删除 | 不再重建：状态进本台账、结构进 `ci-flow.md`、故障进 pitfalls |
-| D2 | 全局规则只写在 `AGENTS.md` | ✅ | 2026-09-19 实测自定义 agent 继承 AGENTS.md | 不要复制进 `.github/agents/*` 或 instructions |
+| ID | P | 项目 | 状态 | 证据 | 备注 |
+|---|---|---|---|---|---|---|
+| D1 | P2 | `handoff.md`（一次性交接文档） | 🚫 | 2026-09-19 核对后删除 | 不再重建：状态进本台账、结构进 `ci-flow.md`、故障进 pitfalls |
+| D2 | P2 | 全局规则只写在 `AGENTS.md` | ✅ | 2026-09-19 实测自定义 agent 继承 AGENTS.md | 不要复制进 `.github/agents/*` 或 instructions |
 
 ## F. 固件功能配置（seeds）
 
-| ID | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|
-| F1 | ipq60xx / ipq807x 启用 SONiC fullcone | 🟨 | `ipq60xx/04-extras.seed`、`ipq807x/04-extras.seed`（后端 + LuCI）、两处 `02-pkgs.seed` 加中文包 | 必须显式 `=y`：IB 路径的 PACKAGES 只从 seed 提取，Kconfig `default` 不生效。待真实构建验证 |
-| F2 | mt798x 无法使用 SONiC fullcone | 🚫 | 仓库 `solarflows/immortalwrt-mt798x@test` 为 `KERNEL_PATCHVER:=5.4`，无 `hack-6.18`；包带 `@LINUX_6_18` | 已有旧版 `fullconenat`/`kmod-ipt-fullconenat`（fw3），继续保留；不要提议给 mt798x 加 sonic |
-| F3 | LuCI feed 耦合风险（sonic 补丁桥） | ❓ | `fullconenat-sonic/patches/apply-luci-feed.sh` 在补丁上下文不匹配时 `exit 1` | 见待决 4 |
+| ID | P | 项目 | 状态 | 证据 | 备注 |
+|---|---|---|---|---|---|---|
+| F1 | P2 | ipq60xx / ipq807x 启用 SONiC fullcone | 🟨 | `ipq60xx/04-extras.seed`、`ipq807x/04-extras.seed`（后端 + LuCI）、两处 `02-pkgs.seed` 加中文包 | 必须显式 `=y`：IB 路径的 PACKAGES 只从 seed 提取，Kconfig `default` 不生效。待真实构建验证 |
+| F2 | P2 | mt798x 无法使用 SONiC fullcone | 🚫 | 仓库 `solarflows/immortalwrt-mt798x@test` 为 `KERNEL_PATCHVER:=5.4`，无 `hack-6.18`；包带 `@LINUX_6_18` | 已有旧版 `fullconenat`/`kmod-ipt-fullconenat`（fw3），继续保留；不要提议给 mt798x 加 sonic |
+| F3 | P1 | LuCI feed 耦合风险（sonic 补丁桥） | ❓ | `fullconenat-sonic/patches/apply-luci-feed.sh` 在补丁上下文不匹配时 `exit 1` | 见待决 4 |
 
 ## G. 包粒度增量编译（按需编译演进计划）
 
 设计文档：`docs/pkg-incremental-build.md`（P1/P2/P3 全貌与数据流）
 
-| ID | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|
-| G1 | 移除 sdk-cache-lookup 冗余预查步骤 | ✅ | commit `4c0d45c4`，run `35861454202` | 修复前每次 run 先预查 SDK 缓存再被正式 restore 覆盖 |
-| G2 | SDK 编译前屏蔽 kmod 包（防内核全模块重编） | 🟨 | commit `455421e0`，`compile-packages.yml` `🔒 Freeze kernel modules` | 修复前 SDK `.config` 保留 `CONFIG_PACKAGE_kmod-*=y`，任一 make 触发 stale-stamp 内核重编摧毁预编译 kmod ipk（ipq807x 根因，见 pitfalls） |
-| G3 | 包级指纹变更检测（plan 侧） | 🟨 | commit `1dad4519`，`firmware-build-unified.yml` `Load targets & check changes` | `packages.lock.json` 逐包 commit 比对；全一致撤销 feed 变更信号 |
-| G4 | plan 下传变更包子集 + sdk.config 交集 | 🟨 | commit `87473989` | 变更包 ∩ sdk.config；交集为空→升级全量（SDK 无该包目录）；lock 无条目→`*` |
-| G5 | 逐包编译数据采集与报表 | 🟨 | commit `1dad4519`，`compile-packages.yml` 编译循环 | wall_sec/exit/compile_time/version/artifacts；报表写 step summary |
-| G6 | 状态回写闭环（.packages 字段） | 🟨 | commit `1dad4519`，`persist-state` merge 步骤 | executor 扁平化 `{pkg: commit}` → build-info.json → IMMWRT_BUILD_STATE |
-| G7 | IB 组装参数由 plan 下传 | 🟨 | commit `87473989`，`run-sdk-ib` 传 `ib_packages`/`ib_profiles` | 为空时 executor 回退 seed 提取（向后兼容） |
-| G8 | P2：SDK/IB 文件解析上移 plan | 🟨 | commit（本组提交），`firmware-build-unified.yml` `Decide build mode` 提取 `selected.json` → `run-sdk-ib`/`run-packages` 新 matrix 字段；`compile-packages.yml` `Resolve SDK file name`/`Resolve IB file` 改为透传（保留本地回退） | plan 已用 `probe_index` 校验 file/sha256/source_sha 与资产存在性；executor 不再自行选文件 |
-| G9 | sdk-ib 真实构建验证（变更包子集 + IB 注入） | ⬜ | 无 run 证据 | 验证项见 `pkg-incremental-build.md` § 待验证项：smart 无变更跳过 / sdk.config 之外变更包升级全量 / P2 透传路径 |
-| G10 | PKG_ARTIFACTS 采集时机修复 | 🚫 | `compile-packages.yml` 编译循环（`1dad4519` 起即在 `make compile` 之后 `find`，注释「编译后查询」） | 误判：代码自 1dad4519 起已正确放在编译后（2026-09-24 复查确认） |
+| ID | P | 项目 | 状态 | 证据 | 备注 |
+|---|---|---|---|---|---|---|
+| G1 | P2 | 移除 sdk-cache-lookup 冗余预查步骤 | ✅ | commit `4c0d45c4`，run `35861454202` | 修复前每次 run 先预查 SDK 缓存再被正式 restore 覆盖 |
+| G2 | P2 | SDK 编译前屏蔽 kmod 包（防内核全模块重编） | 🟨 | commit `455421e0`，`compile-packages.yml` `🔒 Freeze kernel modules` | 修复前 SDK `.config` 保留 `CONFIG_PACKAGE_kmod-*=y`，任一 make 触发 stale-stamp 内核重编摧毁预编译 kmod ipk（ipq807x 根因，见 pitfalls） |
+| G3 | P2 | 包级指纹变更检测（plan 侧） | 🟨 | commit `1dad4519`，`firmware-build-unified.yml` `Load targets & check changes` | `packages.lock.json` 逐包 commit 比对；全一致撤销 feed 变更信号 |
+| G4 | P2 | plan 下传变更包子集 + sdk.config 交集 | 🟨 | commit `87473989` | 变更包 ∩ sdk.config；交集为空→升级全量（SDK 无该包目录）；lock 无条目→`*` |
+| G5 | P2 | 逐包编译数据采集与报表 | 🟨 | commit `1dad4519`，`compile-packages.yml` 编译循环 | wall_sec/exit/compile_time/version/artifacts；报表写 step summary |
+| G6 | P2 | 状态回写闭环（.packages 字段） | 🟨 | commit `1dad4519`，`persist-state` merge 步骤 | executor 扁平化 `{pkg: commit}` → build-info.json → IMMWRT_BUILD_STATE |
+| G7 | P2 | IB 组装参数由 plan 下传 | 🟨 | commit `87473989`，`run-sdk-ib` 传 `ib_packages`/`ib_profiles` | 为空时 executor 回退 seed 提取（向后兼容） |
+| G8 | P2 | P2：SDK/IB 文件解析上移 plan | 🟨 | commit（本组提交），`firmware-build-unified.yml` `Decide build mode` 提取 `selected.json` → `run-sdk-ib`/`run-packages` 新 matrix 字段；`compile-packages.yml` `Resolve SDK file name`/`Resolve IB file` 改为透传（保留本地回退） | plan 已用 `probe_index` 校验 file/sha256/source_sha 与资产存在性；executor 不再自行选文件 |
+| G9 | P1 | sdk-ib 真实构建验证（变更包子集 + IB 注入） | ⬜ | 无 run 证据 | 验证项见 `pkg-incremental-build.md` § 待验证项：smart 无变更跳过 / sdk.config 之外变更包升级全量 / P2 透传路径 |
+| G10 | P2 | PKG_ARTIFACTS 采集时机修复 | 🚫 | `compile-packages.yml` 编译循环（`1dad4519` 起即在 `make compile` 之后 `find`，注释「编译后查询」） | 误判：代码自 1dad4519 起已正确放在编译后（2026-09-24 复查确认） |
 
 ## 待决
 
@@ -109,3 +111,15 @@
 5. **方向 2 备选架构：Fork 分支自动化补丁指纹追踪与 Revert 机制** — 针对未来若有需要严格保留下游 commit 历史的分支：CI 维护补丁应用清单，当检测到本地补丁删除时自动触发 `git revert` 逆向消除，避免手写反向补丁与变基地狱。目前作为备选架构方案储备，未来如需持久化分支历史时启用。
 
 - `docs/ci-flow.md` 讲"怎么跑"，`docs/openwrt-build-pitfalls.md` 讲"为什么坏过"，本文件讲"现在到底有没有"。
+
+## 进展记录
+
+> 只追加、不修改、不删除。状态翻转而非新建条目时记录一行（日期 + ID + 旧→新 + 证据）；新建条目直接进表，不在此记录。2026-09-24 前的关键翻转为回填。
+
+- 2026-09-21：U8 ⬜→✅（commit `27ba75d1`，run `35557363052`/`35557361719`）。
+- 2026-09-23：U10 ⬜→✅（commit `ed35aabb`+`e4d38328`，run `35755020516` 全量 5/5、run `35755197154` 增量幂等跳过）。
+- 2026-09-23：U11 ⬜→✅（commit `bb1e3120`+`eacc826f`，run `35826391595` aws-lc-sys 编译通过）。
+- 2026-09-23：U12 ⬜→✅（commit `6933e334`+`3320805b`，run `35834497780`，产物 `shadowsocks-rust-sslocal_1.25.0-2_aarch64_cortex-a53.ipk`）。
+- 2026-09-23：G1 ⬜→✅（commit `4c0d45c4`，run `35861454202`）；G3/G5/G6 ⬜→🟨（commit `1dad4519`，无 run 证据保持 🟨）。
+- 2026-09-24：G10 🚫（新证据：复查确认代码自 `1dad4519` 起已正确放在编译后，原报告为误判）。
+- 2026-09-24：improvement-ledger skill Mount 挂载——全表注入 P 列（P0/P1/P2 定义见文首），新增本进展记录区；AGENTS.md 已有 Project Status 段，按第 0 步规则不覆盖、未改动。

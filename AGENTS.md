@@ -2,6 +2,7 @@
 
 - Before answering "is X implemented?", "wasn't this already fixed?", or proposing a change to an existing mechanism, read `docs/todo.md` — the single source of truth for feature status (✅/🟨/⬜/❓/🚫) with run/commit/file evidence. Do not re-derive status from workflow YAML.
 - `🚫` rows must not be re-proposed without new evidence; `❓` rows continue from their listed options. Update the matching row in the same commit as any status change.
+- Status flips (not new entries) also require one appended line in the `进展记录` section at the end of `docs/todo.md` (date + ID + old→new + evidence). New entries must fill the `P` column (P0/P1/P2 defined at the top of the ledger). Evidence arbitration (whether evidence qualifies for a status bump) is defined in the `improvement-ledger` skill.
 - Keep the rule here only: this file is always loaded and inherited by custom agents, so do not copy it into other customization files.
 
 ## Agent Routing
