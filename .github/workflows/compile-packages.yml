@@ -549,8 +549,10 @@ jobs:
           # packages.lock.json 由 custom-feed.yml 生成并提交到 feed 分支，
           # 记录每个包的上游源 commit SHA（与 plan 侧指纹检测同源）。
           # 扁平化为 {pkg: "commit"} 格式与 plan/build-state 保持一致。
+          # lock 的 targets 键是 feed 分支名 (如 qualcommax), 不是 target 名 ——
+          # 用 target 名查询 qualcomm 双目标会取到空 map → 基线永远无法建立 (run 36130960021)。
           PKG_LOCK_FILE="${{ github.workspace }}/pkgs-feed/packages.lock.json"
-          PKG_LOCK_RAW=$(if [ -f "$PKG_LOCK_FILE" ]; then jq -c --arg t "${IMMWRT_TARGET}" '.targets[$t] // {}' "$PKG_LOCK_FILE" 2>/dev/null; else echo '{}'; fi)
+          PKG_LOCK_RAW=$(if [ -f "$PKG_LOCK_FILE" ]; then jq -c --arg t "${{ inputs.matrix_packages_branch }}" '.targets[$t] // {}' "$PKG_LOCK_FILE" 2>/dev/null; else echo '{}'; fi)
           # notebook: pkgs-feed 在 checkout 时即已拉取，其内 packages.lock.json 已在
           # custom-feed.yml 中通过 --lockfile packages.lock.json 生成并随分支提交，
           # 此处直接读取即可，无需再次调用 gh api。

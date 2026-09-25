@@ -93,10 +93,10 @@
 |---|---|---|---|---|---|---|
 | G1 | P2 | 移除 sdk-cache-lookup 冗余预查步骤 | ✅ | commit `4c0d45c4`，run `35861454202` | 修复前每次 run 先预查 SDK 缓存再被正式 restore 覆盖 |
 | G2 | P2 | SDK 编译前屏蔽 kmod 包（防内核全模块重编） | 🟨 | commit `455421e0`，`compile-packages.yml` `🔒 Freeze kernel modules` | 修复前 SDK `.config` 保留 `CONFIG_PACKAGE_kmod-*=y`，任一 make 触发 stale-stamp 内核重编摧毁预编译 kmod ipk（ipq807x 根因，见 pitfalls） |
-| G3 | P2 | 包级指纹变更检测（plan 侧） | 🟨 | commit `1dad4519`，`firmware-build-unified.yml` `Load targets & check changes` | `packages.lock.json` 逐包 commit 比对；全一致撤销 feed 变更信号 |
-| G4 | P2 | plan 下传变更包子集 + sdk.config 交集 | 🟨 | commit `87473989` | 变更包 ∩ sdk.config；交集为空→升级全量（SDK 无该包目录）；lock 无条目→`*` |
+| G3 | P2 | 包级指纹变更检测（plan 侧） | 🟨 | commit `1dad4519`，`firmware-build-unified.yml` `Load targets & check changes` | `packages.lock.json` 逐包 commit 比对；全一致撤销 feed 变更信号。2026-09-25 修复 lock 查询键 target→packages_branch（run `36130960021` 暴露：qualcomm 双目标键错配必然 miss 回退全量），待构建验证 |
+| G4 | P2 | plan 下传变更包子集 + sdk.config 交集 | 🟨 | commit `87473989` | 变更包 ∩ sdk.config；交集为空→升级全量（SDK 无该包目录）；lock 无条目→`*`。2026-09-25 随 G3 键修复 + G6 基线补写后本判定才可生效（此前基线缺失致 mt798x 误报 17 包全量），待构建验证 |
 | G5 | P2 | 逐包编译数据采集与报表 | 🟨 | commit `1dad4519`，`compile-packages.yml` 编译循环 | wall_sec/exit/compile_time/version/artifacts；报表写 step summary |
-| G6 | P2 | 状态回写闭环（.packages 字段） | 🟨 | commit `1dad4519`，`persist-state` merge 步骤 | executor 扁平化 `{pkg: commit}` → build-info.json → IMMWRT_BUILD_STATE |
+| G6 | P2 | 状态回写闭环（.packages 字段） | 🟨 | commit `1dad4519`，`persist-state` merge 步骤 | executor 扁平化 `{pkg: commit}` → build-info.json → IMMWRT_BUILD_STATE。2026-09-25 修复两处断点（run `36130960021` 暴露）：① compile-packages lock 查询键 target→packages_branch（qualcomm 取空 map 永不写基线）；② compile-firmware 全量路径补写 packages 字段（此前仅 SDK 增量路径写 → 全量后基线缺失死锁），待构建验证 |
 | G7 | P2 | IB 组装参数由 plan 下传 | 🟨 | commit `87473989`，`run-sdk-ib` 传 `ib_packages`/`ib_profiles` | 为空时 executor 回退 seed 提取（向后兼容） |
 | G8 | P2 | P2：SDK/IB 文件解析上移 plan | 🟨 | commit（本组提交），`firmware-build-unified.yml` `Decide build mode` 提取 `selected.json` → `run-sdk-ib`/`run-packages` 新 matrix 字段；`compile-packages.yml` `Resolve SDK file name`/`Resolve IB file` 改为透传（保留本地回退） | plan 已用 `probe_index` 校验 file/sha256/source_sha 与资产存在性；executor 不再自行选文件 |
 | G9 | P1 | sdk-ib 真实构建验证（变更包子集 + IB 注入） | ⬜ | 无 run 证据 | 验证项见 `pkg-incremental-build.md` § 待验证项：smart 无变更跳过 / sdk.config 之外变更包升级全量 / P2 透传路径 |
@@ -123,3 +123,4 @@
 - 2026-09-23：G1 ⬜→✅（commit `4c0d45c4`，run `35861454202`）；G3/G5/G6 ⬜→🟨（commit `1dad4519`，无 run 证据保持 🟨）。
 - 2026-09-24：G10 🚫（新证据：复查确认代码自 `1dad4519` 起已正确放在编译后，原报告为误判）。
 - 2026-09-24：improvement-ledger skill Mount 挂载——全表注入 P 列（P0/P1/P2 定义见文首），新增本进展记录区；AGENTS.md 已有 Project Status 段，按第 0 步规则不覆盖、未改动。
+- 2026-09-25：G3/G4/G6 缺陷修复（状态保持 🟨 待验证）：run `36130960021` 实证两处逻辑陷阱——① lock 查询键 target/feed 分支名错配（plan + compile-packages，qualcomm 双目标必然 miss 回退全量）；② compile-firmware 全量路径不写逐包基线（基线缺失死锁，mt798x 误报 17 包全量，真实变更仅 passwall/naiveproxy/sing-box 3 包且均在 sdk.config 内）。修复后待 smart 触发实证 G9。

@@ -518,7 +518,10 @@ jobs:
               PKG_LOCK_JSON=$(gh api -H "Accept: application/vnd.github.raw+json" \
                 "repos/${CURR_PKG_REPO}/contents/packages.lock.json?ref=${CURR_PKG_BRANCH}" 2>/dev/null || echo '{}')
 
-              CURR_PKG_MAP=$(echo "$PKG_LOCK_JSON" | jq -r --arg t "$MATRIX_TARGET" '.targets[$t] // {}' 2>/dev/null)
+              # lock 的 targets 键是 feed 分支名 (custom-feed.yml 按分支生成, 如 qualcommax),
+              # 不是 target 名 —— ipq60xx/ipq807x 共用 qualcommax 分支, 用 target 名查询必然
+              # miss 回退全量 (run 36130960021)。state 侧仍按 target 键存取, 两个键空间不冲突。
+              CURR_PKG_MAP=$(echo "$PKG_LOCK_JSON" | jq -r --arg t "$CURR_PKG_BRANCH" '.targets[$t] // {}' 2>/dev/null)
               LAST_PKG_MAP=$(jq -r ".\"${MATRIX_TARGET}\".packages // {}" build-state.json 2>/dev/null || echo '{}')
 
               if [ "$CURR_PKG_MAP" != "{}" ]; then
@@ -569,7 +572,7 @@ jobs:
                   CHANGED_PACKAGES_FINAL=""
                 fi
               else
-                echo "  ⚠️ [${MATRIX_TARGET}] packages.lock.json 无 ${MATRIX_TARGET} 条目，回退全量"
+                echo "  ⚠️ [${MATRIX_TARGET}] packages.lock.json 无 ${CURR_PKG_BRANCH} 条目，回退全量"
                 CHANGED_PACKAGES_FINAL="*"
               fi
             fi
