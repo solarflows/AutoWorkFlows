@@ -347,12 +347,11 @@ jobs:
 
           # ── SHA 检测（per-target，不能由一个 target 短路其他 target）──
           : > /tmp/change_report.txt
-          echo '[]' > /tmp/target_changes.json
+          : > /tmp/target_stage.jsonl
 
           for MATRIX_TARGET in $(echo "$FILTERED" | jq -r '.[].target'); do
             SRC_STATUS="—"; PKG_STATUS="—"; STD_PKG_STATUS="—"; KERNEL_STATUS="—"
             SOURCE_CHANGED=false; PACKAGES_CHANGED=false; STANDARD_PACKAGES_CHANGED=false; KERNEL_CHANGED=false
-            CHANGED_PACKAGES_FINAL="*"; IB_PACKAGES=""; IB_PROFILES=""
 
             CURR_REPO=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .repo')
             CURR_REF=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .ref')
@@ -507,20 +506,70 @@ jobs:
               CFG_STATUS="🟣 无基准"
             fi
 
-            # ── 构建输入包级变更检测（tree SHA 内容寻址，与构建解析顺序对齐）──
-            # 指纹锚点 = 实际进构建的内容，而非上游仓库滚动 HEAD：
-            #   custom feed: 顶层目录 tree SHA 对比（packages.lock.json/README 等 root
-            #   文件是 blob 天然排除；上游仓库无关提交不再触碰指纹。run 36211341719
-            #   教训: lock 记录的整仓 HEAD 被 openwrt/packages master 的 rsync/banip
-            #   无关提交翻转，致 tailscale 误报全量）；
-            #   上游 feeds (feeds.conf.default): HEAD 变化才 compare diff 取包名，
-            #   剔除被 custom feed 覆盖的包（package/<feed> 本地优先，scripts/feeds
-            #   install 对已存在的本地 srcpackage 直接跳过，构建不用上游副本）。
-            # 仅 smart 触发时计算；显式触发 (full/sdk-packages) 传 * 给 executor。
-            CURR_TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
+            # per-target 中间结果落盘: 本 step (SHA/config 检测) 与包级检测 step 拆分后
+            # (GitHub 单 step run: 块 21000 字符上限, 见 pitfalls 文档), 循环内 shell
+            # 变量跨 step 不可见, 经 /tmp/target_stage.jsonl 传递。
+            jq -n --arg t "$MATRIX_TARGET" \
+              --arg curr_repo "$CURR_REPO" --arg curr_src "$CURR_SRC" \
+              --arg curr_pkg "$CURR_PKG" --arg curr_cfg "$CURR_CFG" \
+              --arg curr_pkg_branch "$CURR_PKG_BRANCH" --arg curr_pkg_repo "$CURR_PKG_REPO" \
+              --arg curr_std_pkg_repo "$CURR_STD_PKG_REPO" --arg last_std_pkg "$LAST_STD_PKG" --arg curr_std_pkg "$CURR_STD_PKG" \
+              --arg src_status "$SRC_STATUS" --arg pkg_status "$PKG_STATUS" --arg std_pkg_status "$STD_PKG_STATUS" \
+              --arg kernel_status "$KERNEL_STATUS" --arg cfg_status "$CFG_STATUS" \
+              --argjson src_changed "$SOURCE_CHANGED" --argjson pkg_changed "$PACKAGES_CHANGED" \
+              --argjson std_pkg_changed "$STANDARD_PACKAGES_CHANGED" --argjson kernel_changed "$KERNEL_CHANGED" \
+              --argjson config_changed "$CONFIG_CHANGED" \
+              '{target:$t, curr_repo:$curr_repo, curr_src:$curr_src, curr_pkg:$curr_pkg, curr_cfg:$curr_cfg,
+                curr_pkg_branch:$curr_pkg_branch, curr_pkg_repo:$curr_pkg_repo, curr_std_pkg_repo:$curr_std_pkg_repo,
+                last_std_pkg:$last_std_pkg, curr_std_pkg:$curr_std_pkg,
+                src_status:$src_status, pkg_status:$pkg_status, std_pkg_status:$std_pkg_status,
+                kernel_status:$kernel_status, cfg_status:$cfg_status,
+                src_changed:$src_changed, pkg_changed:$pkg_changed, std_pkg_changed:$std_pkg_changed,
+                kernel_changed:$kernel_changed, config_changed:$config_changed}' \
+              >> /tmp/target_stage.jsonl
+          done
+
+          {
+            echo "### 🔍 变更检测 stage 1（SHA / config）"
+            echo ""
+            echo "| 目标 | 源码 | 插件 feed | 标准 packages | 内核/Toolchain | 目标配置 |"
+            echo "|---|---|---|---|---|---|"
+            while IFS='|' read -r t s p sp k c; do
+              echo "| \`${t}\` | ${s} | ${p} | ${sp} | ${k} | ${c} |"
+            done < /tmp/change_report.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 包级变更检测（tree SHA 真值锁）──
+      # step 拆分原因: 单 step run: 块超 GitHub 21000 字符上限触发 422,
+      # 见 docs/openwrt-build-pitfalls.md § 单 step run: 块超 21000 字符触发 workflow 解析 422。
+      # 输入: /tmp/target_stage.jsonl (上一 step 逐 target 落盘的 SHA/config 检测结果)。
+      # 输出: /tmp/target_pkg_stage.jsonl (sdk_packages + 撤销后的变更标记)。
+      - name: Detect package-level changes
+        id: pkg-detect
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set +e
+          CURR_TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
+          : > /tmp/target_pkg_stage.jsonl
+          : > /tmp/pkg_report.txt
+          while IFS= read -r STAGE; do
+            [ -n "$STAGE" ] || continue
+            MATRIX_TARGET=$(echo "$STAGE" | jq -r '.target')
+            CURR_REPO=$(echo "$STAGE" | jq -r '.curr_repo')
+            CURR_SRC=$(echo "$STAGE" | jq -r '.curr_src')
+            CURR_PKG_BRANCH=$(echo "$STAGE" | jq -r '.curr_pkg_branch')
+            CURR_PKG_REPO=$(echo "$STAGE" | jq -r '.curr_pkg_repo')
+            CURR_STD_PKG_REPO=$(echo "$STAGE" | jq -r '.curr_std_pkg_repo')
+            LAST_STD_PKG=$(echo "$STAGE" | jq -r '.last_std_pkg')
+            CURR_STD_PKG=$(echo "$STAGE" | jq -r '.curr_std_pkg')
+            PACKAGES_CHANGED=$(echo "$STAGE" | jq -r '.pkg_changed')
+            STANDARD_PACKAGES_CHANGED=$(echo "$STAGE" | jq -r '.std_pkg_changed')
+            PKG_STATUS=$(echo "$STAGE" | jq -r '.pkg_status')
             UPSTREAM_FEEDS_CHANGED=false
             FEEDS_UNMEASURABLE=false
             TEMP_CHANGED=""
+            CHANGED_PACKAGES_FINAL="*"
             if [ "$CURR_TRIGGER" = "smart" ]; then
               # ── a. custom feed 目录树表（trees API 一次拿全部顶层目录，per-branch 缓存）──
               # 缓存路径带 GITHUB_RUN_ID: 同一 plan job 内多 target 共享（qualcomm 双目标
@@ -675,6 +724,50 @@ jobs:
                 fi
               fi
             fi
+            # per-target 包级结果落盘: 变量随循环结束丢失, finalize step 从此文件读取
+            jq -n --arg t "$MATRIX_TARGET" \
+              --arg sdk_pkgs "$CHANGED_PACKAGES_FINAL" --arg pkg_status "$PKG_STATUS" \
+              --argjson pkg_changed "$PACKAGES_CHANGED" --argjson std_pkg_changed "$STANDARD_PACKAGES_CHANGED" \
+              '{target:$t, sdk_packages:$sdk_pkgs, pkg_status:$pkg_status, pkg_changed:$pkg_changed, std_pkg_changed:$std_pkg_changed}' \
+              >> /tmp/target_pkg_stage.jsonl
+            echo "${MATRIX_TARGET}|${PKG_STATUS}|${CHANGED_PACKAGES_FINAL}" >> /tmp/pkg_report.txt
+          done < /tmp/target_stage.jsonl
+
+          {
+            echo "### 🔍 变更检测 stage 2（包级指纹）"
+            echo ""
+            echo "| 目标 | 包级状态 | sdk_packages |"
+            echo "|---|---|---|"
+            while IFS='|' read -r t p s; do
+              echo "| \`${t}\` | ${p} | \`${s}\` |"
+            done < /tmp/pkg_report.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── IB 参数提取 + 最终变更汇总 ──
+      # 组装 target_changes.json (决策 step 的输入): stage 1 (SHA/config) + stage 2
+      # (包级) 合并, sdk_packages 与撤销后的变更标记以 stage 2 输出为准。
+      - name: Extract IB params & finalize changes
+        id: finalize-changes
+        run: |
+          set +e
+          echo '[]' > /tmp/target_changes.json
+          while IFS= read -r STAGE; do
+            [ -n "$STAGE" ] || continue
+            MATRIX_TARGET=$(echo "$STAGE" | jq -r '.target')
+            CURR_SRC=$(echo "$STAGE" | jq -r '.curr_src')
+            CURR_PKG=$(echo "$STAGE" | jq -r '.curr_pkg')
+            CURR_STD_PKG=$(echo "$STAGE" | jq -r '.curr_std_pkg')
+            CURR_CFG=$(echo "$STAGE" | jq -r '.curr_cfg')
+            SOURCE_CHANGED=$(echo "$STAGE" | jq -r '.src_changed')
+            KERNEL_CHANGED=$(echo "$STAGE" | jq -r '.kernel_changed')
+            CONFIG_CHANGED=$(echo "$STAGE" | jq -r '.config_changed')
+            PKG_STAGE=$(jq -c --arg t "$MATRIX_TARGET" 'select(.target == $t)' /tmp/target_pkg_stage.jsonl)
+            if [ -z "$PKG_STAGE" ]; then
+              # stage 2 对每个 stage 1 条目必然落盘一行; 缺失即上游 step 逻辑断裂, 快速失败
+              echo "::error::[${MATRIX_TARGET}] 缺少包级检测阶段结果, 中止"
+              exit 1
+            fi
+            IB_PACKAGES=""; IB_PROFILES=""
 
             # ── 提取 IB packages 与 profiles（从 seed 文件在 plan 侧预计算，executor 直接收）──
             # seed 已在 sparse checkout 中；提取公式与 executor 原逻辑一致，
@@ -693,29 +786,22 @@ jobs:
                 sed -E 's/^CONFIG_TARGET_(DEVICE_)?.*_DEVICE_([^=]+)=y/\2/' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
             fi
 
+            # 包级结果合入: sdk_packages 与撤销后的变更标记以 stage 2 输出为准
+            SDK_PKGS_FINAL=$(echo "$PKG_STAGE" | jq -r '.sdk_packages')
+            PKG_CHANGED_FINAL=$(echo "$PKG_STAGE" | jq -r '.pkg_changed')
+            STD_PKG_CHANGED_FINAL=$(echo "$PKG_STAGE" | jq -r '.std_pkg_changed')
             jq --arg t "$MATRIX_TARGET" --arg src "$CURR_SRC" --arg pkg "$CURR_PKG" --arg std_pkg "$CURR_STD_PKG" \
               --arg cfg "$CURR_CFG" \
-              --arg sdk_pkgs "$CHANGED_PACKAGES_FINAL" \
+              --arg sdk_pkgs "$SDK_PKGS_FINAL" \
               --arg ib_pkgs "$IB_PACKAGES" --arg ib_profiles "$IB_PROFILES" \
-              --argjson src_changed "$SOURCE_CHANGED" --argjson pkg_changed "$PACKAGES_CHANGED" \
-              --argjson standard_packages_changed "$STANDARD_PACKAGES_CHANGED" \
+              --argjson src_changed "$SOURCE_CHANGED" --argjson pkg_changed "$PKG_CHANGED_FINAL" \
+              --argjson standard_packages_changed "$STD_PKG_CHANGED_FINAL" \
               --argjson kernel_changed "$KERNEL_CHANGED" \
               --argjson config_changed "$CONFIG_CHANGED" \
               '. + [{target:$t, current_source_sha:$src, current_packages_sha:$pkg, current_standard_packages_sha:$std_pkg, current_config_sha:$cfg, sdk_packages:$sdk_pkgs, ib_packages:$ib_pkgs, ib_profiles:$ib_profiles, source_changed:$src_changed, packages_changed:$pkg_changed, standard_packages_changed:$standard_packages_changed, kernel_changed:$kernel_changed, config_changed:$config_changed}]' \
               /tmp/target_changes.json > /tmp/target_changes.new
             mv /tmp/target_changes.new /tmp/target_changes.json
-            echo "${MATRIX_TARGET}|${SRC_STATUS}|${PKG_STATUS}|${STD_PKG_STATUS}|${KERNEL_STATUS}|${CFG_STATUS}" >> /tmp/change_report.txt
-          done
-
-          {
-            echo "### 🔍 变更检测（per-target）"
-            echo ""
-            echo "| 目标 | 源码 | 插件 feed | 标准 packages | 内核/Toolchain | 目标配置 |"
-            echo "|---|---|---|---|---|---|"
-            while IFS='|' read -r t s p sp k c; do
-              echo "| \`${t}\` | ${s} | ${p} | ${sp} | ${k} | ${c} |"
-            done < /tmp/change_report.txt
-          } >> "$GITHUB_STEP_SUMMARY"
+          done < /tmp/target_stage.jsonl
 
       # ── 决策信号: 综合 trigger + 变更检测结果 ──
       - name: Decide build mode

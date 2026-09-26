@@ -1163,11 +1163,58 @@ jobs:
           cd ib
           for prof in $PROFILES; do
             echo "::group::📦 IB build PROFILE=${prof}"
-            if [ "$prof" = "_default_" ]; then
-              make image PACKAGES="$PACKAGES" 2>&1 | tee ib-build.log
-            else
-              make image PACKAGES="$PACKAGES" PROFILE="$prof" 2>&1 | tee "ib-build-${prof}.log"
-            fi
+            IB_LOG="ib-build.log"
+            [ "$prof" != "_default_" ] && IB_LOG="ib-build-${prof}.log"
+            # ── 两阶段包选择: seed 的 =y 请求可能含全量构建 kconfig 已静默丢弃的包 ──
+            # (内核 6.18 起 timer/heartbeat/netdev/default-on 触发器内建, 对应 kmod 包
+            #  不存在; run 36211341719 ipq807x: 5 个 kmod "no such package" 致 IB 失败,
+            #  而全量固件 config.buildinfo 同样不含它们——IB 与全量本就一致)。
+            # apk 的选择器是权威: 失败时解析缺失清单, 剔除后重试 (最多 3 轮);
+            # 剔除仅限直接请求的包 (在 PACKAGES 内), 缺失依赖则硬失败 (需人工介入)。
+            attempt=1
+            while true; do
+              if [ "$prof" = "_default_" ]; then
+                set +e
+                make image PACKAGES="$PACKAGES" 2>&1 | tee "$IB_LOG"
+                IB_RC="${PIPESTATUS[0]}"
+                set -e
+              else
+                set +e
+                make image PACKAGES="$PACKAGES" PROFILE="$prof" 2>&1 | tee "$IB_LOG"
+                IB_RC="${PIPESTATUS[0]}"
+                set -e
+              fi
+              [ "$IB_RC" -eq 0 ] && break
+              IB_MISSING=$(sed -n 's/^  \([^ ]*\) (no such package):$/\1/p' "$IB_LOG" | sort -u)
+              if [ -z "$IB_MISSING" ]; then
+                echo "::error::IB 构建失败 (非包选择问题, 详见 $IB_LOG)"
+                exit 1
+              fi
+              if [ "$attempt" -ge 3 ]; then
+                echo "::error::IB 包选择重试 ${attempt} 轮后仍有缺失: ${IB_MISSING}"
+                exit 1
+              fi
+              IB_UNREQUESTED=""
+              for m in $IB_MISSING; do
+                if printf ' %s ' "$PACKAGES" | grep -q " $m "; then
+                  # grep -v 无匹配 rc=1 属过滤的预期状态 (非错误), 不触发 set -e
+                  PACKAGES=$(printf '%s\n' "$PACKAGES" | tr ' ' '\n' | { grep -vxF "$m" || true; } | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+                else
+                  IB_UNREQUESTED="$IB_UNREQUESTED $m"
+                fi
+              done
+              if [ -n "$IB_UNREQUESTED" ]; then
+                echo "::error::IB 缺失包不在请求清单内 (属依赖缺失, 需人工排查): ${IB_UNREQUESTED}"
+                exit 1
+              fi
+              if [ -z "$(echo "$PACKAGES" | tr -d ' ')" ]; then
+                # 请求包被剔除到空 → 继续会静默构建 IB 默认包集固件, 必须硬失败
+                echo "::error::IB 请求包全部缺失, 中止"
+                exit 1
+              fi
+              echo "::warning::IB 索引无以下 seed 请求的包 (全量构建 kconfig 亦未产出, 与全量固件一致), 已剔除: ${IB_MISSING}"
+              attempt=$((attempt + 1))
+            done
             echo "::endgroup::"
           done
           find bin/targets -type f \

@@ -552,3 +552,78 @@ ipq60xx / ipq807x 上 smartdns 进程存活、CPU 正常, 但 DoH 上游解析�
 ### Diagnostic Notes
 
 上游 48.4 之后 master 未修此泄漏 (仅 b59606e HTTP2/QUIC 轮询内重入 close 的 UAF、e01b938 request_pending 桶数、webui); 相关开放 PR #2458 (429/503 不应 prohibit)、#2422 (TLS/HTTP3 泄漏) 均未合入。
+
+## 单 step `run:` 块超 21000 字符触发 workflow 解析 422
+
+### Symptom
+
+`gh workflow run` / push 被拒，报：
+
+```text
+HTTP 422: Invalid Argument - failed to parse workflow:
+(Line: 304, Col: 14): Exceeded max expression length 21000
+```
+
+报错的行列指向该 step 的 `run: |` 行，而非任何真实语法错误。
+
+### Verified Root Cause
+
+GitHub Actions 把**每个 step 的整个 `run` 块连同其中所有 `${{ }}` 表达式**作为一个整体做长度校验，单块上限约 21000 字符。`firmware-build-unified.yml` 的 `Plan build / Load targets & check changes` 是单 step 巨型块（415 行 / 20593 字符），本来就在阈值边缘；2026-09-26 指纹源重构（tree SHA 真值锁 + 上游 feeds 检测 + 基线闸门）给它加了约 100 行 shell，把它推过了 21000。
+
+注意：这不是 YAML 解析失败，也非 shell 语法错误——`python validate-workflows.py` 的 PyYAML + `bash -n` 全部通过，但 GitHub 服务端校验拒绝。本地脚本无法覆盖此平台约束。
+
+### Fix
+
+把超长 step 拆分。该步骤内各节段通过 shell 变量（`TEMP_CHANGED`、`PACKAGES_CHANGED`、`STANDARD_PACKAGES_CHANGED`、`FEEDS_UNMEASURABLE`、`CHANGED_PACKAGES_FINAL`、`UPSTREAM_FEEDS_CHANGED` 等）强耦合，跨 step 拆分必须把这些标量经 `$GITHUB_ENV`（同 job 后续 step 可读）或 `$GITHUB_OUTPUT` 传递。
+
+推荐拆分点（节段标记见该步骤注释）：
+
+- step A「Load targets + SHA/config 检测」：到「目标配置文件变更检测」结束，产出 `FILTERED`、`build-state.json` 已在工作目录、各 target 的 SHA 变更标记。
+- step B「包级变更检测（tree SHA）」：从「构建输入包级变更检测」到汇总结束，把 `CHANGED_PACKAGES_FINAL` 及各 `*_CHANGED` 标记写 `$GITHUB_ENV`。
+- step C「提取 IB packages/profiles + 输出」：读 step B 的环境变量组装 `$GITHUB_OUTPUT`。
+
+注意 per-target 变量在 for 循环内、随循环结束丢失——若拆到不同 step，需在循环末尾把每个 target 的结果落进 `/tmp/target_changes.json`（现有机制），后续 step 从该文件读，而不是依赖 shell 变量跨 step。
+
+### Verification
+
+拆分后每个 step 的 `run` 块字符数均 < 21000：
+
+```text
+python -c "import yaml; d=yaml.safe_load(open('.github/workflows/firmware-build-unified.yml',encoding='utf-8')); [print(len(s.get('run','')), j.get('name','?'), s.get('name','?')) for j in d['jobs'].values() for s in j.get('steps',[]) if s.get('run')]"
+```
+
+`gh workflow run firmware-build-unified.yml --ref main -f target=all -f trigger=smart` 不再返回 422。
+
+### Diagnostic Notes
+
+平台约束无本地 linter 覆盖；建议在 `.github/scripts/validate-workflows.py` 增加一条「单 step `run` 块字符数 > 20000 告警」检查，把该约束左移到本地（留 1000 字符余量给 `${{ }}` 表达式求值膨胀）。
+> 2026-09-26 已落地：拆分为 `Load targets & check changes`(11231) → `Detect package-level changes`(9569) → `Extract IB params & finalize changes`(3303) 三 step，per-target 中间结果经 `/tmp/target_stage.jsonl`（stage 1）与 `/tmp/target_pkg_stage.jsonl`（stage 2）传递；2b 大小检查已入验证脚本。
+
+## sdk-ib 路径 IB 组装 `unable to select packages`（seed 请求含 kconfig 丢弃的包）
+
+### Symptom
+
+`compile-packages.yml` `Build firmware via IB from SDK packages` 失败（run `36211341719` ipq807x）：
+
+```text
+ERROR: unable to select packages:
+  kmod-leds-pwm (no such package):
+    required by: world[kmod-leds-pwm]
+  kmod-ledtrig-default-on (no such package):
+  ...
+make[2]: *** [Makefile:266: package_install] Error 5
+```
+
+ipq60xx 同路径成功；仅 ipq807x 失败。
+
+### Verified Root Cause
+
+plan 侧 `ib_packages` 从 seed `=y` 行**原文提取**，但全量构建的 defconfig 会静默丢弃不存在的包：
+
+- 内核 6.18 起 `LEDS_TRIGGER_TIMER/HEARTBEAT/NETDEV/DEFAULT_ON` 已内建，fork 的 `package/kernel/linux/modules/leds.mk` **不再定义**这 4 个 kmod 包；`kmod-leds-pwm` 定义存在但模块文件路径已变，同样无产出。
+- 证据：全量固件 `ipq807x-V260925` 的 `config.buildinfo` 仅含 7 个 led kmod `=y`（缺上述 5 个），manifest 同样不含——**IB 与全量固件本就一致，错在 IB 请求清单包含了 kconfig 已丢弃的包**。
+- ipq60xx seed 未请求任何 led kmod，故未触发。
+
+### Fix
+
+IB 组装改两阶段（`compile-packages.yml`）：apk 选择器失败时从日志解析 `  <name> (no such package):` 缺失清单，剔除**直接请求**的包后重试（最多 3 轮，剔除打 `::warning`）；缺失包不在请求清单内则硬失败（属依赖缺失，需人工）。apk 的选择器是权威，不做文件名猜测。

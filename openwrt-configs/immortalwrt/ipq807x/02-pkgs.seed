@@ -141,17 +141,15 @@ CONFIG_PACKAGE_iputils-arping=y
 CONFIG_PACKAGE_jq=y
 CONFIG_PACKAGE_kmod=y
 # ── LED 调光与点亮模式 (LED Triggers & PWM) ──
-CONFIG_PACKAGE_kmod-leds-pwm=y
+# 注: 内核 6.18 起 timer/heartbeat/netdev/default-on 触发器已内建、leds-pwm 模块
+# 路径已变, 这 5 个 kmod 无产出 (全量 defconfig 静默丢弃, run 36211341719 IB 亦报
+# no such package); 保留的 6 个为全量构建实际产出 (见 V260925 config.buildinfo)。
 CONFIG_PACKAGE_kmod-ledtrig-activity=y
-CONFIG_PACKAGE_kmod-ledtrig-heartbeat=y
-CONFIG_PACKAGE_kmod-ledtrig-timer=y
 CONFIG_PACKAGE_kmod-ledtrig-oneshot=y
 CONFIG_PACKAGE_kmod-ledtrig-transient=y
 CONFIG_PACKAGE_kmod-ledtrig-pattern=y
 CONFIG_PACKAGE_kmod-ledtrig-network=y
-CONFIG_PACKAGE_kmod-ledtrig-netdev=y
 CONFIG_PACKAGE_kmod-ledtrig-gpio=y
-CONFIG_PACKAGE_kmod-ledtrig-default-on=y
 CONFIG_PACKAGE_kmod-leds-group-multicolor=y
 CONFIG_PACKAGE_nano-plus=y
 CONFIG_PACKAGE_openssh-client=y

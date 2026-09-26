@@ -102,6 +102,8 @@
 | G9 | P1 | sdk-ib 真实构建验证（变更包子集 + IB 注入） | ⬜ | 无 run 证据 | 验证项见 `pkg-incremental-build.md` § 待验证项：smart 无变更跳过 / sdk.config 之外变更包升级全量 / P2 透传路径 |
 | G10 | P2 | PKG_ARTIFACTS 采集时机修复 | 🚫 | `compile-packages.yml` 编译循环（`1dad4519` 起即在 `make compile` 之后 `find`，注释「编译后查询」） | 误判：代码自 1dad4519 起已正确放在编译后（2026-09-24 复查确认） |
 | G11 | P2 | 上游 feeds 变更检测（luci/routing/telephony/video） | 🟨 | 本提交，`firmware-build-unified.yml` plan 侧 | 解析源码分支 `feeds.conf.default`（有锁分支按锁、无锁按默认 HEAD）→ ls-remote 比 state.feeds_sha → compare 包级 diff → 剔除被 custom feed 覆盖的包（scripts/feeds 本地优先语义）；diff 不可测回退全量。修复此前上游 feeds 完全漏检 |
+| G12 | P1 | IB 组装两阶段包选择（seed 请求 vs IB 实际索引） | 🟨 | 本提交，`compile-packages.yml` `Build firmware via IB` | run `36211341719` ipq807x 实证：seed `=y` 请求含全量构建 kconfig 丢弃的包（内核 6.18 触发器内建，5 个 led kmod 无产出），apk `unable to select packages` 致 IB 失败；全量固件 config.buildinfo 同样不含这些包。修复：apk 选择失败→解析缺失清单→剔除直接请求项重试（≤3 轮，warning），依赖缺失硬失败。待回归验证 |
+| G13 | P1 | plan 巨型 step 拆分（GitHub 21000 字符上限） | 🟨 | 本提交，`firmware-build-unified.yml` plan 三 step | push/dispatch 422 `Exceeded max expression length 21000`（run `36222463066`，本地 YAML/bash -n 不报错）；拆为 Load targets(11231) / Detect package-level(9569) / Extract IB & finalize(3303)，中间结果经 `/tmp/target_stage.jsonl`→`/tmp/target_pkg_stage.jsonl`→`target_changes.json` 传递。详见 pitfalls § 单 step run: 块超 21000。待 dispatch 验证 |
 
 ## 待决
 
@@ -126,3 +128,4 @@
 - 2026-09-24：improvement-ledger skill Mount 挂载——全表注入 P 列（P0/P1/P2 定义见文首），新增本进展记录区；AGENTS.md 已有 Project Status 段，按第 0 步规则不覆盖、未改动。
 - 2026-09-25：G3/G4/G6 缺陷修复（状态保持 🟨 待验证）：run `36130960021` 实证两处逻辑陷阱——① lock 查询键 target/feed 分支名错配（plan + compile-packages，qualcomm 双目标必然 miss 回退全量）；② compile-firmware 全量路径不写逐包基线（基线缺失死锁，mt798x 误报 17 包全量，真实变更仅 passwall/naiveproxy/sing-box 3 包且均在 sdk.config 内）。修复后待 smart 触发实证 G9。
 - 2026-09-26：G3/G4/G6 指纹源重构 + G11 新增（均 🟨 待验证）：run `36211341719` 实证 lock 逐包指纹锚上游仓库 HEAD——openwrt/packages master 的 rsync/banip 无关提交翻转 tailscale 指纹致 mt798x 误判全量（net/tailscale 自 09-02 未动）。重构为构建输入真值锁：custom feed 顶层目录 tree SHA（内容寻址）+ feeds.conf.default 上游 feeds HEAD/compare 包级 diff（剔除 custom feed 覆盖，scripts/feeds 本地优先），state 字段 `packages`→`feed_trees`/`feeds_sha`；标准 feed 变更不再一刀切全量，折入变更包集合走 sdk.config 交集路由。验证工具沉淀为可复用脚本 `.github/scripts/validate-workflows.py`（YAML+bash -n+语义回归），已挂载到 workflow-agent-common 与 orchestrator/executor agent。
+- 2026-09-26：G12+G13 新增（🟨 待验证）：① run `36211341719` ipq807x sdk-ib 首跑失败——IB `unable to select packages`（5 个 led kmod），根因 seed `=y` 原文提取含 kconfig 丢弃包（内核 6.18 触发器内建，全量 config.buildinfo 同样不含），修复为 IB 两阶段包选择（apk 权威解析缺失→剔除重试）；② run `36222463066` push 422 `Exceeded max expression length 21000`——单 step run: 块超平台上限（本地不报错），plan 拆为三 step（中间结果 JSONL 传递），验证脚本补 2b 大小告警。

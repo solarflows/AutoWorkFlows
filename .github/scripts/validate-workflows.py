@@ -9,6 +9,8 @@
 检查项:
   1. PyYAML 解析每个 workflow。
   2. 对每个 bash `run:` 块执行 `bash -n`（GitHub 表达式替换为占位值）。
+  2b. 单 step `run:` 块长度告警阈值（GitHub 服务端 21000 字符上限, 超限 push/dispatch
+      422 而本地 YAML/bash -n 不报错——左移该约束）。
   3. 指纹管道语义回归（tree SHA 真值锁, 2026-09-26 重构）:
      - feeds.conf.default 解析（sed 双模式: 有锁/无锁分支、注释、src-link、packages 排除）
      - compare diff 包名提取（awk: 分类/包 与 包/... 两类 feed 布局, 根文件跳过）
@@ -152,6 +154,43 @@ def check_bash_n(files: list[Path], bash: str, rep: Report) -> None:
             else:
                 rep.ok(f"{f.name} / {jname} / {sname}")
     print(f"  (共 {total} 个 bash run: 块)")
+
+
+# GitHub Actions 单 step `run:` 块长度上限约 21000 字符 (含其中 ${{ }} 表达式,
+# 服务端按展开前文本校验)。超限时 push/dispatch 被拒: HTTP 422
+# "Exceeded max expression length 21000", 报错行列指向 `run: |` 行而非真实语法错误,
+# 本地 PyYAML/bash -n 无法覆盖 —— 故在此左移告警 (留 1000 字符余量给表达式膨胀)。
+RUN_BLOCK_LIMIT = 21000
+RUN_BLOCK_WARN = 20000
+
+
+def check_run_block_size(files: list[Path], rep: Report) -> None:
+    print("== 2b. 单 step run: 块长度 (GitHub 21000 上限) ==")
+    oversize = 0
+    for f in files:
+        try:
+            doc = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except Exception:
+            rep.fail(f"{f.name}: YAML 解析失败, 跳过 run 块长度检查")
+            continue
+        worst = (0, "", "")
+        for jname, sname, run, _shell in iter_run_blocks(doc):
+            n = len(run)
+            if n > worst[0]:
+                worst = (n, jname, sname)
+            if n > RUN_BLOCK_WARN:
+                oversize += 1
+                rep.fail(
+                    f"{f.name} / {jname} / {sname}: {n} 字符 > 告警线 {RUN_BLOCK_WARN}"
+                    + (" (已超 GitHub 21000 上限, push/dispatch 将 422)"
+                       if n > RUN_BLOCK_LIMIT else "")
+                    + " —— 拆分方案见 docs/openwrt-build-pitfalls.md "
+                      "「单 step run: 块超 21000 字符触发 workflow 解析 422」",
+                )
+        if worst[0] <= RUN_BLOCK_WARN:
+            rep.ok(f"{f.name} 最大 run 块 {worst[0]} 字符 ({worst[1]} / {worst[2]})")
+    if oversize == 0:
+        print(f"  (全部 run 块 ≤ {RUN_BLOCK_WARN} 字符)")
 
 
 def check_residual(files: list[Path], rep: Report) -> None:
@@ -317,6 +356,7 @@ def main() -> int:
     rep = Report()
     check_yaml(files, rep)
     check_bash_n(files, bash, rep)
+    check_run_block_size(files, rep)
     check_residual(files, rep)
     if not args.no_semantics:
         check_semantics(bash, rep)

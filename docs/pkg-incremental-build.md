@@ -145,3 +145,5 @@ executor 原本自下载 `sdk-index.json`/`ib-index.json` 并 jq 排序选最新
 - [ ] 上游 feed 变更路径：luci/routing HEAD 变化触发检测、被 custom feed 覆盖的包不触发
 - [ ] 基线闸门：state 无 feeds_sha 时即使各 feed HEAD 均未变也强制全量（建基线），次轮起正常增量判定——首轮全量是预期行为，勿误判为 bug
 - [ ] 根级非包文件变更（feed 根 Config.in/README）：不触发构建（设计取舍），日志应显示撤销信号而非全量
+- [ ] IB 组装两阶段包选择：seed 请求含 kconfig 丢弃的包时剔除重试（run `36211341719` ipq807x 回归：5 个 led kmod 剔除后应成功）
+- [ ] plan step 拆分后（21000 字符限制）三 step 串行数据流：stage.jsonl → pkg_stage.jsonl → target_changes.json，决策 step 消费不变
