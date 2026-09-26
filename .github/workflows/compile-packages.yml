@@ -1359,6 +1359,36 @@ jobs:
             upload_asset_retry "$PACKAGE_TAG" "$PACKAGE_REPO" "$file"
           done
 
+          # ── 同包多版本收敛: 每个包名保留最近 KEEP_PKG_VERSIONS 版 (含 .sha256) ──
+          # 与 compile-firmware 的 Publish Passwall packages 同款: 按资产 updated_at
+          # 留最新 N 版; 公钥 (.pem/.pub) 与解析失败的文件永不清; 清理失败只告警
+          # 不阻塞发布。SDK 增量路径与全量路径写同一 tag, 两边收敛逻辑一致。
+          KEEP_PKG_VERSIONS=3
+          if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json assets \
+            --jq '[.assets[] | select(.name | test("\\.(apk|ipk)$"))]' > /tmp/pkg_assets.json 2>/dev/null; then
+            echo "::warning::软件包资产列表获取失败, 跳过版本收敛"
+          elif [ -s /tmp/pkg_assets.json ] && [ "$(jq 'length' /tmp/pkg_assets.json)" -gt 0 ]; then
+            jq -r 'sort_by(.updated_at) | reverse
+                   | group_by(.name | sub("-[^-]+-r[0-9]+\\.apk$";"") | sub("_[^_]+-[^-]+_[^.]+\\.ipk$";"") | if . == "" then "default" else . end)
+                   | .[] | .[ $KEEP_PKG_VERSIONS : ][] | .name' \
+              --argjson KEEP_PKG_VERSIONS "$KEEP_PKG_VERSIONS" /tmp/pkg_assets.json > /tmp/pkg_purge.txt || : > /tmp/pkg_purge.txt
+            if [ -s /tmp/pkg_purge.txt ]; then
+              echo "ℹ️ 软件包版本收敛: 以下 $(wc -l < /tmp/pkg_purge.txt) 个旧版本将被清理 (每包保留 ${KEEP_PKG_VERSIONS} 版)"
+              cat /tmp/pkg_purge.txt
+              while IFS= read -r old; do
+                [ -n "$old" ] || continue
+                gh release delete-asset "$PACKAGE_TAG" "$old" --repo "$PACKAGE_REPO" --yes 2>/dev/null \
+                  || echo "::warning::清理 $old 失败 (保留, 下轮重试)"
+                if gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json assets \
+                  --jq --arg s "${old}.sha256" '[.assets[].name] | index($s) != null' | grep -qx true; then
+                  gh release delete-asset "$PACKAGE_TAG" "${old}.sha256" --repo "$PACKAGE_REPO" --yes 2>/dev/null || true
+                fi
+              done < /tmp/pkg_purge.txt
+            else
+              echo "ℹ️ 软件包版本收敛: 无需清理 (每包 ≤ ${KEEP_PKG_VERSIONS} 版)"
+            fi
+          fi
+
       - name: Upload published state
         if: success() && steps.artifacts.outputs.package_count > 0
         uses: actions/upload-artifact@v7

@@ -7,6 +7,7 @@
       "ref": "test",
       "standard_packages_repo": "solarflows/packages",
       "standard_packages_branch": "hanwckf",
+      "passwall_tag": "packages-mt798x",
       "sdk_container": "aarch64_cortex-a53-21.02.7"
     },
     {

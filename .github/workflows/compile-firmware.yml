@@ -1675,6 +1675,41 @@ jobs:
             upload_asset_retry "$PACKAGE_TAG" "$PACKAGE_REPO" "$file"
           done
 
+          # ── 同包多版本收敛: 每个包名保留最近 KEEP_PKG_VERSIONS 版 (含 .sha256) ──
+          # 版本号变化 → 文件名不同 → --clobber 不会覆盖, 只会无限累积
+          # (packages-ipq807x 曾出现 luci-app-passwall 3 版共存)。按资产 updated_at
+          # 排序留最新 N 版; 公钥 (.pem/.pub) 与解析失败的文件永不清; 清理失败只
+          # 告警不阻塞发布 (写入方自约束, 与 artifacts keep_versions 同模式)。
+          KEEP_PKG_VERSIONS=3
+          if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json assets \
+            --jq '[.assets[] | select(.name | test("\\.(apk|ipk)$"))]' > /tmp/pkg_assets.json 2>/dev/null; then
+            echo "::warning::软件包资产列表获取失败, 跳过版本收敛"
+          elif [ -s /tmp/pkg_assets.json ] && [ "$(jq 'length' /tmp/pkg_assets.json)" -gt 0 ]; then
+            # 包名提取: apk "pkg-1.2.3-r1.apk" → pkg (去最后两段 ver-rN);
+            # ipk "pkg_1.2.3-1_arch.ipk" → pkg (去 _ver-rev_arch 段)。
+            # 提取失败 (无版本结构) 归 default 组, 永不清。
+            jq -r 'sort_by(.updated_at) | reverse
+                   | group_by(.name | sub("-[^-]+-r[0-9]+\\.apk$";"") | sub("_[^_]+-[^-]+_[^.]+\\.ipk$";"") | if . == "" then "default" else . end)
+                   | .[] | .[ $KEEP_PKG_VERSIONS : ][] | .name' \
+              --argjson KEEP_PKG_VERSIONS "$KEEP_PKG_VERSIONS" /tmp/pkg_assets.json > /tmp/pkg_purge.txt || : > /tmp/pkg_purge.txt
+            if [ -s /tmp/pkg_purge.txt ]; then
+              echo "ℹ️ 软件包版本收敛: 以下 $(wc -l < /tmp/pkg_purge.txt) 个旧版本将被清理 (每包保留 ${KEEP_PKG_VERSIONS} 版)"
+              cat /tmp/pkg_purge.txt
+              while IFS= read -r old; do
+                [ -n "$old" ] || continue
+                gh release delete-asset "$PACKAGE_TAG" "$old" --repo "$PACKAGE_REPO" --yes 2>/dev/null \
+                  || echo "::warning::清理 $old 失败 (保留, 下轮重试)"
+                # 配套 .sha256 同步清理 (存在才清)
+                if gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json assets \
+                  --jq --arg s "${old}.sha256" '[.assets[].name] | index($s) != null' | grep -qx true; then
+                  gh release delete-asset "$PACKAGE_TAG" "${old}.sha256" --repo "$PACKAGE_REPO" --yes 2>/dev/null || true
+                fi
+              done < /tmp/pkg_purge.txt
+            else
+              echo "ℹ️ 软件包版本收敛: 无需清理 (每包 ≤ ${KEEP_PKG_VERSIONS} 版)"
+            fi
+          fi
+
       # ════════ SDK / IB 打包与发布 ════════
       # SDK and IB share one per-target release tag. Their indexes stay separate
       # because the two asset types have different consumers.
