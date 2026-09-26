@@ -324,7 +324,11 @@ jobs:
               standard_packages_repo: (.standard_packages_repo // "solarflows/packages"),
               standard_packages_branch: (.standard_packages_branch // "master"),
               release_repo:      (.release_repo      // .repo),
-              firmware_release_tag_prefix: (.firmware_release_tag_prefix // ""),
+              # 固件 release tag 统一为 <target>-<version> (分支/目标 + 版本):
+              # 同仓库多 target (ipq60xx/ipq807x) 必须分开 release, 否则同名资产
+              # (config.buildinfo/seed/manifest) 互相覆盖; mt798x 此前用裸 V* 与
+              # ipq 系不统一。默认前缀 = target 名, 显式配置优先。
+              firmware_release_tag_prefix: (.firmware_release_tag_prefix // .target),
               passwall_repo:     (.passwall_repo     // $pkg_repo),
               passwall_tag:      (.passwall_tag      // "packages"),
               sdk_packages:      (.sdk_packages      // "*"),
