@@ -22,3 +22,4 @@ disable-model-invocation: false
 
 - 追踪来自 planner 的 `workflow_call` inputs 与 outputs 契约。
 - 校验缓存顺序、产物命名、校验和文件、PROFILE 循环与签名模式。
+- build-info.json 指纹字段（`feed_trees`/`feeds_sha`）改动后，运行 `.github/scripts/validate-workflows.py` 验证 heredoc 插值与 persist 合并语义。

@@ -507,34 +507,134 @@ jobs:
               CFG_STATUS="🟣 无基准"
             fi
 
-            # ── 包级指纹变更检测（plan 侧计算变更包子集）──
-            # 从 solarflows/openwrt-packages 分支读取 packages.lock.json,
-            # 与 build-state 逐包 commit 比对，算出变更包集合。
-            # 仅 smart 触发 + feed 级变更标记为真时才计算；显式触发 (full/sdk-packages)
-            # 传 * 给 executor 由 sdk.config 控制全量。
+            # ── 构建输入包级变更检测（tree SHA 内容寻址，与构建解析顺序对齐）──
+            # 指纹锚点 = 实际进构建的内容，而非上游仓库滚动 HEAD：
+            #   custom feed: 顶层目录 tree SHA 对比（packages.lock.json/README 等 root
+            #   文件是 blob 天然排除；上游仓库无关提交不再触碰指纹。run 36211341719
+            #   教训: lock 记录的整仓 HEAD 被 openwrt/packages master 的 rsync/banip
+            #   无关提交翻转，致 tailscale 误报全量）；
+            #   上游 feeds (feeds.conf.default): HEAD 变化才 compare diff 取包名，
+            #   剔除被 custom feed 覆盖的包（package/<feed> 本地优先，scripts/feeds
+            #   install 对已存在的本地 srcpackage 直接跳过，构建不用上游副本）。
+            # 仅 smart 触发时计算；显式触发 (full/sdk-packages) 传 * 给 executor。
             CURR_TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
-            if [ "$CURR_TRIGGER" = "smart" ] && [ "$PACKAGES_CHANGED" = "true" ]; then
-              echo "  🔍 [${MATRIX_TARGET}] 包级指纹检测 (packages.lock.json@${CURR_PKG_BRANCH})..."
-              PKG_LOCK_JSON=$(gh api -H "Accept: application/vnd.github.raw+json" \
-                "repos/${CURR_PKG_REPO}/contents/packages.lock.json?ref=${CURR_PKG_BRANCH}" 2>/dev/null || echo '{}')
+            UPSTREAM_FEEDS_CHANGED=false
+            FEEDS_UNMEASURABLE=false
+            TEMP_CHANGED=""
+            if [ "$CURR_TRIGGER" = "smart" ]; then
+              # ── a. custom feed 目录树表（trees API 一次拿全部顶层目录，per-branch 缓存）──
+              # 缓存路径带 GITHUB_RUN_ID: 同一 plan job 内多 target 共享（qualcomm 双目标
+              # 共用 qualcommax 分支），跨 run 失效——自托管 runner 复用 /tmp 也不会读到旧值。
+              TREES_CACHE="/tmp/feed-trees-${CURR_PKG_BRANCH}-${GITHUB_RUN_ID}.json"
+              if [ ! -f "$TREES_CACHE" ]; then
+                gh api "repos/${CURR_PKG_REPO}/git/trees/${CURR_PKG_BRANCH}" \
+                  --jq '[.tree[] | select(.type == "tree") | {(.path): .sha}] | add // {}' \
+                  > "$TREES_CACHE" 2>/dev/null || echo '{}' > "$TREES_CACHE"
+              fi
+              CURR_TREES=$(cat "$TREES_CACHE")
 
-              # lock 的 targets 键是 feed 分支名 (custom-feed.yml 按分支生成, 如 qualcommax),
-              # 不是 target 名 —— ipq60xx/ipq807x 共用 qualcommax 分支, 用 target 名查询必然
-              # miss 回退全量 (run 36130960021)。state 侧仍按 target 键存取, 两个键空间不冲突。
-              CURR_PKG_MAP=$(echo "$PKG_LOCK_JSON" | jq -r --arg t "$CURR_PKG_BRANCH" '.targets[$t] // {}' 2>/dev/null)
-              LAST_PKG_MAP=$(jq -r ".\"${MATRIX_TARGET}\".packages // {}" build-state.json 2>/dev/null || echo '{}')
-
-              if [ "$CURR_PKG_MAP" != "{}" ]; then
-                TEMP_CHANGED=""
-                for pkg_name in $(echo "$CURR_PKG_MAP" | jq -r 'keys[]'); do
-                  curr_commit=$(echo "$CURR_PKG_MAP" | jq -r ".\"$pkg_name\".commit // empty")
-                  last_commit=$(echo "$LAST_PKG_MAP" | jq -r ".\"$pkg_name\" // empty")
-                  if [ -z "$last_commit" ] || [ "$last_commit" != "$curr_commit" ]; then
+              # ── b. custom feed 变更包（目录 tree SHA 对比，新增/变化/删除均计入）──
+              if [ "$PACKAGES_CHANGED" = "true" ]; then
+                echo "  🔍 [${MATRIX_TARGET}] custom feed 目录树对比..."
+                LAST_TREES=$(jq -r ".\"${MATRIX_TARGET}\".feed_trees // {}" build-state.json)
+                for pkg_name in $(echo "$CURR_TREES" | jq -r 'keys[]'); do
+                  curr_tree=$(echo "$CURR_TREES" | jq -r --arg p "$pkg_name" '.[$p]')
+                  last_tree=$(echo "$LAST_TREES" | jq -r --arg p "$pkg_name" '.[$p] // empty')
+                  if [ -z "$last_tree" ] || [ "$last_tree" != "$curr_tree" ]; then
                     TEMP_CHANGED="$TEMP_CHANGED $pkg_name"
                   fi
                 done
+                for pkg_name in $(echo "$LAST_TREES" | jq -r 'keys[]'); do
+                  echo "$CURR_TREES" | jq -e --arg p "$pkg_name" 'has($p)' >/dev/null 2>&1 || TEMP_CHANGED="$TEMP_CHANGED $pkg_name"
+                done
+              fi
+
+              # ── c. 变更 feed 的包级 diff（compare → 包名，剔除 custom feed 覆盖）──
+              # 包名取法兼容两类 feed 布局: openwrt/packages 与 luci 为 分类/包/... (取
+              # 第 2 级), routing/telephony/video 为 包/... (取第 1 级)。
+              # 设计取舍: 根级非包文件 (Config.in/README 等, NF==1) 变更不计入包集合，
+              # 认为不影响包产物——若 diff 仅含此类文件，汇总阶段会撤销该 feed 的变更信号。
+              feed_diff_to_pkgs() {
+                local FD_REPO="$1" FD_BASE="$2" FD_TIP="$3"
+                local FD_PATHS f_path pkg_name
+                FD_PATHS=$(gh api "repos/${FD_REPO}/compare/${FD_BASE}...${FD_TIP}" --jq '.files[].filename' 2>/dev/null || true)
+                if [ -z "$FD_PATHS" ]; then
+                  return 1
+                fi
+                for f_path in $FD_PATHS; do
+                  pkg_name=$(echo "$f_path" | awk -F/ 'NF >= 3 {print $2; next} NF == 2 {print $1}')
+                  [ -n "$pkg_name" ] || continue
+                  if ! echo "$CURR_TREES" | jq -e --arg p "$pkg_name" 'has($p)' >/dev/null 2>&1; then
+                    TEMP_CHANGED="$TEMP_CHANGED $pkg_name"
+                  fi
+                done
+                return 0
+              }
+              if [ "$STANDARD_PACKAGES_CHANGED" = "true" ]; then
+                echo "  🔍 [${MATRIX_TARGET}] 标准 packages 包级 diff..."
+                if [ -z "$LAST_STD_PKG" ]; then
+                  # 无基线 (新 target 首建): 与 config_sha 无基准同语义, 全量建基线;
+                  # 不能以空 base 调 compare (URL 无效, 会误报「超 250 文件」误导排障)。
+                  echo "  🔴 [${MATRIX_TARGET}] 标准 packages 无历史基线, 确立基准走全量"
+                  FEEDS_UNMEASURABLE=true
+                elif ! feed_diff_to_pkgs "$CURR_STD_PKG_REPO" "$LAST_STD_PKG" "$CURR_STD_PKG"; then
+                  echo "  ⚪ [${MATRIX_TARGET}] 标准 packages diff 不可测 (可能超 250 文件)"
+                  FEEDS_UNMEASURABLE=true
+                fi
+              fi
+              CONF_KEY=$(printf '%s@%s' "$CURR_REPO" "$CURR_SRC" | sha256sum | cut -c1-12)
+              FEEDS_CONF_CACHE="/tmp/feeds-conf-${CONF_KEY}-${GITHUB_RUN_ID}.txt"
+              if [ ! -f "$FEEDS_CONF_CACHE" ]; then
+                gh api -H "Accept: application/vnd.github.raw+json" \
+                  "repos/${CURR_REPO}/contents/feeds.conf.default?ref=${CURR_SRC}" \
+                  > "$FEEDS_CONF_CACHE" 2>/dev/null || : > "$FEEDS_CONF_CACHE"
+              fi
+              # ── 上游 feed 基线闸门: feeds_sha 只由 executor 构建后回写, 若无基线还判
+              # "无变更" 会永久 skip → 基线永远建立不起来 → 上游 luci 无限漂移不触发。
+              # 与 config_sha 无基准同语义: 强制全量建基线 (打破 skip 死锁)。
+              if ! jq -e ".\"${MATRIX_TARGET}\".feeds_sha | type == \"object\"" build-state.json >/dev/null 2>&1; then
+                echo "  🔴 [${MATRIX_TARGET}] 上游 feed 无历史基线, 确立基准走全量"
+                FEEDS_UNMEASURABLE=true
+              fi
+              if [ -s "$FEEDS_CONF_CACHE" ]; then
+                while read -r feed_name feed_url feed_branch; do
+                  [ -n "$feed_name" ] || continue
+                  LAST_FEED_SHA=$(jq -r ".\"${MATRIX_TARGET}\".feeds_sha[\"${feed_name}\"] // empty" build-state.json)
+                  [ -z "$LAST_FEED_SHA" ] && continue
+                  CURR_FEED_SHA=$(git ls-remote "$feed_url" "${feed_branch:-HEAD}" 2>/dev/null | cut -f1 | head -1)
+                  [ -z "$CURR_FEED_SHA" ] && continue
+                  if [ "$CURR_FEED_SHA" != "$LAST_FEED_SHA" ]; then
+                    UPSTREAM_FEEDS_CHANGED=true
+                    echo "  🔵 [${MATRIX_TARGET}] 上游 feed ${feed_name} 变更: ${LAST_FEED_SHA:0:7} → ${CURR_FEED_SHA:0:7}"
+                    feed_repo=$(echo "$feed_url" | sed -E 's|^https://github.com/||; s|\.git$||')
+                    if ! feed_diff_to_pkgs "$feed_repo" "$LAST_FEED_SHA" "$CURR_FEED_SHA"; then
+                      echo "  ⚪ [${MATRIX_TARGET}] ${feed_name} diff 不可测 (可能超 250 文件)"
+                      FEEDS_UNMEASURABLE=true
+                    fi
+                  fi
+                done < <(sed -nE -e 's|^src-git[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:]]+);([^[:space:]]+)$|\1 \2 \3|p' \
+                                 -e 's|^src-git[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:];]+)$|\1 \2|p' \
+                                 "$FEEDS_CONF_CACHE" | awk '$1 != "packages"')
+              else
+                # conf 不可读 → 无法比对上游 feed, 与 kernel 检测「不可测降级」同模式,
+                # 保守回退全量而非静默跳过 (静默跳过 = 重新引入上游 feed 漏检盲区)。
+                echo "  ⚪ [${MATRIX_TARGET}] feeds.conf.default 不可读, 上游 feed 检测不可测"
+                FEEDS_UNMEASURABLE=true
+              fi
+
+              # ── d. 汇总：空集撤销信号，非空走 sdk.config 交集路由 ──
+              # FEEDS_UNMEASURABLE 也须进入汇总: 无基线/conf 不可测时即使各 feed HEAD
+              # 均未变, 也要走全量建基线 (否则 skip 死锁, 基线永远写不回)。
+              if [ "$PACKAGES_CHANGED" = "true" ] || [ "$STANDARD_PACKAGES_CHANGED" = "true" ] || [ "$UPSTREAM_FEEDS_CHANGED" = "true" ] || [ "$FEEDS_UNMEASURABLE" = "true" ]; then
                 TEMP_CHANGED=$(echo "$TEMP_CHANGED" | xargs | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
-                if [ -n "$TEMP_CHANGED" ]; then
+                if [ "$FEEDS_UNMEASURABLE" = "true" ]; then
+                  echo "  🔴 [${MATRIX_TARGET}] feed diff 不可测, 回退全量"
+                  PKG_STATUS="🔴 不可测"
+                  CHANGED_PACKAGES_FINAL="*"
+                  PACKAGES_CHANGED=true
+                elif [ -n "$TEMP_CHANGED" ]; then
+                  # 变更包集合非空: 统一信号走包级路由（标准/上游 feed 的变更已折入集合）
+                  PACKAGES_CHANGED=true
                   # 求变更包 ∩ sdk.config 包的交集: SDK 只能编译 sdk.config 清单内的包
                   # (package 目录已固化); 不在清单内的包 (如 tailscale/wrtbwmon) 只能
                   # 由全量编译产出, 变更时需升级为全量而非 SDK 增量。
@@ -555,9 +655,8 @@ jobs:
                   OUTSIDE_SDK=$(echo "$OUTSIDE_SDK" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
                   if [ -n "$OUTSIDE_SDK" ]; then
                     echo "  🔴 [${MATRIX_TARGET}] $(echo "$OUTSIDE_SDK" | wc -w) 个变更包不在 sdk.config 内 (${OUTSIDE_SDK}) → 升级全量编译"
-                    # 保持 PACKAGES_CHANGED=true: feed 级检测已确认 HEAD 变了,
-                    # 包级指纹确认具体包变了; Stage 2 会根据 sdk_packages="*" 把本 target
-                    # 路由到全量固件编译而非 SDK 增量。
+                    # 保持 PACKAGES_CHANGED=true: 变更包集合已确认具体包变了;
+                    # Stage 2 会根据 sdk_packages="*" 把本 target 路由到全量固件编译。
                     PKG_STATUS="🟠 需全量"
                     CHANGED_PACKAGES_FINAL="*"
                   else
@@ -567,13 +666,13 @@ jobs:
                   fi
                 else
                   echo "  ✅ [${MATRIX_TARGET}] 包级指纹一致——撤销 feed 级变更信号"
+                  # 撤销语义含两类情况: ① 各 feed HEAD 未变; ② HEAD 变了但 diff 仅含
+                  # 根级非包文件或被 custom feed 覆盖的包——均视为不影响构建输入。
                   PACKAGES_CHANGED=false
+                  STANDARD_PACKAGES_CHANGED=false
                   PKG_STATUS="✅ 包级一致"
                   CHANGED_PACKAGES_FINAL=""
                 fi
-              else
-                echo "  ⚠️ [${MATRIX_TARGET}] packages.lock.json 无 ${CURR_PKG_BRANCH} 条目，回退全量"
-                CHANGED_PACKAGES_FINAL="*"
               fi
             fi
 
@@ -694,7 +793,9 @@ jobs:
               if [ "$TRIGGER" = "sdk-packages" ] && [ "$STANDARD_PKG_CHANGED" = "false" ]; then
                 need_sdk=true
               elif [ "$TRIGGER" = "smart" ]; then
-                if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ] && [ "$STANDARD_PKG_CHANGED" = "false" ] && [ "$CONFIG_CHANGED" = "false" ]; then
+                # 标准/上游 feed 的变更已在 Stage 1 折入变更包集合 (packages_changed),
+                # 由 sdk.config 交集统一路由, 不再一刀切排除增量路径。
+                if [ "$SRC_CHANGED" = "false" ] && [ "$PKG_CHANGED" = "true" ] && [ "$CONFIG_CHANGED" = "false" ]; then
                   # Package-only changes use the existing SDK and IB together.
                   need_sdk=true
                   need_ib=true
@@ -725,9 +826,6 @@ jobs:
               echo "ℹ️ [${MATRIX_TARGET}] cache_strategy=${CACHE_STRATEGY},强制全量编译"
               SHOULD_FW=true; SHOULD_PUB_FW=true
             elif [ "$TRIGGER" = "full" ]; then
-              SHOULD_FW=true; SHOULD_PUB_FW=true
-            elif [ "$STANDARD_PKG_CHANGED" = "true" ]; then
-              echo "🟠 [${MATRIX_TARGET}] 标准 packages feed 已变更,强制全量编译"
               SHOULD_FW=true; SHOULD_PUB_FW=true
             elif [ "$CONFIG_CHANGED" = "true" ] && [ "$TRIGGER" = "smart" ]; then
               echo "🟣 [${MATRIX_TARGET}] 目标配置文件已更新，smart 模式触发全量编译"
@@ -1027,24 +1125,27 @@ jobs:
             STD_PKG_BRANCH=$(jq -r '.standard_packages_branch // empty' "$info" 2>/dev/null)
             STD_PKG_SHA=$(jq -r '.standard_packages_sha // empty' "$info" 2>/dev/null)
             CFG_SHA=$(jq -r '.config_sha // empty' "$info" 2>/dev/null)
-            PKG_COMMITS_JSON=$(jq -c '.packages // {}' "$info" 2>/dev/null || echo '{}')
+            FEED_TREES_JSON=$(jq -c '.feed_trees // {}' "$info" 2>/dev/null || echo '{}')
+            FEEDS_SHA_JSON=$(jq -c '.feeds_sha // {}' "$info" 2>/dev/null || echo '{}')
             [ -z "$STATE_TARGET" ] && continue
             echo "ℹ️ 合并状态来自 $(basename "$(dirname "$info")") → ${STATE_TARGET}"
             jq --arg target "$STATE_TARGET" --arg src "$SRC_SHA" --arg pkg "$PKG_SHA" \
               --arg std_pkg_repo "$STD_PKG_REPO" --arg std_pkg_branch "$STD_PKG_BRANCH" --arg std_pkg_sha "$STD_PKG_SHA" \
               --arg cfg "$CFG_SHA" \
-              --argjson pkg_commits "$PKG_COMMITS_JSON" \
+              --argjson feed_trees "$FEED_TREES_JSON" \
+              --argjson feeds_sha "$FEEDS_SHA_JSON" \
               --arg mode "$(jq -r '.build_mode // "unknown"' "$info" 2>/dev/null)" \
               --arg now "$(date +'%Y-%m-%d %H:%M:%S')" \
-              '.[$target] = ((.[$target] // {})
+              '.[$target] = (((.[$target] // {})
                 + (if $src != "" then {source_sha:$src} else {} end)
                 + (if $pkg != "" then {packages_sha:$pkg} else {} end)
                 + (if $std_pkg_repo != "" then {standard_packages_repo:$std_pkg_repo} else {} end)
                 + (if $std_pkg_branch != "" then {standard_packages_branch:$std_pkg_branch} else {} end)
                 + (if $std_pkg_sha != "" then {standard_packages_sha:$std_pkg_sha} else {} end)
                 + (if $cfg != "" then {config_sha:$cfg} else {} end)
-                + (if ($pkg_commits | length) > 0 then {packages:$pkg_commits} else {} end)
-                + {last_build:$now, last_mode:$mode})' \
+                + (if ($feed_trees | length) > 0 then {feed_trees:$feed_trees} else {} end)
+                + (if ($feeds_sha | length) > 0 then {feeds_sha:$feeds_sha} else {} end)
+                + {last_build:$now, last_mode:$mode}) | del(.packages))' \
               build-state.json > build-state.new
             mv build-state.new build-state.json
             MERGED_COUNT=$((MERGED_COUNT + 1))

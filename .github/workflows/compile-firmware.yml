@@ -1449,16 +1449,25 @@ jobs:
             CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
           fi
 
-          # ── 逐包指纹基线 (G6): 全量路径此前不写 packages 字段 → persist-state 不回写基线
-          # → 下次 feed 变更时 plan 把 lock 里所有包误判为变更 (run 36130960021 误报 17 包全量)。
-          # 从已 clone 的 feed 就地读取 packages.lock.json, 用与 compile-packages 相同的公式
-          # 扁平化 {pkg: "commit"}; lock 的 targets 键是 feed 分支名, 不是 target 名。
-          PKG_LOCK_FILE="${GITHUB_WORKSPACE}/openwrt/package/${{ inputs.packages_feed_name }}/packages.lock.json"
-          PACKAGE_COMMITS_JSON=$(if [ -f "$PKG_LOCK_FILE" ]; then
-            jq -c --arg t "${{ inputs.matrix_packages_branch }}" '.targets[$t] // {} | with_entries(.value |= (.commit // ""))' "$PKG_LOCK_FILE" 2>/dev/null || echo '{}'
-          else
-            echo '{}'
-          fi)
+          # ── 构建输入指纹 (G6): custom feed 目录 tree SHA + 各 feed 实际消费 commit ──
+          # tree SHA 内容寻址: 目录内容不变则指纹不变 (run 36211341719 教训: 上游仓库
+          # HEAD 的无关提交不应触碰构建指纹)。本地 git ls-tree 与 plan 侧 trees API 读
+          # 同一 git 对象, SHA 天然一致; feeds_sha 记录 feeds update 后各 feed 实际
+          # 消费 commit, 供 plan 侧 ls-remote 比对。
+          FEED_DIR="${GITHUB_WORKSPACE}/openwrt/package/${{ inputs.packages_feed_name }}"
+          FEED_TREES_JSON='{}'
+          if [ -d "$FEED_DIR" ]; then
+            FEED_TREES_JSON=$(git -C "$FEED_DIR" ls-tree HEAD 2>/dev/null | \
+              jq -Rrs 'split("\n") | map(select(length > 0)) | map(split("\t")) | map(select(.[0] | test("^040000 tree "))) | map({(.[1]): (.[0] | split(" ")[2])}) | add // {}') || FEED_TREES_JSON='{}'
+          fi
+          FEEDS_SHA_JSON=$(
+            for d in "${GITHUB_WORKSPACE}/openwrt/feeds"/*/; do
+              [ -d "$d" ] || continue
+              f_sha=$(git -C "$d" rev-parse HEAD 2>/dev/null) || continue
+              [ -n "$f_sha" ] || continue
+              printf '%s %s\n' "$(basename "$d")" "$f_sha"
+            done | jq -Rrs 'split("\n") | map(select(length > 0)) | map(split(" ")) | map({(.[0]): .[1]}) | add // {}'
+          ) || FEEDS_SHA_JSON='{}'
 
           cat > build-info.json <<JSONEOF
           {
@@ -1471,7 +1480,8 @@ jobs:
             "packages_repo": "${{ inputs.packages_feed_repo }}",
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${{ steps.clone_packages.outputs.packages_sha_full }}",
-            "packages": ${PACKAGE_COMMITS_JSON},
+            "feed_trees": ${FEED_TREES_JSON},
+            "feeds_sha": ${FEEDS_SHA_JSON},
             "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
             "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
             "standard_packages_sha": "${{ steps.retry.outputs.standard_packages_sha || steps.update-feeds.outputs.standard_packages_sha }}",

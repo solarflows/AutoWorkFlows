@@ -1,8 +1,8 @@
 # 按需编译演进计划（Package-Grained Incremental Build）
 
-> 状态：设计已定稿，P1/P2 已实现待验证，P3 未实施
+> 状态：设计已定稿，P1/P2 已实现待验证（2026-09-26 指纹源重构为 tree SHA），P3 未实施
 > 关联：`firmware-build-unified.yml`（plan）、`compile-packages.yml`（executor）、`docs/todo.md`（台账）
-> 最后核对：2026-09-24
+> 最后核对：2026-09-26
 
 ## 0. 目标
 
@@ -12,23 +12,49 @@
 
 ## 1. 包级指纹检测（P1）
 
-### 数据来源：`packages.lock.json`
+### 数据来源：构建输入真值锁（tree SHA）
 
-- `custom-feed.yml` → `collect_packages.py` 已为每个 target 生成 `{pkg: {repo, branch, commit}}` 并随 feed 分支提交
-- 注意：OpenWrt 构建系统**没有**集中的包 commit 输出文件（包级 commit 分散在各 Makefile 的 `PKG_SOURCE_VERSION`，且多数包用 release tarball 而非 git 源），`packages.lock.json` 是必要的人工制品
+指纹锚点是**实际进构建的内容**，而非上游仓库滚动 HEAD：
+
+- **custom feed**（`solarflows/openwrt-packages@<branch>`，clone 到 `package/<feed>`）：
+  顶层目录的 git tree SHA（内容寻址，目录内容不变则指纹不变）。plan 侧用 trees API
+  一次取全部目录（per-branch 缓存），executor 侧本地 `git ls-tree HEAD`——同一 git
+  对象，SHA 天然一致。`packages.lock.json`/README 等 root 文件是 blob 不是目录，天然
+  排除；上游仓库无关提交（如 openwrt/packages master 的 rsync/banip 更新）不再触碰指纹。
+- **上游 feeds**（源码分支 `feeds.conf.default` 定义；有锁分支按锁、无锁按默认 HEAD）：
+  `git ls-remote` 比 state.feeds_sha，变了才 compare API 取变更文件 → 包名
+  （≥3 级路径取第 2 级，2 级路径取第 1 级，兼容 openwrt/packages 与 routing 两类布局），
+  **剔除被 custom feed 覆盖的包**（`scripts/feeds` install 对已存在的本地 srcpackage
+  直接跳过，构建不用上游副本）。
+- 历史：2026-09-25 前用 `packages.lock.json` 逐包上游 commit 比对，run `36211341719`
+  实证其锚上游仓库 HEAD——openwrt/packages master 的无关提交翻转 tailscale 指纹致
+  mt798x 误判全量，遂重构。`packages.lock.json` 文件保留（collect_packages.py 收集
+  增量跳过仍依赖），plan 不再消费。
 
 ### 检测逻辑（plan 侧 `Load targets & check changes`）
 
 ```
-feed HEAD (git ls-remote) 变了？
-  └─ smart 触发 → 读 openwrt-packages@branch 的 packages.lock.json
-       └─ 与 build-state.packages 逐包比对 commit SHA
-            ├─ 全一致 → 撤销 feed 级变更信号，跳过
-            ├─ 有变更 → 求"变更包 ∩ sdk.config 包"交集
-            │     ├─ 交集非空 → CHANGED_PACKAGES_FINAL = 交集
-            │     └─ 交集为空但变更包在 sdk.config 之外 → 升级全量（SDK 无该包目录）
-            └─ lock 无 target 条目 → 回退 `*`（全量）
+任一 feed HEAD 变了（custom / 标准 packages / 上游 feeds）？
+  └─ smart 触发 → 汇总变更包集合：
+       custom feed: 目录 tree SHA 对比 → ΔC
+       标准/上游 feed: compare diff → 包名 → 剔除 ∈ custom feed 目录 → ΔF'
+       集合 = ΔC ∪ ΔF'
+            ├─ 集合为空 → 撤销全部 feed 级变更信号，跳过
+            │    （含「HEAD 变了但 diff 仅根级非包文件或全被 custom feed 覆盖」，
+            │      视为不影响构建输入——设计取舍，非遗漏）
+            ├─ diff 不可测（compare 超 250 文件 / conf 不可读 / 无基线）→ 回退 `*`（全量）
+            └─ 非空 → 求"变更包 ∩ sdk.config 包"交集
+                  ├─ 交集非空 → CHANGED_PACKAGES_FINAL = 交集
+                  └─ 有包在 sdk.config 之外 → 升级全量（SDK 无该包目录）
 ```
+
+### 基线闸门（防 skip 死锁）
+
+`feed_trees`/`feeds_sha` 只由 executor 构建后回写。若 state 无 `feeds_sha` 基线时
+仍判「无变更」，plan 会永久 skip → 基线永远建立不起来 → 上游 luci 无限漂移不触发。
+故与 `config_sha` 无基准同语义：**无 `feeds_sha` 基线 → 强制全量建基线**；
+`feeds.conf.default` 不可读同样回退全量（与 kernel 检测「不可测降级」同模式），
+不静默跳过。首轮升级后预期全量一次，属正常行为非 bug。
 
 ### 触发方式语义
 
@@ -42,13 +68,14 @@ feed HEAD (git ls-remote) 变了？
 ## 2. 状态回写闭环
 
 ```
-executor compile 步骤:
-  packages.lock.json (从 checkout 的 pkgs-feed 本地读)
-    → 扁平化为 {pkg: "commit"} 写入 build-info.json
+executor (compile-firmware / compile-packages):
+  custom feed → git ls-tree HEAD → {pkg: tree_sha} 写入 build-info.json.feed_trees
+  feeds update 后各 feed → git rev-parse HEAD → {feed: sha} 写入 build-info.json.feeds_sha
 persist-state:
-  merge 步骤把 .packages 字段回写 IMMWRT_BUILD_STATE
+  merge 步骤回写 IMMWRT_BUILD_STATE 的 feed_trees / feeds_sha
+  （并清除旧 .packages 逐包上游 commit 字段）
 下一轮 plan:
-  build-state.packages 作为 LAST_PKG_MAP 逐包比对
+  feed_trees 作 LAST_TREES 对比；feeds_sha 作上游 feed HEAD 基线
 ```
 
 ## 3. 逐包数据采集（P1）
@@ -88,10 +115,13 @@ executor 原本自下载 `sdk-index.json`/`ib-index.json` 并 jq 排序选最新
 必须同时满足（任一不满足降级全量）：
 - `cache_strategy == smart` 且 `trigger == smart`
 - `source_changed == false`（源码 fork HEAD 未变）
-- `packages_changed == true`（插件 feed HEAD 变了）
-- `standard_packages_changed == false`
+- `packages_changed == true`（变更包集合非空：custom feed Δ ∪ 标准/上游 feed Δ'）
 - `config_changed == false`（seed/targets.json 未变）
 - SDK/IB index 均存在且同版本同 source_sha
+
+注（2026-09-26 起）：标准 packages feed 与上游 feeds（luci/routing/telephony/video）的
+变更折入变更包集合走同一交集路由，不再一刀切强制全量；被 custom feed 覆盖的包
+（scripts/feeds 本地优先）不参与判定。
 
 ## 7. 已落地 commit 清单
 
@@ -103,6 +133,7 @@ executor 原本自下载 `sdk-index.json`/`ib-index.json` 并 jq 排序选最新
 | `87473989` | sdk-ib 接受 plan 下传变更包子集并求 sdk.config 交集 |
 | `b816ebe4` | 本计划文档落地 |
 | 本组提交 | P2：SDK/IB 文件解析上移 plan，executor 透传（保留本地回退） |
+| 本组提交 | 指纹源重构：packages.lock 逐包上游 commit → tree SHA 真值锁 + 上游 feeds 检测（G11），state `packages`→`feed_trees`/`feeds_sha` |
 
 ## 8. 待验证项
 
@@ -110,3 +141,7 @@ executor 原本自下载 `sdk-index.json`/`ib-index.json` 并 jq 排序选最新
 - [ ] smart 无变更路径：plan 判定跳过，0 executor
 - [ ] 变更包在 sdk.config 之外 → 升级全量的分支
 - [ ] P2 透传路径：plan 指定 SDK/IB 文件后 executor 跳过 index 自解析（本地回退分支也应保持可用）
+- [ ] tree SHA 指纹：首轮建基线全量 → 次轮精确到变更包（run `36211341719` 后回归验证）
+- [ ] 上游 feed 变更路径：luci/routing HEAD 变化触发检测、被 custom feed 覆盖的包不触发
+- [ ] 基线闸门：state 无 feeds_sha 时即使各 feed HEAD 均未变也强制全量（建基线），次轮起正常增量判定——首轮全量是预期行为，勿误判为 bug
+- [ ] 根级非包文件变更（feed 根 Config.in/README）：不触发构建（设计取舍），日志应显示撤销信号而非全量

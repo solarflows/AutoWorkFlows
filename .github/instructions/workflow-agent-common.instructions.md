@@ -12,7 +12,7 @@ applyTo: [".github/workflows/**", ".github/upstream-sync/**", ".github/custom-fe
 - 绝不向 OpenWrt 相关进程导出 `TARGET`、`HOST`、`BUILD`（详见 [project-constraints.instructions.md](project-constraints.instructions.md) § 环境变量禁令）。
 - `.github/archive/workflows/` 仅作历史参考。
 - 保留有意义的失败。不得用宽泛的 `|| true`、丢弃 stderr 或无条件成功兜底来掩盖错误。
-- 编辑后先验证最小相关面：
+- 编辑后先验证最小相关面，优先运行可复用脚本 `.github/scripts/validate-workflows.py`（PyYAML 解析 + 全部 bash `run:` 块 `bash -n` + 指纹管道语义回归），避免重复造轮子；脚本不可用时再手工执行等价检查：
   - 解析 workflow YAML。
   - 对改动的多行 `run:` 块执行 `bash -n`。
   - 有源码 fixture 时对改动的补丁执行 `git apply --check`。

@@ -546,17 +546,9 @@ jobs:
           # 逐包数据采集: 每个包记录墙钟耗时、make 退出码、compile.txt 的
           # real/user/sys 时间与产物文件名, 供 Summary 报表与状态回写使用。
           PACKAGES_REPORT='[]'
-          # packages.lock.json 由 custom-feed.yml 生成并提交到 feed 分支，
-          # 记录每个包的上游源 commit SHA（与 plan 侧指纹检测同源）。
-          # 扁平化为 {pkg: "commit"} 格式与 plan/build-state 保持一致。
-          # lock 的 targets 键是 feed 分支名 (如 qualcommax), 不是 target 名 ——
-          # 用 target 名查询 qualcomm 双目标会取到空 map → 基线永远无法建立 (run 36130960021)。
-          PKG_LOCK_FILE="${{ github.workspace }}/pkgs-feed/packages.lock.json"
-          PKG_LOCK_RAW=$(if [ -f "$PKG_LOCK_FILE" ]; then jq -c --arg t "${{ inputs.matrix_packages_branch }}" '.targets[$t] // {}' "$PKG_LOCK_FILE" 2>/dev/null; else echo '{}'; fi)
-          # notebook: pkgs-feed 在 checkout 时即已拉取，其内 packages.lock.json 已在
-          # custom-feed.yml 中通过 --lockfile packages.lock.json 生成并随分支提交，
-          # 此处直接读取即可，无需再次调用 gh api。
-          PACKAGE_COMMITS=$(echo "$PKG_LOCK_RAW" | jq 'with_entries(.value |= (.commit // ""))')
+          # 构建输入指纹 (feed_trees/feeds_sha) 已移至 Generate build info 步骤计算:
+          # tree SHA 内容寻址, 与 plan 侧 trees API 同源 (2026-09-26 重构,
+          # packages.lock.json 逐包上游 commit 方案废弃, 详见 docs/pkg-incremental-build.md)。
           for pkg in $PACKAGES; do
             echo "::group::📦 Compile $pkg"
             PKG_T0=$(date +%s)
@@ -600,7 +592,6 @@ jobs:
           done
 
           echo "packages_report=$(echo "$PACKAGES_REPORT" | jq -c .)" >> "$GITHUB_OUTPUT"
-          echo "package_commits=$(echo "$PACKAGE_COMMITS" | jq -c .)" >> "$GITHUB_OUTPUT"
 
           # ── 逐包报表 (Markdown 表格写入 Summary) ──
           {
@@ -951,6 +942,20 @@ jobs:
             fi
           fi
 
+          # ── 构建输入指纹 (G6): custom feed 目录 tree SHA + 各 feed 实际消费 commit ──
+          # 与 compile-firmware 同公式; plan 侧 trees API 读同一 git 对象, SHA 天然一致。
+          # pkgs-feed 即 custom feed 的 git checkout (cp -rlf 到 package/ 的源头)。
+          FEED_TREES_JSON=$(git -C pkgs-feed ls-tree HEAD 2>/dev/null | \
+            jq -Rrs 'split("\n") | map(select(length > 0)) | map(split("\t")) | map(select(.[0] | test("^040000 tree "))) | map({(.[1]): (.[0] | split(" ")[2])}) | add // {}') || FEED_TREES_JSON='{}'
+          FEEDS_SHA_JSON=$(
+            for d in openwrt/feeds/*/; do
+              [ -d "$d" ] || continue
+              f_sha=$(git -C "$d" rev-parse HEAD 2>/dev/null) || continue
+              [ -n "$f_sha" ] || continue
+              printf '%s %s\n' "$(basename "$d")" "$f_sha"
+            done | jq -Rrs 'split("\n") | map(select(length > 0)) | map(split(" ")) | map({(.[0]): .[1]}) | add // {}'
+          ) || FEEDS_SHA_JSON='{}'
+
           cat > build-info.json <<JSONEOF
           {
             "target": "${IMMWRT_TARGET}",
@@ -960,7 +965,8 @@ jobs:
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${PKG_COMMIT_FULL}",
             "packages_commit": "${PKG_COMMIT}",
-            "packages": ${{ steps.compile.outputs.package_commits || '{}' }},
+            "feed_trees": ${FEED_TREES_JSON},
+            "feeds_sha": ${FEEDS_SHA_JSON},
             "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
             "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
             "standard_packages_sha": "${{ steps.compile.outputs.standard_packages_sha }}",

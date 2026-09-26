@@ -24,3 +24,4 @@ disable-model-invocation: false
 
 - 追踪 planner 输出到两个 reusable workflow 的传递链路。
 - 检查 `needs`、`if`、矩阵、缓存路由、上游 run 识别与输出契约。
+- 变更检测/指纹逻辑（tree SHA 真值锁、feeds.conf 解析、sdk.config 交集）改动后，运行 `.github/scripts/validate-workflows.py` 的语义回归段验证。
