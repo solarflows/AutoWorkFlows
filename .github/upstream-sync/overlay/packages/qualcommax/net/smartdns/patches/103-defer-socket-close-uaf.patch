@@ -1,0 +1,198 @@
+diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
+index 9506bce..fdb598a 100644
+--- a/src/dns_client/client_http2.c
++++ b/src/dns_client/client_http2.c
+@@ -880,29 +880,44 @@ static int _dns_client_http2_process_read(struct dns_server_info *server_info)
+ 
+ int _dns_client_process_http2(struct dns_server_info *server_info, struct epoll_event *event, unsigned long now)
+ {
++	int ret = -1;
++
+ 	if (server_info->http2_ctx == NULL) {
+ 		if (_dns_client_http2_init_ctx(server_info) < 0) {
+ 			return -1;
+ 		}
+ 	}
+ 
++	/*
++	 * Guard the whole read/write cycle: a query callback invoked from
++	 * _dns_client_http2_process_read() (via _dns_client_recv()) may request
++	 * an immediate retry, which normally closes the socket right away.
++	 * That would free server_info->ssl/http2_ctx and conn_stream_list
++	 * entries this function is still iterating/using. Defer any such close
++	 * until the guard is released below.
++	 */
++	_dns_client_process_guard_enter(server_info);
++
+ 	if (event->events & EPOLLOUT) {
+ 		if (_dns_client_http2_process_write(server_info) < 0) {
+-			return -1;
++			goto out;
+ 		}
+ 	}
+ 
+ 	/* Always process read, as write might have read data (e.g. WINDOW_UPDATE),
+ 	   or there might be pending data in SSL/HTTP2 buffers */
+ 	if (_dns_client_http2_process_read(server_info) < 0) {
+-		return -1;
++		goto out;
+ 	}
+ 
+ 	if (_dns_client_http2_has_buffered_requests(server_info)) {
+ 		if (_dns_client_http2_process_write(server_info) < 0) {
+-			return -1;
++			goto out;
+ 		}
+ 	}
+ 
+-	return 0;
++	ret = 0;
++out:
++	_dns_client_process_guard_leave(server_info);
++	return ret;
+ }
+diff --git a/src/dns_client/client_quic.c b/src/dns_client/client_quic.c
+index a357058..e6839ef 100644
+--- a/src/dns_client/client_quic.c
++++ b/src/dns_client/client_quic.c
+@@ -467,6 +467,17 @@ static int _dns_client_process_quic_poll(struct dns_server_info *server_info)
+ 	struct dns_conn_stream *conn_stream = NULL;
+ 	struct dns_conn_stream *tmp = NULL;
+ 
++	/*
++	 * Guard the poll loop: dispatching a decoded response below can run
++	 * the query callback (via _dns_client_process_quic_stream_read() ->
++	 * _dns_client_process_recv_http3() -> _dns_client_recv()), which may
++	 * request an immediate retry and normally closes the socket right
++	 * away. That would free server_info->ssl and conn_stream_list entries
++	 * this loop is still iterating/using. Defer any such close until the
++	 * guard is released below.
++	 */
++	_dns_client_process_guard_enter(server_info);
++
+ 	while (true) {
+ 		int poll_item_count = 0;
+ 		size_t poll_process_count = 0;
+@@ -534,6 +545,7 @@ out:
+ 	pthread_mutex_lock(&server_info->lock);
+ 	if (list_empty(&processed_list)) {
+ 		pthread_mutex_unlock(&server_info->lock);
++		_dns_client_process_guard_leave(server_info);
+ 		return 0;
+ 	}
+ 
+@@ -545,6 +557,7 @@ out:
+ 	}
+ 	pthread_mutex_unlock(&server_info->lock);
+ 
++	_dns_client_process_guard_leave(server_info);
+ 	return poll_ret;
+ }
+ 
+diff --git a/src/dns_client/client_socket.c b/src/dns_client/client_socket.c
+index 78c8577..865928f 100644
+--- a/src/dns_client/client_socket.c
++++ b/src/dns_client/client_socket.c
+@@ -90,6 +90,19 @@ void _dns_client_close_socket_ext(struct dns_server_info *server_info, int no_de
+ 	dns_server_status server_status = DNS_SERVER_STATUS_DISCONNECTED;
+ 
+ 	pthread_mutex_lock(&server_info->lock);
++	if (server_info->process_depth > 0) {
++		/*
++		 * Called re-entrantly from inside the HTTP/2 or QUIC poll loop
++		 * (e.g. a query callback requested an immediate retry while that
++		 * loop is still iterating conn_stream_list / using server_info->ssl
++		 * or server_info->http2_ctx). Tearing those down here would free
++		 * state the outer loop is still using. Defer the real close until
++		 * the outer loop exits, see _dns_client_process_guard_leave().
++		 */
++		server_info->close_deferred = 1;
++		pthread_mutex_unlock(&server_info->lock);
++		return;
++	}
+ 	server_status = server_info->status;
+ 	server_info->status = DNS_SERVER_STATUS_DISCONNECTED;
+ 
+@@ -221,6 +234,33 @@ void _dns_client_shutdown_socket(struct dns_server_info *server_info)
+ 	}
+ }
+ 
++void _dns_client_process_guard_enter(struct dns_server_info *server_info)
++{
++	pthread_mutex_lock(&server_info->lock);
++	server_info->process_depth++;
++	pthread_mutex_unlock(&server_info->lock);
++}
++
++void _dns_client_process_guard_leave(struct dns_server_info *server_info)
++{
++	int need_close = 0;
++
++	pthread_mutex_lock(&server_info->lock);
++	if (server_info->process_depth > 0) {
++		server_info->process_depth--;
++	}
++
++	if (server_info->process_depth == 0 && server_info->close_deferred) {
++		server_info->close_deferred = 0;
++		need_close = 1;
++	}
++	pthread_mutex_unlock(&server_info->lock);
++
++	if (need_close) {
++		_dns_client_close_socket(server_info);
++	}
++}
++
+ int _dns_client_socket_send(struct dns_server_info *server_info)
+ {
+ 	if (server_info->type == DNS_SERVER_UDP) {
+diff --git a/src/dns_client/client_socket.h b/src/dns_client/client_socket.h
+index b36c0d3..ae31e9f 100644
+--- a/src/dns_client/client_socket.h
++++ b/src/dns_client/client_socket.h
+@@ -41,6 +41,19 @@ void _dns_client_close_socket_ext(struct dns_server_info *server_info, int no_de
+ 
+ void _dns_client_shutdown_socket(struct dns_server_info *server_info);
+ 
++/*
++ * Re-entrancy guard around the HTTP/2 and QUIC poll-and-dispatch loops.
++ * Call _dns_client_process_guard_enter() before iterating conn_stream_list /
++ * polling the connection, and _dns_client_process_guard_leave() when done.
++ * While the guard is held, _dns_client_close_socket()/_ext() defer the
++ * actual teardown instead of freeing state the loop is still using; the
++ * deferred close is executed by _dns_client_process_guard_leave() once the
++ * outermost guard exits.
++ */
++void _dns_client_process_guard_enter(struct dns_server_info *server_info);
++
++void _dns_client_process_guard_leave(struct dns_server_info *server_info);
++
+ #ifdef __cplusplus
+ }
+ #endif /*__cplusplus */
+diff --git a/src/dns_client/dns_client.h b/src/dns_client/dns_client.h
+index 03d1e38..949ef46 100644
+--- a/src/dns_client/dns_client.h
++++ b/src/dns_client/dns_client.h
+@@ -137,6 +137,20 @@ struct dns_server_info {
+ 	char alpn_selected[32];
+ 
+ 	dns_server_security_status security_status;
++
++	/*
++	 * Re-entrancy guard for the HTTP/2 and QUIC poll-and-dispatch loops.
++	 * Those loops iterate conn_stream_list / poll the connection-level SSL
++	 * object while dispatching decoded responses to the query callback.
++	 * The callback can request an immediate retry, which normally tears
++	 * down the socket (SSL_free(ssl), conn_stream_list teardown) right
++	 * away. Doing that while still inside the poll loop frees state the
++	 * loop is still using, so instead the close is deferred until the
++	 * loop finishes: see _dns_client_close_socket_ext() and
++	 * _dns_client_process_guard_enter/leave().
++	 */
++	int process_depth;
++	int close_deferred;
+ };
+ 
+ struct dns_server_pending_group {

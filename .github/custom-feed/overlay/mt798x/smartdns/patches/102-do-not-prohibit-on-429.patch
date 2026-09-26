@@ -1,0 +1,23 @@
+diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
+index 2d60d64..9506bce 100644
+--- a/src/dns_client/client_http2.c
++++ b/src/dns_client/client_http2.c
+@@ -729,7 +729,17 @@ static int _dns_client_http2_process_stream_one(struct dns_server_info *server_i
+ 	if (status > 0 && status != 200) {
+ 		tlog(TLOG_WARN, "http2 server query from %s:%d failed, server return http code: %d", server_info->ip,
+ 			 server_info->port, status);
+-		server_info->prohibit = 1;
++		/*
++		 * 429, 502, 503, and 504 are transient backpressure or CDN edge errors
++		 * for this request; they do not mean the server is dead. Prohibiting it
++		 * here shuts down the shared HTTP/2 connection and takes the upstream
++		 * out of rotation for up to 60 seconds, which is both disproportionate
++		 * and cascades across all upstreams to freeze DNS. Fail just this query
++		 * instead and let the caller retry it; other servers answer meanwhile.
++		 */
++		if (status != 429 && status != 502 && status != 503 && status != 504) {
++			server_info->prohibit = 1;
++		}
+ 		return -1;
+ 	}
+ 
