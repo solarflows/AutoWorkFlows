@@ -509,7 +509,10 @@ jobs:
             # per-target 中间结果落盘: 本 step (SHA/config 检测) 与包级检测 step 拆分后
             # (GitHub 单 step run: 块 21000 字符上限, 见 pitfalls 文档), 循环内 shell
             # 变量跨 step 不可见, 经 /tmp/target_stage.jsonl 传递。
-            jq -n --arg t "$MATRIX_TARGET" \
+            # -c 必需: jq 对多行 filter 字面量会保留多行形态 pretty-print 输出
+            # (run 36226606223: 每 target 写 22 行碎片, 下游 while read 逐行读出
+            #  非法 JSON), -c 强制单行紧凑 JSONL。
+            jq -nc --arg t "$MATRIX_TARGET" \
               --arg curr_repo "$CURR_REPO" --arg curr_src "$CURR_SRC" \
               --arg curr_pkg "$CURR_PKG" --arg curr_cfg "$CURR_CFG" \
               --arg curr_pkg_branch "$CURR_PKG_BRANCH" --arg curr_pkg_repo "$CURR_PKG_REPO" \
@@ -725,7 +728,8 @@ jobs:
               fi
             fi
             # per-target 包级结果落盘: 变量随循环结束丢失, finalize step 从此文件读取
-            jq -n --arg t "$MATRIX_TARGET" \
+            # -c 必需: 同 stage 1, 强制单行紧凑 JSONL (run 36226606223 教训)
+            jq -nc --arg t "$MATRIX_TARGET" \
               --arg sdk_pkgs "$CHANGED_PACKAGES_FINAL" --arg pkg_status "$PKG_STATUS" \
               --argjson pkg_changed "$PACKAGES_CHANGED" --argjson std_pkg_changed "$STANDARD_PACKAGES_CHANGED" \
               '{target:$t, sdk_packages:$sdk_pkgs, pkg_status:$pkg_status, pkg_changed:$pkg_changed, std_pkg_changed:$std_pkg_changed}' \

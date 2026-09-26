@@ -627,3 +627,27 @@ plan 侧 `ib_packages` 从 seed `=y` 行**原文提取**，但全量构建的 de
 ### Fix
 
 IB 组装改两阶段（`compile-packages.yml`）：apk 选择器失败时从日志解析 `  <name> (no such package):` 缺失清单，剔除**直接请求**的包后重试（最多 3 轮，剔除打 `::warning`）；缺失包不在请求清单内则硬失败（属依赖缺失，需人工）。apk 的选择器是权威，不做文件名猜测。
+
+## jq 多行 filter 字面量致 JSONL 落盘为多行碎片
+
+### Symptom
+
+step 拆分后（21000 限制），plan 的 stage 落盘 `jq -n --arg ... '{target:$t, ...}' >> /tmp/target_stage.jsonl` 产出**多行 pretty-print JSON**（每 target ~22 行），下游 `while IFS= read -r STAGE` 逐行读出非法 JSON 碎片（run `36226606223` `Extract IB params & finalize changes` 失败）：
+
+```text
+jq: parse error: Unfinished JSON term at EOF at line 2, column 0
+jq: error (at <stdin>:1): Cannot index string with string "target"
+jq: parse error: Expected string key before ':' at line 1, column 11
+```
+
+### Verified Root Cause
+
+jq 对**多行 filter 字面量**（`'{a:$x,\n b:$y}'`）会**保留换行形态 pretty-print 输出**——不是单行紧凑 JSON。本地 jq 1.8.2 逐字节复现：无 `-c` 时每 target 写 22 行，加 `-c` 后 1 行。单行 filter 不受影响（此前多年 `jq -n` 用法均为单行或输出直接进 shell 变量，未暴露）。
+
+### Fix
+
+所有写入 `.jsonl` 的 `jq -n` 一律加 `-c`（compact）。`validate-workflows.py` 4h 项静态回归：`jq -n`（无 c）后接 `.jsonl` 重定向即报错。
+
+### Diagnostic Notes
+
+排障时日志里 `##[group]Run ...` 段显示的脚本原文正常、`set +e` 吞掉落盘 jq 的成功状态、错误在**下一个 step** 才爆发——三重延迟让人误以为读取端有问题。本地装 jq（`winget install jqlang.jq`）跑同款命令是最快复现路径。

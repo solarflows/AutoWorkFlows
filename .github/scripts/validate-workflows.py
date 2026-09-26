@@ -207,7 +207,7 @@ def check_residual(files: list[Path], rep: Report) -> None:
             rep.ok(f"{f.name} 无残留 ({len(tokens)} 项已检查)")
 
 
-def check_semantics(bash: str, rep: Report) -> None:
+def check_semantics(bash: str, files: list[Path], rep: Report) -> None:
     """指纹管道语义回归: 与 workflow 内实际管道逐段等价验证。"""
     print("== 4. 指纹管道语义回归 ==")
 
@@ -331,6 +331,20 @@ def check_semantics(bash: str, rep: Report) -> None:
     else:
         rep.fail("基线闸门: 语义错误")
 
+    # 4h. JSONL 落盘必须单行 (run 36226606223: jq 对多行 filter 字面量保留
+    # pretty-print 多行输出 → 每 target 22 行碎片 → 下游 while read 读出非法 JSON)。
+    # 检查 workflow 中所有写入 *.jsonl 的 jq 命令都带 -c。
+    import re as _re
+    bad = []
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        for m in _re.finditer(r"jq -n(?!c)[^\n]*\\\n(?:[^\n]*\\\n)*[^\n]*>>[^\n]*\.jsonl", text):
+            bad.append(f"{f.name}: jq -n 无 -c 却写入 .jsonl")
+    if bad:
+        rep.fail("JSONL 落盘 -c 检查", "\n".join(bad))
+    else:
+        rep.ok("JSONL 落盘: 所有 jq -n 写 .jsonl 处均带 -c")
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -359,7 +373,7 @@ def main() -> int:
     check_run_block_size(files, rep)
     check_residual(files, rep)
     if not args.no_semantics:
-        check_semantics(bash, rep)
+        check_semantics(bash, files, rep)
 
     print()
     if rep.failures:
