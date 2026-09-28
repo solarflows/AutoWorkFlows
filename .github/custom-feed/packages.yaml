@@ -372,6 +372,7 @@ packages:
   - main
   - mt798x
   - qualcommax
+  - qt6
 - name: luci-app-passwall2
   description: '规范化 PKG_RELEASE: 统一 release 为整数规范'
   repo: https://github.com/Openwrt-Passwall/openwrt-passwall2
@@ -641,13 +642,6 @@ packages:
   paths:
   - luci-app-lucky
   - lucky
-  targets:
-  - qt6
-- name: luci-app-passwall
-  description: luci-app-passwall
-  repo: https://github.com/Openwrt-Passwall/openwrt-passwall
-  paths:
-  - luci-app-passwall
   targets:
   - qt6
 - name: luci-app-pushbot
