@@ -688,7 +688,8 @@ jobs:
           # 快照稳定性校验: 同 compile-firmware (run 36405700929 教训, 详见彼处注释)。
           CATCHUP_ATTEMPT=0
           while true; do
-            if ! git -C pkgs-feed fetch --depth 1 origin "${FEED_BRANCH}" \
+            # 显式 refspec 强制走分支: 同 compile-firmware (refs/tags 同名幽灵 tag 歧义)
+            if ! git -C pkgs-feed fetch --depth 1 origin "refs/heads/${FEED_BRANCH}" \
                || ! git -C pkgs-feed reset --hard FETCH_HEAD; then
               echo "::warning::拉取新 feed 失败, 跳过追平重编 (首轮产物仍自洽)"
               exit 0

@@ -851,7 +851,10 @@ jobs:
           # (最多 3 轮), 把抓到中间态的窗口从分钟级压到秒级; 仍不稳定则用最新值。
           CATCHUP_ATTEMPT=0
           while true; do
-            if ! git -C "$FEED_DIR" fetch --depth 1 origin "${FEED_BRANCH}" \
+            # 显式 refspec 强制走分支: 引用名 fetch 会优先匹配同名 tag
+            # (run 36420753418: refs/tags/mt798x 幽灵 tag 指向 06-22 孤儿提交,
+            # fetch origin mt798x 抓到 tag 而非分支, 快照校验重拉永远同一坏快照)
+            if ! git -C "$FEED_DIR" fetch --depth 1 origin "refs/heads/${FEED_BRANCH}" \
                || ! git -C "$FEED_DIR" reset --hard FETCH_HEAD; then
               echo "::warning::拉取新 feed 失败, 跳过追平重编 (首轮产物仍自洽)"
               exit 0
