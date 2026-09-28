@@ -39,6 +39,8 @@ on:
       # ── 全局上下文 ──
       version:                   { required: true, type: string }
       cache_strategy:            { required: false, type: string, default: 'smart' }
+      # 跳过编译后的 custom-feed 追平重编 (与 unified 的 skip_upstream 语义对齐)
+      skip_feed_catchup:        { required: false, type: boolean, default: false }
     secrets:
       ACCESS_TOKEN:              { required: true }
       APK_BUILD_KEY:             { required: false }
@@ -53,7 +55,8 @@ jobs:
     runs-on: ubuntu-24.04
     # 首次构建 golang host 工具链耗时显著更长:
     # run 31860987009 在 120 分钟时仍处于 haproxy 依赖编译阶段。
-    timeout-minutes: 240
+    # 240→280: feed 追平步骤需等待 custom-feed run (最长 ~40min) 后才重编。
+    timeout-minutes: 280
     concurrency:
       group: packages-release-${{ inputs.matrix_target }}-${{ inputs.matrix_passwall_repo }}-${{ inputs.matrix_passwall_tag }}
       cancel-in-progress: false
@@ -609,6 +612,144 @@ jobs:
             exit 1
           fi
 
+      # ───────── Feed 追平: 编译成功后触发 custom-feed, 分支前进则原地重编一轮 ─────────
+      # 刻意设计: 同 compile-firmware 的 Rebuild on feed update——构建周期内 feed
+      # 分支可能又前进, 编译成功后触发 custom-feed 并等待, HEAD 前进则重编。SDK
+      # 路径的 feed 是 cp -rlf 硬链接复制进 package/ (git 更新产生新 inode, 必须
+      # 重新复制); 变更包按 feed 目录 tree SHA 对比 (同 feed_trees 指纹机制) clean
+      # 强制失效后重编 (U12 教训: 同版本内容变更不可依赖 stamp, clean 才是可靠失效
+      # 手段), 未变更包 stamp 自然跳过。重编失败硬失败 (bin/ 已混入新旧产物, 不可
+      # 发布), 缓存保存步骤以 outcome != 'failure' 联动跳过。后续 Collect artifacts
+      # / Generate build info 读取的是重编后的 bin/ 与 pkgs-feed, 产物与状态均对齐。
+      - name: 🔄 Rebuild on feed update
+        if: success() && inputs.skip_feed_catchup != 'true' && steps.compile.outcome == 'success'
+        id: feed-rebuild
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          FEED_BRANCH="${{ inputs.matrix_packages_branch }}"
+          BEFORE_SHA=$(git -C pkgs-feed rev-parse HEAD)
+          BEFORE_TREES=$(git -C pkgs-feed ls-tree HEAD)
+          echo "📌 构建时 feed 版本: ${BEFORE_SHA:0:7} (${FEED_BRANCH})"
+
+          # ── 触发 custom-feed 更新本分支 (非受管分支跳过触发, 仅做远端对比) ──
+          case "$FEED_BRANCH" in
+            main|qt6|mt798x|qualcommax)
+              BEFORE_TS=$(date +%s)
+              if ! gh workflow run custom-feed.yml \
+                  --repo "${{ github.repository }}" \
+                  --ref "${{ github.ref_name }}" \
+                  -f targets="${FEED_BRANCH}"; then
+                echo "::warning::触发 custom-feed 失败, 跳过追平重编"
+                exit 0
+              fi
+              # gh workflow run 不返回 run ID: 记录触发前时间戳再轮询 (同 plan 模式)
+              RUN_ID=""
+              for i in $(seq 1 10); do
+                if ! RUN_ID=$(gh run list --repo "${{ github.repository }}" --workflow custom-feed.yml --limit 20 \
+                  --json databaseId,createdAt,headBranch,event \
+                  --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE_TS} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
+                  echo "::warning::查询 custom-feed run 失败, 跳过追平重编"
+                  exit 0
+                fi
+                [ -n "$RUN_ID" ] && break
+                sleep 3
+              done
+              if [ -z "$RUN_ID" ]; then
+                echo "::warning::30s 内未发现 custom-feed run, 跳过追平重编"
+                exit 0
+              fi
+              echo "⏳ 等待 custom-feed run ${RUN_ID} 完成..."
+              if ! timeout 2400 gh run watch "$RUN_ID" --repo "${{ github.repository }}" --interval 10 --exit-status; then
+                echo "::warning::custom-feed run 失败或超时, 跳过追平重编 (远端分支未变, 首轮产物仍有效)"
+                exit 0
+              fi
+              ;;
+            *)
+              echo "ℹ️ 分支 ${FEED_BRANCH} 非 custom-feed 受管分支, 仅做远端对比"
+              ;;
+          esac
+
+          # ── 对比远端分支 HEAD (同 plan 的 ls-remote 模式) ──
+          AFTER_SHA=$(git ls-remote "https://github.com/${{ inputs.packages_feed_repo }}.git" "${FEED_BRANCH}" 2>/dev/null | cut -f1 | head -1)
+          if [ -z "$AFTER_SHA" ]; then
+            echo "::warning::读取远端 feed 分支 HEAD 失败, 跳过追平重编"
+            exit 0
+          fi
+          if [ "$AFTER_SHA" = "$BEFORE_SHA" ]; then
+            echo "✅ feed 无更新 (${BEFORE_SHA:0:7}), 无需重编"
+            exit 0
+          fi
+
+          # ── 拉取新 feed (生成型分支可能被 force 更新, fetch+reset 而非 pull) ──
+          if ! git -C pkgs-feed fetch --depth 1 origin "${FEED_BRANCH}" \
+             || ! git -C pkgs-feed reset --hard FETCH_HEAD; then
+            echo "::warning::拉取新 feed 失败, 跳过追平重编 (首轮产物仍自洽)"
+            exit 0
+          fi
+          NEW_SHA=$(git -C pkgs-feed rev-parse HEAD)
+          AFTER_TREES=$(git -C pkgs-feed ls-tree HEAD)
+          # 变更包目录 = tree SHA 不同或新增的目录 (内容寻址, 同 feed_trees 指纹)
+          CHANGED_DIRS=$(diff <(printf '%s\n' "$BEFORE_TREES") <(printf '%s\n' "$AFTER_TREES") | grep '^>' | cut -f2 || true)
+          echo "packages_sha_full=${NEW_SHA}" >> "$GITHUB_OUTPUT"
+          echo "rebuilt=true" >> "$GITHUB_OUTPUT"
+          echo "🟡 feed 已更新: ${BEFORE_SHA:0:7} → ${NEW_SHA:0:7}, 变更目录: $(printf '%s ' $CHANGED_DIRS)"
+
+          # ── 重新复制 feed (硬链接不跟随 git 更新) + 清掉变更包旧产物 ──
+          cd openwrt
+          export PATH="$(pwd)/staging_dir/host/bin:${PATH}"
+          rm -rf "package/${{ inputs.packages_feed_name }}"
+          cp -rlf "${{ github.workspace }}/pkgs-feed" "package/${{ inputs.packages_feed_name }}"
+          if [ -n "$CHANGED_DIRS" ]; then
+            for d in $CHANGED_DIRS; do
+              find bin/packages -type f \
+                \( -name "${d}_*.ipk" -o -name "${d}*.ipk" -o -name "${d}_*.apk" -o -name "${d}*.apk" \) \
+                -delete || true
+            done
+          fi
+
+          # ── 增量重编: 变更包 clean 强制失效, 未变更包 stamp 自然跳过 ──
+          PACKAGES="${{ steps.resolve-pkgs.outputs.packages }}"
+          FAILED_REBUILD=""
+          REBUILD_REPORT='[]'
+          for pkg in $PACKAGES; do
+            if [ ! -d "package/${{ inputs.packages_feed_name }}/${pkg}" ]; then
+              echo "⚠️ $pkg 已不在 feed 中, 跳过"
+              continue
+            fi
+            if printf '%s\n' "$CHANGED_DIRS" | grep -qxF "$pkg"; then
+              echo "🧹 $pkg feed 内容已变更, clean 强制失效"
+              make package/"$pkg"/clean || echo "⚠️ $pkg clean 失败 (交由 compile 结果判定)"
+            fi
+            PKG_T0=$(date +%s)
+            PKG_RC=0
+            if ! make package/"$pkg"/compile BUILD_LOG=1 V=sc -j$(nproc 2>/dev/null || echo 4) 2>&1; then
+              echo "::error::⚠️ $pkg 追平重编失败"
+              PKG_RC=1
+              FAILED_REBUILD="$FAILED_REBUILD $pkg"
+            fi
+            PKG_T1=$(date +%s)
+            REBUILD_REPORT=$(echo "$REBUILD_REPORT" | jq \
+              --arg pkg "$pkg" --argjson rc "$PKG_RC" --argjson wall "$((PKG_T1 - PKG_T0))" \
+              '. + [{pkg:$pkg, exit:$rc, wall_sec:$wall}]')
+          done
+          {
+            echo ""
+            echo "### 🔄 Feed 追平重编报表"
+            echo ""
+            echo "| 包 | 结果 | 墙钟耗时 |"
+            echo "|---|---|---|"
+            echo "$REBUILD_REPORT" | jq -r '.[] | "| `\(.pkg)` | \(if .exit == 0 then "✅" else "❌" end) | \(.wall_sec)s |"'
+            echo ""
+            echo "- **feed**: \`${FEED_BRANCH}\` ${BEFORE_SHA:0:7} → ${NEW_SHA:0:7}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$FAILED_REBUILD" ]; then
+            echo "::error::feed 追平重编失败:$FAILED_REBUILD (bin/ 已混入新旧产物, 不可发布)"
+            exit 1
+          fi
+          echo "✅ 追平重编完成, 产物已对齐 feed ${NEW_SHA:0:7}"
+
       # ───────── SDK 专用 host/tool 缓存保存（仅编译成功）─────────
       # SDK 生产和维护自己的 host/tool 与 compiler ccache 快照；openwrt/.ccache
       # 的 full namespace 仍由 compile-firmware 维护。SDK 只保存/清理 sdk namespace，
@@ -618,7 +759,7 @@ jobs:
       # key 使用 target + run_id，利用 Actions Cache 不可覆盖的语义发布滚动快照；
       # selected SDK 的 source_sha 仍在 SDK/IB 配对校验中使用；失败或 no-cache 不保存。
       - name: Save SDK hostpkg cache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success' && steps.feed-rebuild.outcome != 'failure'
         id: cache-hostpkg-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -633,7 +774,7 @@ jobs:
 
       # ccache 共享：SDK 增量编译后直接写回全量共享的 immwrt-v2-ccache-*。
       - name: Save ccache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_wrapper_valid == 'true'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_wrapper_valid == 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-cc-save
         continue-on-error: true
         uses: actions/cache/save@v5

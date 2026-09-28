@@ -1075,6 +1075,7 @@ jobs:
       cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
       publish_sdk_ib:             true
+      skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
@@ -1122,6 +1123,7 @@ jobs:
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
       cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
+      skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
@@ -1162,6 +1164,7 @@ jobs:
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
       cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
+      skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}

@@ -32,6 +32,8 @@ on:
       cache_strategy:       { required: false, type: string, default: 'smart' }
       free_disk_space:      { required: false, type: boolean, default: false }
       publish_sdk_ib:       { required: false, type: boolean, default: true }
+      # 跳过编译后约 custom-feed 追平重编 (与 unified 的 skip_upstream 语义对齐)
+      skip_feed_catchup:   { required: false, type: boolean, default: false }
     secrets:
       ACCESS_TOKEN:         { required: true }
       APK_BUILD_KEY:        { required: false }
@@ -768,6 +770,128 @@ jobs:
           fi
           echo "✅ 重试完成"
 
+      # ───────── Feed 追平: 编译成功后触发 custom-feed, 分支前进则原地重编一轮 ─────────
+      # 刻意设计: plan 在构建开始前已触发并等待过 custom-feed, 但全量构建耗时数小时,
+      # 构建周期内 feed 分支可能又前进 (custom-feed 12h cron 或上游同步推送)。此处
+      # 编译成功后再触发一次并等待完成, 若本 target 消费的 feed 分支 HEAD 前进, 则
+      # 拉取新内容原地增量重编一轮 (最多 1 轮, 再次的更新留待下次构建); 产物只保留
+      # 最终一轮——后续打包/发布/缓存保存读取的是重编后的 bin/ 与 .ccache。stamp
+      # 机制 (STAMP_PREPARED 文件名内嵌包目录 find_md5 哈希, include/package.mk)
+      # 保证 feed 包内容变更会被 make 正确拾取。custom-feed 触发/等待/拉取失败仅
+      # 告警跳过 (远端未变或本地未跟进, 首轮产物仍自洽); 重编失败则硬失败 (bin/
+      # 已混入新旧两半产物, 不可发布), 缓存保存步骤以 outcome != 'failure' 联动跳过。
+      - name: 🔄 Rebuild on feed update
+        if: success() && inputs.skip_feed_catchup != 'true'
+        id: feed-rebuild
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd openwrt
+          FEED_DIR="package/${{ inputs.packages_feed_name }}"
+          FEED_BRANCH="${{ inputs.matrix_packages_branch }}"
+          BEFORE_SHA=$(git -C "$FEED_DIR" rev-parse HEAD)
+          BEFORE_TREES=$(git -C "$FEED_DIR" ls-tree HEAD)
+          echo "📌 构建时 feed 版本: ${BEFORE_SHA:0:7} (${FEED_BRANCH})"
+
+          # ── 触发 custom-feed 更新本分支 (非受管分支跳过触发, 仅做远端对比) ──
+          case "$FEED_BRANCH" in
+            main|qt6|mt798x|qualcommax)
+              BEFORE_TS=$(date +%s)
+              if ! gh workflow run custom-feed.yml \
+                  --repo "${{ github.repository }}" \
+                  --ref "${{ github.ref_name }}" \
+                  -f targets="${FEED_BRANCH}"; then
+                echo "::warning::触发 custom-feed 失败, 跳过追平重编"
+                exit 0
+              fi
+              # gh workflow run 不返回 run ID: 记录触发前时间戳再轮询 (同 plan 模式)
+              RUN_ID=""
+              for i in $(seq 1 10); do
+                if ! RUN_ID=$(gh run list --repo "${{ github.repository }}" --workflow custom-feed.yml --limit 20 \
+                  --json databaseId,createdAt,headBranch,event \
+                  --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE_TS} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
+                  echo "::warning::查询 custom-feed run 失败, 跳过追平重编"
+                  exit 0
+                fi
+                [ -n "$RUN_ID" ] && break
+                sleep 3
+              done
+              if [ -z "$RUN_ID" ]; then
+                echo "::warning::30s 内未发现 custom-feed run, 跳过追平重编"
+                exit 0
+              fi
+              echo "⏳ 等待 custom-feed run ${RUN_ID} 完成..."
+              if ! timeout 2400 gh run watch "$RUN_ID" --repo "${{ github.repository }}" --interval 10 --exit-status; then
+                echo "::warning::custom-feed run 失败或超时, 跳过追平重编 (远端分支未变, 首轮产物仍有效)"
+                exit 0
+              fi
+              ;;
+            *)
+              echo "ℹ️ 分支 ${FEED_BRANCH} 非 custom-feed 受管分支, 仅做远端对比"
+              ;;
+          esac
+
+          # ── 对比远端分支 HEAD (同 plan 的 ls-remote 模式) ──
+          AFTER_SHA=$(git ls-remote "https://github.com/${{ inputs.packages_feed_repo }}.git" "${FEED_BRANCH}" 2>/dev/null | cut -f1 | head -1)
+          if [ -z "$AFTER_SHA" ]; then
+            echo "::warning::读取远端 feed 分支 HEAD 失败, 跳过追平重编"
+            exit 0
+          fi
+          if [ "$AFTER_SHA" = "$BEFORE_SHA" ]; then
+            echo "✅ feed 无更新 (${BEFORE_SHA:0:7}), 无需重编"
+            exit 0
+          fi
+
+          # ── 拉取新 feed (生成型分支可能被 force 更新, fetch+reset 而非 pull) ──
+          if ! git -C "$FEED_DIR" fetch --depth 1 origin "${FEED_BRANCH}" \
+             || ! git -C "$FEED_DIR" reset --hard FETCH_HEAD; then
+            echo "::warning::拉取新 feed 失败, 跳过追平重编 (首轮产物仍自洽)"
+            exit 0
+          fi
+          NEW_SHA=$(git -C "$FEED_DIR" rev-parse HEAD)
+          AFTER_TREES=$(git -C "$FEED_DIR" ls-tree HEAD)
+          # 变更包目录 = tree SHA 不同或新增的目录 (内容寻址, 同 feed_trees 指纹)
+          CHANGED_DIRS=$(diff <(printf '%s\n' "$BEFORE_TREES") <(printf '%s\n' "$AFTER_TREES") | grep '^>' | cut -f2 || true)
+          echo "packages_sha_full=${NEW_SHA}" >> "$GITHUB_OUTPUT"
+          echo "rebuilt=true" >> "$GITHUB_OUTPUT"
+          echo "🟡 feed 已更新: ${BEFORE_SHA:0:7} → ${NEW_SHA:0:7}, 原地重编一轮"
+          echo "   变更目录: $(printf '%s ' $CHANGED_DIRS)"
+
+          # ── 清掉变更包的旧产物 (版本变更时新旧 ipk/apk 并存会污染发布物) ──
+          if [ -n "$CHANGED_DIRS" ]; then
+            for d in $CHANGED_DIRS; do
+              find bin/packages -type f \
+                \( -name "${d}_*.ipk" -o -name "${d}*.ipk" -o -name "${d}_*.apk" -o -name "${d}*.apk" \) \
+                -delete || true
+            done
+          fi
+
+          # ── 原地增量重编 (stamp 机制自动拾取变更包; 保留首轮日志为 build.2.log) ──
+          cp build.log build.2.log || echo "⚠️ 备份 build.log 失败: $?"
+          START_TIME=$(date +%s)
+          REBUILD_EXIT=1
+          set +o pipefail
+          make BUILD_LOG=1 -j$(nproc) -k 2>&1 | tee build.log
+          REBUILD_EXIT=${PIPESTATUS[0]}
+          set -o pipefail
+          END_TIME=$(date +%s)
+          echo "rebuild_duration=$((END_TIME - START_TIME))" >> "$GITHUB_OUTPUT"
+          echo "⏱️ 追平重编耗时: $((END_TIME - START_TIME))s"
+          {
+            echo ""
+            echo "### 🔄 Feed 追平重编"
+            echo ""
+            echo "- **feed**: \`${FEED_BRANCH}\` ${BEFORE_SHA:0:7} → ${NEW_SHA:0:7}"
+            echo "- **变更目录**: $(printf '%s ' $CHANGED_DIRS)"
+            echo "- **耗时**: $((END_TIME - START_TIME))s"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$REBUILD_EXIT" -ne 0 ]; then
+            echo "::error::feed 追平重编失败 (bin/ 已混入新旧产物, 不可发布), 请查看 build.log 与 logs/"
+            exit 1
+          fi
+          echo "✅ 追平重编完成, 产物已对齐 feed ${NEW_SHA:0:7}"
+
       # ───────── 磁盘空间监控（第 4 阶段：编译后 + 4 阶段汇总表）─────────
       - name: 💽 Disk space · After build
         if: always()
@@ -820,10 +944,11 @@ jobs:
         run: |
           BUILD_DUR="${{ steps.build.outputs.duration || '0' }}"
           RETRY_DUR="${{ steps.retry.outputs.retry_duration || '0' }}"
-          TOTAL_SEC=$((BUILD_DUR + RETRY_DUR))
+          REBUILD_DUR="${{ steps.feed-rebuild.outputs.rebuild_duration || '0' }}"
+          TOTAL_SEC=$((BUILD_DUR + RETRY_DUR + REBUILD_DUR))
           echo "duration=${TOTAL_SEC}" >> $GITHUB_OUTPUT
           echo "duration_fmt=$(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60)))" >> $GITHUB_OUTPUT
-          echo "⏱️ 总编译耗时: $(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60))) (并行 ${BUILD_DUR}s + 重试 ${RETRY_DUR}s)"
+          echo "⏱️ 总编译耗时: $(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60))) (并行 ${BUILD_DUR}s + 重试 ${RETRY_DUR}s + 追平重编 ${REBUILD_DUR}s)"
 
       # ───────── 编译日志统计（仅成功时运行）─────────
       # 刻意设计: 统计工具是必要的分析手段(v1 遗产), 统计每个包的编译耗时,
@@ -1124,6 +1249,7 @@ jobs:
           path: |
             openwrt/build.log
             openwrt/build.1.log
+            openwrt/build.2.log
             openwrt/toolchain-prebuild.log
             openwrt/logs/**
             openwrt/logs.1/**
@@ -1144,7 +1270,7 @@ jobs:
       # 下一批候选落在工具链快照上（代价 40 分钟全量重编）。
       - name: Check existing toolchain snapshot
         id: cache-tc-existing
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success')
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1172,7 +1298,7 @@ jobs:
           fi
 
       - name: Save toolchain cache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.cache-tc-existing.outputs.exists != 'true'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.cache-tc-existing.outputs.exists != 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-tc-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -1183,7 +1309,7 @@ jobs:
             openwrt/staging_dir/tool*
 
       - name: Save ccache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.build.outputs.ccache_wrapper_valid == 'true'
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.build.outputs.ccache_wrapper_valid == 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-cc-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -1192,7 +1318,7 @@ jobs:
           path: openwrt/.ccache
 
       - name: Save SDK hostpkg cache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success')
+        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
         id: cache-sdk-hostpkg-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -1416,7 +1542,7 @@ jobs:
                 printf "| [%s](%s/tree/%s) | `%s` |\n", $2, url, hash, hash
               }' "$FW_FEEDS_FILE")
               # 手动附加 solarflows 软件包行 (printf 生成真实换行, 避免 YAML 块多行字面量)
-              SOLARFLOWS_ROW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.clone_packages.outputs.packages_sha_full }}\` |"
+              SOLARFLOWS_ROW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}\` |"
               if [ -n "$FEEDS_MD_RAW" ]; then
                 FEEDS_MD_RAW=$(printf '%s\n%s' "$FEEDS_MD_RAW" "$SOLARFLOWS_ROW")
               else
@@ -1431,13 +1557,13 @@ jobs:
             else
               echo "⚠️ feeds.buildinfo 内容不完整 (无 src-git 条目), 仅记录 solarflows"
               FEEDS_INFO='""'
-              FEEDS_MD_RAW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.clone_packages.outputs.packages_sha_full }}\` |"
+              FEEDS_MD_RAW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}\` |"
               FEEDS_MD_JSON=$(echo "$FEEDS_MD_RAW" | jq -Rs '.')
             fi
           else
             echo "⚠️ feeds.buildinfo 缺失, 仅记录 solarflows"
             FEEDS_INFO='""'
-            FEEDS_MD_RAW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.clone_packages.outputs.packages_sha_full }}\` |"
+            FEEDS_MD_RAW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}\` |"
             FEEDS_MD_JSON=$(echo "$FEEDS_MD_RAW" | jq -Rs '.')
           fi
 
@@ -1479,7 +1605,7 @@ jobs:
             "source_sha": "${{ steps.clone_packages.outputs.sha_full }}",
             "packages_repo": "${{ inputs.packages_feed_repo }}",
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
-            "packages_sha": "${{ steps.clone_packages.outputs.packages_sha_full }}",
+            "packages_sha": "${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}",
             "feed_trees": ${FEED_TREES_JSON},
             "feeds_sha": ${FEEDS_SHA_JSON},
             "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
