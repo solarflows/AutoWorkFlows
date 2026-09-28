@@ -685,12 +685,24 @@ jobs:
           fi
 
           # ── 拉取新 feed (生成型分支可能被 force 更新, fetch+reset 而非 pull) ──
-          if ! git -C pkgs-feed fetch --depth 1 origin "${FEED_BRANCH}" \
-             || ! git -C pkgs-feed reset --hard FETCH_HEAD; then
-            echo "::warning::拉取新 feed 失败, 跳过追平重编 (首轮产物仍自洽)"
-            exit 0
-          fi
-          NEW_SHA=$(git -C pkgs-feed rev-parse HEAD)
+          # 快照稳定性校验: 同 compile-firmware (run 36405700929 教训, 详见彼处注释)。
+          CATCHUP_ATTEMPT=0
+          while true; do
+            if ! git -C pkgs-feed fetch --depth 1 origin "${FEED_BRANCH}" \
+               || ! git -C pkgs-feed reset --hard FETCH_HEAD; then
+              echo "::warning::拉取新 feed 失败, 跳过追平重编 (首轮产物仍自洽)"
+              exit 0
+            fi
+            NEW_SHA=$(git -C pkgs-feed rev-parse HEAD)
+            CATCHUP_ATTEMPT=$((CATCHUP_ATTEMPT + 1))
+            [ "$CATCHUP_ATTEMPT" -ge 3 ] && break
+            sleep 5
+            REMOTE_HEAD=$(git -C pkgs-feed ls-remote origin "refs/heads/${FEED_BRANCH}" 2>/dev/null | cut -f1)
+            if [ -z "$REMOTE_HEAD" ] || [ "$REMOTE_HEAD" = "$NEW_SHA" ]; then
+              break
+            fi
+            echo "🟡 feed 快照不稳定 (本地 ${NEW_SHA:0:7} vs 远端 ${REMOTE_HEAD:0:7}), 重拉第 ${CATCHUP_ATTEMPT} 轮"
+          done
           AFTER_TREES=$(git -C pkgs-feed ls-tree HEAD)
           # 变更包目录 = tree SHA 不同或新增的目录 (内容寻址, 同 feed_trees 指纹)
           CHANGED_DIRS=$(diff <(printf '%s\n' "$BEFORE_TREES") <(printf '%s\n' "$AFTER_TREES") | grep '^>' | cut -f2 || true)

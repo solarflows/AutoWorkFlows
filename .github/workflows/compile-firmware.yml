@@ -844,12 +844,28 @@ jobs:
           fi
 
           # ── 拉取新 feed (生成型分支可能被 force 更新, fetch+reset 而非 pull) ──
-          if ! git -C "$FEED_DIR" fetch --depth 1 origin "${FEED_BRANCH}" \
-             || ! git -C "$FEED_DIR" reset --hard FETCH_HEAD; then
-            echo "::warning::拉取新 feed 失败, 跳过追平重编 (首轮产物仍自洽)"
-            exit 0
-          fi
-          NEW_SHA=$(git -C "$FEED_DIR" rev-parse HEAD)
+          # 快照稳定性校验: custom-feed.yml 全量重生成分支在生成过程中会短暂出现
+          # 中间态提交 (run 36405700929: 追平抓到 330d811 坏快照——上游源被临时
+          # checkout 旧版, smartdns Makefile 回潮相对 include / ddnsto 回退 4.2.0,
+          # 三 target 全挂)。fetch 后隔 5s 再 ls-remote 一次, HEAD 已变则重拉
+          # (最多 3 轮), 把抓到中间态的窗口从分钟级压到秒级; 仍不稳定则用最新值。
+          CATCHUP_ATTEMPT=0
+          while true; do
+            if ! git -C "$FEED_DIR" fetch --depth 1 origin "${FEED_BRANCH}" \
+               || ! git -C "$FEED_DIR" reset --hard FETCH_HEAD; then
+              echo "::warning::拉取新 feed 失败, 跳过追平重编 (首轮产物仍自洽)"
+              exit 0
+            fi
+            NEW_SHA=$(git -C "$FEED_DIR" rev-parse HEAD)
+            CATCHUP_ATTEMPT=$((CATCHUP_ATTEMPT + 1))
+            [ "$CATCHUP_ATTEMPT" -ge 3 ] && break
+            sleep 5
+            REMOTE_HEAD=$(git -C "$FEED_DIR" ls-remote origin "refs/heads/${FEED_BRANCH}" 2>/dev/null | cut -f1)
+            if [ -z "$REMOTE_HEAD" ] || [ "$REMOTE_HEAD" = "$NEW_SHA" ]; then
+              break
+            fi
+            echo "🟡 feed 快照不稳定 (本地 ${NEW_SHA:0:7} vs 远端 ${REMOTE_HEAD:0:7}), 重拉第 ${CATCHUP_ATTEMPT} 轮"
+          done
           AFTER_TREES=$(git -C "$FEED_DIR" ls-tree HEAD)
           # 变更包目录 = tree SHA 不同或新增的目录 (内容寻址, 同 feed_trees 指纹)
           CHANGED_DIRS=$(diff <(printf '%s\n' "$BEFORE_TREES") <(printf '%s\n' "$AFTER_TREES") | grep '^>' | cut -f2 || true)
