@@ -1,8 +1,8 @@
 # 按需编译演进计划（Package-Grained Incremental Build）
 
-> 状态：设计已定稿，P1/P2 已实现待验证（2026-09-26 指纹源重构为 tree SHA），P3 未实施
+> 状态：P1/P2 已实现待验证（2026-09-28 统一 input_trees 指纹 + deferred 搁置路由 + run-sdk 合并），P3 未实施
 > 关联：`firmware-build-unified.yml`（plan）、`compile-packages.yml`（executor）、`docs/todo.md`（台账）
-> 最后核对：2026-09-26
+> 最后核对：2026-09-28
 
 ## 0. 目标
 
@@ -31,22 +31,30 @@
   mt798x 误判全量，遂重构。`packages.lock.json` 文件保留（collect_packages.py 收集
   增量跳过仍依赖），plan 不再消费。
 
-### 检测逻辑（plan 侧 `Load targets & check changes`）
+### 检测逻辑（plan 侧 `Load targets & check changes` + `Detect package-level changes`）
 
 ```
 任一 feed HEAD 变了（custom / 标准 packages / 上游 feeds）？
   └─ smart 触发 → 汇总变更包集合：
-       custom feed: 目录 tree SHA 对比 → ΔC
-       标准/上游 feed: compare diff → 包名 → 剔除 ∈ custom feed 目录 → ΔF'
+       custom feed: 目录 tree SHA (短哈希 7 位) 对比 → ΔC
+       标准/上游 feed: 逐包 tree SHA 对比 (seed 引用过滤, 方案 A) → ΔF'
        集合 = ΔC ∪ ΔF'
             ├─ 集合为空 → 撤销全部 feed 级变更信号，跳过
-            │    （含「HEAD 变了但 diff 仅根级非包文件或全被 custom feed 覆盖」，
+            │    （含「HEAD 变了但逐包指纹全一致或变更包未被 seed 引用」，
             │      视为不影响构建输入——设计取舍，非遗漏）
-            ├─ diff 不可测（compare 超 250 文件 / conf 不可读 / 无基线）→ 回退 `*`（全量）
-            └─ 非空 → 求"变更包 ∩ sdk.config 包"交集
-                  ├─ 交集非空 → CHANGED_PACKAGES_FINAL = 交集
-                  └─ 有包在 sdk.config 之外 → 升级全量（SDK 无该包目录）
+            ├─ 指纹不可测（无基线/conf 不可读）→ 回退 `*`（全量）
+            └─ 非空 → 按 sdk.config 分流：
+                  ├─ ∩ sdk.config 非空 → SDK+IB 增量 (只编交集)
+                  └─ - sdk.config (outside-sdk) → 搁置 (deferred_pkgs 累计,
+                        等手动 full 或源码变更收编), 不再升级全量
 ```
+
+### deferred_pkgs（搁置语义，2026-09-28）
+
+outside-sdk 包变更不触发全量（砍掉「包变更就全量」的最大不必要 CI 触发源，
+run 36363278098 教训：v2ray-geodata 数据包更新触发 3 目标全量）。搁置包记入
+state.deferred_pkgs 累计显示；全量构建收编后清零。安全取舍：outside-sdk 真软件
+包的安全更新需手动 full 收编（plan 日志列搁置清单供判断）。
 
 ### 基线闸门（防 skip 死锁）
 

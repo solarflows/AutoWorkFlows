@@ -298,28 +298,57 @@ def check_semantics(bash: str, files: list[Path], rep: Report) -> None:
     else:
         rep.fail(f"feeds map: got {got}")
 
-    # 4e. persist-state 合并语义 (feed_trees/feeds_sha 写入, 旧 .packages 清除)
-    state_pkg = {"source_sha": "s1", "packages": {"old": "aaa"}, "last_build": "old"}
-    info = {"feed_trees": {"tailscale": "bbbb2222"}, "feeds_sha": {"luci": "2" * 40}}
+    # 4e. persist-state 合并语义 (input_trees/std/upstream/deferred 写入, 旧 .packages/feed_trees 清除)
+    state_pkg = {"source_sha": "s1", "packages": {"old": "aaa"}, "feed_trees": {"old": "t1"}, "last_build": "old"}
+    info = {
+        "input_trees": {"tailscale": "bbbb222"},
+        "std_input_trees": {"curl": "cccc333"},
+        "upstream_input_trees": {"luci": {"luci-base": "dddd444"}},
+        "feeds_sha": {"luci": "2" * 40},
+        "deferred_pkgs": ["v2ray-geodata"],
+    }
     merged = dict(state_pkg)
     merged.update({**info, "last_build": "new", "last_mode": "firmware"})
-    merged.pop("packages", None)  # jq: del(.packages)
-    if "packages" in merged:
-        rep.fail("persist 合并: 旧 .packages 字段未被清除")
-    elif merged["feed_trees"] != info["feed_trees"] or merged["feeds_sha"] != info["feeds_sha"]:
-        rep.fail("persist 合并: feed_trees/feeds_sha 未正确写入")
+    merged.pop("packages", None)   # jq: del(.packages)
+    merged.pop("feed_trees", None)  # jq: del(.feed_trees)
+    if "packages" in merged or "feed_trees" in merged:
+        rep.fail("persist 合并: 旧字段未被清除")
+    elif (merged["input_trees"]["tailscale"] != "bbbb222"
+          or merged["deferred_pkgs"] != ["v2ray-geodata"]
+          or merged["std_input_trees"]["curl"] != "cccc333"
+          or merged["upstream_input_trees"]["luci"]["luci-base"] != "dddd444"):
+        rep.fail("persist 合并: 新指纹字段未正确写入")
     else:
-        rep.ok("persist 合并: feed_trees/feeds_sha 写入 + .packages 清除")
+        rep.ok("persist 合并: input_trees/std/upstream/deferred 写入 + 旧字段清除")
 
-    # 4f. heredoc 插值合法性 (build-info.json 内 ${FEED_TREES_JSON} 展开后)
+    # 4f. heredoc 插值合法性 (build-info.json 内 ${...} 展开后)
     doc = json.loads(
-        '{"feed_trees": ' + json.dumps(info["feed_trees"])
-        + ', "feeds_sha": ' + json.dumps(info["feeds_sha"]) + "}"
+        '{"input_trees": ' + json.dumps(info["input_trees"])
+        + ', "feeds_sha": ' + json.dumps(info["feeds_sha"])
+        + ', "deferred_pkgs": ' + json.dumps(info["deferred_pkgs"]) + "}"
     )
-    if doc["feed_trees"]["tailscale"] == "bbbb2222" and doc["feeds_sha"]["luci"] == "2" * 40:
+    if doc["input_trees"]["tailscale"] == "bbbb222" and doc["feeds_sha"]["luci"] == "2" * 40:
         rep.ok("heredoc 插值: 展开后为合法 JSON")
     else:
         rep.fail("heredoc 插值: 展开后 JSON 异常")
+
+    # 4i. 短哈希截断语义 (plan 侧 .sha[0:$short] 与 executor 侧 [0:$short] 同规则)
+    SHORT = 7
+    full = "bbbb222222222222222222222222222222222222"
+    if full[0:SHORT] == "bbbb222" and len(full[0:SHORT]) == SHORT:
+        rep.ok(f"短哈希: {SHORT} 位截断两侧同规则")
+    else:
+        rep.fail("短哈希: 截断语义错误")
+
+    # 4j. deferred 分流语义: outside-sdk 变更不再升级全量, 而是搁置累计
+    # (run 36363278098: v2ray-geodata 触发 3 目标全量 → 现在应只记 deferred)
+    sdk_config = {"sing-box", "luci-app-passwall"}
+    changed = {"sing-box", "v2ray-geodata", "tailscale"}
+    if (changed & sdk_config == {"sing-box"}
+            and changed - sdk_config == {"v2ray-geodata", "tailscale"}):
+        rep.ok("deferred 分流: ∩ sdk.config 增量 / outside-sdk 搁置")
+    else:
+        rep.fail("deferred 分流: 语义错误")
 
     # 4g. 基线闸门 (plan 侧 jq -e '.feeds_sha | type == "object"' 的语义)
     # 无基线 → 闸门触发 (强制全量建基线); 有基线 → 放行正常检测。

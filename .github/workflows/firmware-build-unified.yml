@@ -30,6 +30,7 @@ on:
           - 'smart'           # 智能检测 (自动选择最快构建路径)
           - 'full'            # 全量编译 (固件 + SDK + IB)
           - 'sdk-packages'    # 仅用 SDK 编译软件包
+          - 'sdk-config'       # 手动强制 SDK+IB 增量固件 (sdk.config ∩ 变更包, outside-sdk 仅告警)
       cache_strategy:
         description: '缓存策略 (非 smart 策略强制全量编译)'
         required: false
@@ -83,12 +84,10 @@ jobs:
     timeout-minutes: 120
     outputs:
       firmware_matrix_json:     ${{ steps.decision.outputs.firmware_matrix_json }}
-      sdk_ib_matrix_json:       ${{ steps.decision.outputs.sdk_ib_matrix_json }}
-      packages_matrix_json:     ${{ steps.decision.outputs.packages_matrix_json }}
+      sdk_matrix_json:          ${{ steps.decision.outputs.sdk_matrix_json }}
       version:                  ${{ steps.version.outputs.version }}
       has_firmware:             ${{ steps.decision.outputs.has_firmware }}
-      has_sdk_ib:               ${{ steps.decision.outputs.has_sdk_ib }}
-      has_packages:             ${{ steps.decision.outputs.has_packages }}
+      has_sdk:                  ${{ steps.decision.outputs.has_sdk }}
       cache_strategy:              ${{ steps.decision.outputs.cache_strategy }}
     steps:
       - name: Checkout AutoWorkflows (sparse)
@@ -534,6 +533,9 @@ jobs:
                 src_changed:$src_changed, pkg_changed:$pkg_changed, std_pkg_changed:$std_pkg_changed,
                 kernel_changed:$kernel_changed, config_changed:$config_changed}' \
               >> /tmp/target_stage.jsonl
+            # stage 1 检测报告行 (summary 表格数据源; step 拆分时曾丢失致表格空,
+            # run 36363278098 summary 只有表头)
+            echo "${MATRIX_TARGET}|${SRC_STATUS}|${PKG_STATUS}|${STD_PKG_STATUS}|${KERNEL_STATUS}|${CFG_STATUS}" >> /tmp/change_report.txt
           done
 
           {
@@ -560,6 +562,28 @@ jobs:
           CURR_TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
           : > /tmp/target_pkg_stage.jsonl
           : > /tmp/pkg_report.txt
+          # seed 引用集合 (方案 A: 只跟踪 seed 实际引用的包, 控制 state 体积;
+          # 未引用的包 tree SHA 变化不影响固件, 不记不比不触发)。luci-i18n-* 随父包
+          # 自动产出, 不单独跟踪。
+          SEED_REF_PKGS=$(find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt" -type f -name '*.seed' -print0 | xargs -0 cat | \
+            grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
+            sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | grep -vE '^luci-i18n-' | sort -u | tr '\n' ' ')
+          # 短哈希截断长度: tree SHA 内容寻址, 7 位在千包规模碰撞概率 <1e-7 (git 惯例)
+          SHORT=7
+          # 通用: 拉取 feed 仓库某分支的「包目录 tree 短哈希表」
+          # 布局兼容: 顶层=包 (custom feed) 或 分类/包 (openwrt 布局) 均产出 {pkg: sha7}。
+          fetch_pkg_trees() {
+            local FP_REPO="$1" FP_REF="$2" FP_CACHE="$3"
+            if [ -f "$FP_CACHE" ]; then return 0; fi
+            gh api "repos/${FP_REPO}/git/trees/${FP_REF}?recursive=1" \
+              --jq --argjson short "$SHORT" '
+                [.tree[] | select(.type == "tree")
+                 | select((.path | split("/") | length) <= 2)
+                 | {pkg: (.path | split("/") | last), sha: (.sha[0:$short])}]
+                | map(select(.pkg != ""))
+                | map({(.pkg): .sha}) | add // {}' \
+              > "$FP_CACHE" 2>/dev/null || echo '{}' > "$FP_CACHE"
+          }
           while IFS= read -r STAGE; do
             [ -n "$STAGE" ] || continue
             MATRIX_TARGET=$(echo "$STAGE" | jq -r '.target')
@@ -576,23 +600,20 @@ jobs:
             UPSTREAM_FEEDS_CHANGED=false
             FEEDS_UNMEASURABLE=false
             TEMP_CHANGED=""
+            DEFERRED_PKGS=""
             CHANGED_PACKAGES_FINAL="*"
             if [ "$CURR_TRIGGER" = "smart" ]; then
-              # ── a. custom feed 目录树表（trees API 一次拿全部顶层目录，per-branch 缓存）──
+              # ── a. custom feed 包表（trees API 一次拿全部包目录，per-branch 缓存）──
               # 缓存路径带 GITHUB_RUN_ID: 同一 plan job 内多 target 共享（qualcomm 双目标
               # 共用 qualcommax 分支），跨 run 失效——自托管 runner 复用 /tmp 也不会读到旧值。
               TREES_CACHE="/tmp/feed-trees-${CURR_PKG_BRANCH}-${GITHUB_RUN_ID}.json"
-              if [ ! -f "$TREES_CACHE" ]; then
-                gh api "repos/${CURR_PKG_REPO}/git/trees/${CURR_PKG_BRANCH}" \
-                  --jq '[.tree[] | select(.type == "tree") | {(.path): .sha}] | add // {}' \
-                  > "$TREES_CACHE" 2>/dev/null || echo '{}' > "$TREES_CACHE"
-              fi
+              fetch_pkg_trees "$CURR_PKG_REPO" "$CURR_PKG_BRANCH" "$TREES_CACHE"
               CURR_TREES=$(cat "$TREES_CACHE")
 
               # ── b. custom feed 变更包（目录 tree SHA 对比，新增/变化/删除均计入）──
               if [ "$PACKAGES_CHANGED" = "true" ]; then
                 echo "  🔍 [${MATRIX_TARGET}] custom feed 目录树对比..."
-                LAST_TREES=$(jq -r ".\"${MATRIX_TARGET}\".feed_trees // {}" build-state.json)
+                LAST_TREES=$(jq -r ".\"${MATRIX_TARGET}\".input_trees // .\"${MATRIX_TARGET}\".feed_trees // {}" build-state.json)
                 for pkg_name in $(echo "$CURR_TREES" | jq -r 'keys[]'); do
                   curr_tree=$(echo "$CURR_TREES" | jq -r --arg p "$pkg_name" '.[$p]')
                   last_tree=$(echo "$LAST_TREES" | jq -r --arg p "$pkg_name" '.[$p] // empty')
@@ -605,39 +626,31 @@ jobs:
                 done
               fi
 
-              # ── c. 变更 feed 的包级 diff（compare → 包名，剔除 custom feed 覆盖）──
-              # 包名取法兼容两类 feed 布局: openwrt/packages 与 luci 为 分类/包/... (取
-              # 第 2 级), routing/telephony/video 为 包/... (取第 1 级)。
-              # 设计取舍: 根级非包文件 (Config.in/README 等, NF==1) 变更不计入包集合，
-              # 认为不影响包产物——若 diff 仅含此类文件，汇总阶段会撤销该 feed 的变更信号。
-              feed_diff_to_pkgs() {
-                local FD_REPO="$1" FD_BASE="$2" FD_TIP="$3"
-                local FD_PATHS f_path pkg_name
-                FD_PATHS=$(gh api "repos/${FD_REPO}/compare/${FD_BASE}...${FD_TIP}" --jq '.files[].filename' 2>/dev/null || true)
-                if [ -z "$FD_PATHS" ]; then
-                  return 1
-                fi
-                for f_path in $FD_PATHS; do
-                  pkg_name=$(echo "$f_path" | awk -F/ 'NF >= 3 {print $2; next} NF == 2 {print $1}')
-                  [ -n "$pkg_name" ] || continue
-                  if ! echo "$CURR_TREES" | jq -e --arg p "$pkg_name" 'has($p)' >/dev/null 2>&1; then
-                    TEMP_CHANGED="$TEMP_CHANGED $pkg_name"
-                  fi
-                done
-                return 0
-              }
+              # ── c. 标准 packages feed 逐包 tree SHA（compare API 退役, 无 250 上限）──
+              # 与 custom feed 同款内容寻址指纹; 只比 seed 引用的包。
               if [ "$STANDARD_PACKAGES_CHANGED" = "true" ]; then
-                echo "  🔍 [${MATRIX_TARGET}] 标准 packages 包级 diff..."
-                if [ -z "$LAST_STD_PKG" ]; then
-                  # 无基线 (新 target 首建): 与 config_sha 无基准同语义, 全量建基线;
-                  # 不能以空 base 调 compare (URL 无效, 会误报「超 250 文件」误导排障)。
-                  echo "  🔴 [${MATRIX_TARGET}] 标准 packages 无历史基线, 确立基准走全量"
+                echo "  🔍 [${MATRIX_TARGET}] 标准 packages 逐包指纹对比..."
+                STD_TREES_CACHE="/tmp/std-trees-$(printf '%s' "$CURR_STD_PKG_REPO" | sha256sum | cut -c1-12)-${CURR_STD_PKG}-${GITHUB_RUN_ID}.json"
+                fetch_pkg_trees "$CURR_STD_PKG_REPO" "$CURR_STD_PKG" "$STD_TREES_CACHE"
+                STD_TREES=$(cat "$STD_TREES_CACHE")
+                LAST_STD_TREES=$(jq -r ".\"${MATRIX_TARGET}\".std_input_trees // {}" build-state.json)
+                if [ "$(echo "$LAST_STD_TREES" | jq 'length')" -eq 0 ]; then
+                  # 无基线 (新 target 首建): 与 config_sha 无基准同语义, 全量建基线。
+                  echo "  🔴 [${MATRIX_TARGET}] 标准 packages 无逐包基线, 确立基准走全量"
                   FEEDS_UNMEASURABLE=true
-                elif ! feed_diff_to_pkgs "$CURR_STD_PKG_REPO" "$LAST_STD_PKG" "$CURR_STD_PKG"; then
-                  echo "  ⚪ [${MATRIX_TARGET}] 标准 packages diff 不可测 (可能超 250 文件)"
-                  FEEDS_UNMEASURABLE=true
+                else
+                  for pkg_name in $SEED_REF_PKGS; do
+                    curr_tree=$(echo "$STD_TREES" | jq -r --arg p "$pkg_name" '.[$p] // empty')
+                    [ -z "$curr_tree" ] && continue
+                    last_tree=$(echo "$LAST_STD_TREES" | jq -r --arg p "$pkg_name" '.[$p] // empty')
+                    if [ -z "$last_tree" ] || [ "$last_tree" != "$curr_tree" ]; then
+                      TEMP_CHANGED="$TEMP_CHANGED $pkg_name"
+                    fi
+                  done
                 fi
               fi
+
+              # ── d. 上游 feeds (luci/routing/...) 逐包 tree SHA ──
               CONF_KEY=$(printf '%s@%s' "$CURR_REPO" "$CURR_SRC" | sha256sum | cut -c1-12)
               FEEDS_CONF_CACHE="/tmp/feeds-conf-${CONF_KEY}-${GITHUB_RUN_ID}.txt"
               if [ ! -f "$FEEDS_CONF_CACHE" ]; then
@@ -663,9 +676,21 @@ jobs:
                     UPSTREAM_FEEDS_CHANGED=true
                     echo "  🔵 [${MATRIX_TARGET}] 上游 feed ${feed_name} 变更: ${LAST_FEED_SHA:0:7} → ${CURR_FEED_SHA:0:7}"
                     feed_repo=$(echo "$feed_url" | sed -E 's|^https://github.com/||; s|\.git$||')
-                    if ! feed_diff_to_pkgs "$feed_repo" "$LAST_FEED_SHA" "$CURR_FEED_SHA"; then
-                      echo "  ⚪ [${MATRIX_TARGET}] ${feed_name} diff 不可测 (可能超 250 文件)"
-                      FEEDS_UNMEASURABLE=true
+                    FEED_TREES_CACHE="/tmp/upstream-trees-${feed_name}-${GITHUB_RUN_ID}.json"
+                    fetch_pkg_trees "$feed_repo" "${feed_branch:-HEAD}" "$FEED_TREES_CACHE"
+                    FEED_TREES=$(cat "$FEED_TREES_CACHE")
+                    LAST_FEED_TREES=$(jq -r ".\"${MATRIX_TARGET}\".upstream_input_trees[\"${feed_name}\"] // {}" build-state.json)
+                    if [ "$(echo "$LAST_FEED_TREES" | jq 'length')" -eq 0 ]; then
+                      echo "  ⚪ [${MATRIX_TARGET}] ${feed_name} 无逐包基线 (下轮构建建立)"
+                    else
+                      for pkg_name in $SEED_REF_PKGS; do
+                        curr_tree=$(echo "$FEED_TREES" | jq -r --arg p "$pkg_name" '.[$p] // empty')
+                        [ -z "$curr_tree" ] && continue
+                        last_tree=$(echo "$LAST_FEED_TREES" | jq -r --arg p "$pkg_name" '.[$p] // empty')
+                        if [ -z "$last_tree" ] || [ "$last_tree" != "$curr_tree" ]; then
+                          TEMP_CHANGED="$TEMP_CHANGED $pkg_name"
+                        fi
+                      done
                     fi
                   fi
                 done < <(sed -nE -e 's|^src-git[[:space:]]+([^[:space:]]+)[[:space:]]+([^[:space:]]+);([^[:space:]]+)$|\1 \2 \3|p' \
@@ -678,22 +703,22 @@ jobs:
                 FEEDS_UNMEASURABLE=true
               fi
 
-              # ── d. 汇总：空集撤销信号，非空走 sdk.config 交集路由 ──
+              # ── e. 汇总：空集撤销信号；非空按 sdk.config 分流（增量编 / 搁置）──
               # FEEDS_UNMEASURABLE 也须进入汇总: 无基线/conf 不可测时即使各 feed HEAD
               # 均未变, 也要走全量建基线 (否则 skip 死锁, 基线永远写不回)。
               if [ "$PACKAGES_CHANGED" = "true" ] || [ "$STANDARD_PACKAGES_CHANGED" = "true" ] || [ "$UPSTREAM_FEEDS_CHANGED" = "true" ] || [ "$FEEDS_UNMEASURABLE" = "true" ]; then
                 TEMP_CHANGED=$(echo "$TEMP_CHANGED" | xargs | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
                 if [ "$FEEDS_UNMEASURABLE" = "true" ]; then
-                  echo "  🔴 [${MATRIX_TARGET}] feed diff 不可测, 回退全量"
+                  echo "  🔴 [${MATRIX_TARGET}] feed 指纹不可测, 回退全量"
                   PKG_STATUS="🔴 不可测"
                   CHANGED_PACKAGES_FINAL="*"
                   PACKAGES_CHANGED=true
                 elif [ -n "$TEMP_CHANGED" ]; then
-                  # 变更包集合非空: 统一信号走包级路由（标准/上游 feed 的变更已折入集合）
-                  PACKAGES_CHANGED=true
-                  # 求变更包 ∩ sdk.config 包的交集: SDK 只能编译 sdk.config 清单内的包
-                  # (package 目录已固化); 不在清单内的包 (如 tailscale/wrtbwmon) 只能
-                  # 由全量编译产出, 变更时需升级为全量而非 SDK 增量。
+                  # 变更包集合非空: 按 sdk.config 分流。
+                  # ∩ sdk.config = 可增量编译的包 (SDK 目录已固化) → SDK+IB 增量;
+                  # - sdk.config = outside-sdk → 搁置 (deferred_pkgs 累计, 等手动 full
+                  #   或源码变更收编), 不再升级全量——砍掉「包变更就全量」的最大
+                  #   不必要 CI 触发源 (run 36363278098: v2ray-geodata 触发 3 目标全量)。
                   CONFIG_FILE="${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${MATRIX_TARGET}/sdk.config"
                   SDK_CONFIG_PKGS=$(if [ -f "$CONFIG_FILE" ]; then
                     grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]*=[ym]$' "$CONFIG_FILE" | sed -E 's/CONFIG_PACKAGE_(.*)=[ym]/\1/' | sed 's/luci-i18n-[^ ]*//g' | tr '\n' ' ' | sed 's/^ *//;s/ *$//'
@@ -710,20 +735,25 @@ jobs:
                   INTERSECT=$(echo "$INTERSECT" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
                   OUTSIDE_SDK=$(echo "$OUTSIDE_SDK" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
                   if [ -n "$OUTSIDE_SDK" ]; then
-                    echo "  🔴 [${MATRIX_TARGET}] $(echo "$OUTSIDE_SDK" | wc -w) 个变更包不在 sdk.config 内 (${OUTSIDE_SDK}) → 升级全量编译"
-                    # 保持 PACKAGES_CHANGED=true: 变更包集合已确认具体包变了;
-                    # Stage 2 会根据 sdk_packages="*" 把本 target 路由到全量固件编译。
-                    PKG_STATUS="🟠 需全量"
-                    CHANGED_PACKAGES_FINAL="*"
-                  else
-                    echo "  🟡 [${MATRIX_TARGET}] $(echo "$INTERSECT" | wc -w) 个包变更: ${INTERSECT}"
+                    echo "  ⏸️ [${MATRIX_TARGET}] $(echo "$OUTSIDE_SDK" | wc -w) 个变更包不在 sdk.config 内 (${OUTSIDE_SDK}) → 搁置 (等手动 full/源码变更收编)"
+                    DEFERRED_PKGS="$OUTSIDE_SDK"
+                  fi
+                  if [ -n "$INTERSECT" ]; then
+                    echo "  🟡 [${MATRIX_TARGET}] $(echo "$INTERSECT" | wc -w) 个包增量编译: ${INTERSECT}"
                     CHANGED_PACKAGES_FINAL="$INTERSECT"
-                    PKG_STATUS="🟡 $(echo "$INTERSECT" | wc -w)个"
+                    PACKAGES_CHANGED=true
+                    PKG_STATUS="🟡 $(echo "$INTERSECT" | wc -w)个增量"
+                  else
+                    # 变更全部在 sdk.config 之外: 无可增量内容 → 撤销构建信号, 仅搁置。
+                    PACKAGES_CHANGED=false
+                    STANDARD_PACKAGES_CHANGED=false
+                    PKG_STATUS="⏸️ 全部搁置"
+                    CHANGED_PACKAGES_FINAL=""
                   fi
                 else
                   echo "  ✅ [${MATRIX_TARGET}] 包级指纹一致——撤销 feed 级变更信号"
-                  # 撤销语义含两类情况: ① 各 feed HEAD 未变; ② HEAD 变了但 diff 仅含
-                  # 根级非包文件或被 custom feed 覆盖的包——均视为不影响构建输入。
+                  # 撤销语义含两类情况: ① 各 feed HEAD 未变; ② HEAD 变了但逐包指纹
+                  # 全一致 (元数据提交) 或变更包未被 seed 引用——均视为不影响构建输入。
                   PACKAGES_CHANGED=false
                   STANDARD_PACKAGES_CHANGED=false
                   PKG_STATUS="✅ 包级一致"
@@ -735,8 +765,9 @@ jobs:
             # -c 必需: 同 stage 1, 强制单行紧凑 JSONL (run 36226606223 教训)
             jq -nc --arg t "$MATRIX_TARGET" \
               --arg sdk_pkgs "$CHANGED_PACKAGES_FINAL" --arg pkg_status "$PKG_STATUS" \
+              --arg deferred "$DEFERRED_PKGS" \
               --argjson pkg_changed "$PACKAGES_CHANGED" --argjson std_pkg_changed "$STANDARD_PACKAGES_CHANGED" \
-              '{target:$t, sdk_packages:$sdk_pkgs, pkg_status:$pkg_status, pkg_changed:$pkg_changed, std_pkg_changed:$std_pkg_changed}' \
+              '{target:$t, sdk_packages:$sdk_pkgs, pkg_status:$pkg_status, deferred_pkgs:$deferred, pkg_changed:$pkg_changed, std_pkg_changed:$std_pkg_changed}' \
               >> /tmp/target_pkg_stage.jsonl
             echo "${MATRIX_TARGET}|${PKG_STATUS}|${CHANGED_PACKAGES_FINAL}" >> /tmp/pkg_report.txt
           done < /tmp/target_stage.jsonl
@@ -798,15 +829,17 @@ jobs:
             SDK_PKGS_FINAL=$(echo "$PKG_STAGE" | jq -r '.sdk_packages')
             PKG_CHANGED_FINAL=$(echo "$PKG_STAGE" | jq -r '.pkg_changed')
             STD_PKG_CHANGED_FINAL=$(echo "$PKG_STAGE" | jq -r '.std_pkg_changed')
+            DEFERRED_FINAL=$(echo "$PKG_STAGE" | jq -r '.deferred_pkgs')
             jq --arg t "$MATRIX_TARGET" --arg src "$CURR_SRC" --arg pkg "$CURR_PKG" --arg std_pkg "$CURR_STD_PKG" \
               --arg cfg "$CURR_CFG" \
               --arg sdk_pkgs "$SDK_PKGS_FINAL" \
               --arg ib_pkgs "$IB_PACKAGES" --arg ib_profiles "$IB_PROFILES" \
+              --arg deferred "$DEFERRED_FINAL" \
               --argjson src_changed "$SOURCE_CHANGED" --argjson pkg_changed "$PKG_CHANGED_FINAL" \
               --argjson standard_packages_changed "$STD_PKG_CHANGED_FINAL" \
               --argjson kernel_changed "$KERNEL_CHANGED" \
               --argjson config_changed "$CONFIG_CHANGED" \
-              '. + [{target:$t, current_source_sha:$src, current_packages_sha:$pkg, current_standard_packages_sha:$std_pkg, current_config_sha:$cfg, sdk_packages:$sdk_pkgs, ib_packages:$ib_pkgs, ib_profiles:$ib_profiles, source_changed:$src_changed, packages_changed:$pkg_changed, standard_packages_changed:$standard_packages_changed, kernel_changed:$kernel_changed, config_changed:$config_changed}]' \
+              '. + [{target:$t, current_source_sha:$src, current_packages_sha:$pkg, current_standard_packages_sha:$std_pkg, current_config_sha:$cfg, sdk_packages:$sdk_pkgs, ib_packages:$ib_pkgs, ib_profiles:$ib_profiles, deferred_pkgs:$deferred, source_changed:$src_changed, packages_changed:$pkg_changed, standard_packages_changed:$standard_packages_changed, kernel_changed:$kernel_changed, config_changed:$config_changed}]' \
               /tmp/target_changes.json > /tmp/target_changes.new
             mv /tmp/target_changes.new /tmp/target_changes.json
           done < /tmp/target_stage.jsonl
@@ -995,16 +1028,14 @@ jobs:
 
           PLAN=$(jq -c . /tmp/target_plan.json)
           HAS_FW=$(echo "$PLAN" | jq -r 'any(.[]; .build_firmware)')
-          HAS_PKGS=$(echo "$PLAN" | jq -r 'any(.[]; .build_sdk_pkgs and (.build_sdk_ib | not))')
-          HAS_SDK_IB=$(echo "$PLAN" | jq -r 'any(.[]; .build_sdk_ib)')
+          HAS_SDK=$(echo "$PLAN" | jq -r 'any(.[]; .build_sdk_pkgs)')
           PUB_FW=$(echo "$PLAN" | jq -r 'any(.[]; .publish_firmware)')
           PUB_PKGS=$(echo "$PLAN" | jq -r 'any(.[]; .publish_pkgs)')
           echo "firmware_matrix_json=$(echo "$PLAN" | jq -c '[.[] | select(.build_firmware)]')" >> $GITHUB_OUTPUT
-          echo "sdk_ib_matrix_json=$(echo "$PLAN" | jq -c '[.[] | select(.build_sdk_ib)]')" >> $GITHUB_OUTPUT
-          echo "packages_matrix_json=$(echo "$PLAN" | jq -c '[.[] | select(.build_sdk_pkgs and (.build_sdk_ib | not))]')" >> $GITHUB_OUTPUT
+          # 单 run-sdk job: matrix 含全部 SDK 路径 target, build_sdk_ib 字段区分是否 IB 组装
+          echo "sdk_matrix_json=$(echo "$PLAN" | jq -c '[.[] | select(.build_sdk_pkgs)]')" >> $GITHUB_OUTPUT
           echo "has_firmware=$(echo "$PLAN" | jq -r 'any(.[]; .build_firmware)')" >> $GITHUB_OUTPUT
-          echo "has_sdk_ib=$HAS_SDK_IB" >> $GITHUB_OUTPUT
-          echo "has_packages=$HAS_PKGS" >> $GITHUB_OUTPUT
+          echo "has_sdk=$HAS_SDK" >> $GITHUB_OUTPUT
 
           TARGETS=$(echo "$FILTERED" | jq -r '.[].target' | tr '\n' ' ' | sed 's/ $//')
           VER="${{ steps.version.outputs.version }}"
@@ -1026,11 +1057,8 @@ jobs:
             if [ "$HAS_FW" = "true" ]; then
               echo "- 🔨 **compile-firmware**: 全量编译固件 + 生成 SDK/IB 上传 (同一 artifacts-* tag)"
             fi
-            if [ "$HAS_SDK_IB" = "true" ]; then
-              echo "- 📦 **SDK + IB**: 同一工作流编译软件包并生成增量固件"
-            fi
-            if [ "$HAS_PKGS" = "true" ]; then
-              echo "- 📦 **compile-packages**: 基于 SDK 增量编译软件包 → packages tag"
+            if [ "$HAS_SDK" = "true" ]; then
+              echo "- 📦 **run-sdk**: SDK 增量编译软件包 (build_sdk_ib=true 时 IB 组装增量固件)"
             fi
             if [ "$PUB_FW" = "true" ]; then
               echo "- 🚀 **release**: 发布固件到 \`${VER}\` release"
@@ -1038,7 +1066,7 @@ jobs:
             if [ "$PUB_PKGS" = "true" ]; then
               echo "- 🚀 **release**: 发布软件包到 packages tag"
             fi
-            if [ "$HAS_FW" != "true" ] && [ "$HAS_SDK_IB" != "true" ] && [ "$HAS_PKGS" != "true" ]; then
+            if [ "$HAS_FW" != "true" ] && [ "$HAS_SDK" != "true" ]; then
               echo "- ⏭️ **无构建任务** (无变更或模式不匹配)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -1084,15 +1112,18 @@ jobs:
       group: compile-fw-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
 
-  # ════════════════════ run-sdk-ib (SDK 编译 + IB 重打包) ════════════════════
-  run-sdk-ib:
-    name: SDK + IB / ${{ matrix.target }}
+  # ════════════════════ run-sdk (SDK 编译软件包; build_sdk_ib=true 时 IB 组装固件) ════════════════════
+  # 合并原 run-sdk-ib / run-packages: 两者本就调用同一 compile-packages.yml,
+  # 唯一差异是 matrix_build_sdk_ib 布尔。合并后 plan 只产一个 matrix,
+  # 每 target 携带 build_sdk_ib 字段决定是否走 IB 组装。
+  run-sdk:
+    name: SDK / ${{ matrix.target }}
     needs: plan
-    if: needs.plan.outputs.has_sdk_ib == 'true'
+    if: needs.plan.outputs.has_sdk == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.plan.outputs.sdk_ib_matrix_json) }}
+        include: ${{ fromJson(needs.plan.outputs.sdk_matrix_json) }}
     uses: ./.github/workflows/compile-packages.yml
     with:
       defaults_ref:               ${{ github.ref }}
@@ -1106,9 +1137,10 @@ jobs:
       matrix_passwall_tag:       ${{ matrix.passwall_tag }}
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
-      matrix_build_sdk_ib:       true
-      # sdk-ib 只重编变更包 (plan 计算 ∩ sdk.config 范围)，IB 基线保留其余包的旧版本
+      matrix_build_sdk_ib:       ${{ matrix.build_sdk_ib }}
+      # 增量只重编变更包 (plan 计算 ∩ sdk.config 范围)，IB 基线保留其余包的旧版本
       matrix_sdk_packages:     ${{ matrix.sdk_packages }}
+      matrix_deferred_pkgs:    ${{ matrix.deferred_pkgs }}
       ib_packages:             ${{ matrix.ib_packages }}
       ib_profiles:             ${{ matrix.ib_profiles }}
       # P2: SDK/IB 文件解析由 plan 完成, executor 透传 (本地回退仅兜底)
@@ -1129,62 +1161,19 @@ jobs:
       APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
       USIGN_KEY:            ${{ secrets.USIGN_KEY }}
     concurrency:
-      group: repack-ib-${{ matrix.target }}-${{ needs.plan.outputs.version }}
+      group: compile-sdk-${{ matrix.target }}-${{ needs.plan.outputs.version }}
       cancel-in-progress: false
-
-  # ════════════════════ run-packages (SDK 编译软件包) ════════════════════
-  run-packages:
-    name: Compile Packages / ${{ matrix.target }}
-    needs: plan
-    if: needs.plan.outputs.has_packages == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.plan.outputs.packages_matrix_json) }}
-    uses: ./.github/workflows/compile-packages.yml
-    with:
-      defaults_ref:               ${{ github.ref }}
-      matrix_target:             ${{ matrix.target }}
-      matrix_packages_branch:    ${{ matrix.packages_branch }}
-      standard_packages_repo:     ${{ matrix.standard_packages_repo }}
-      standard_packages_branch:   ${{ matrix.standard_packages_branch }}
-      matrix_passwall_repo:      ${{ matrix.passwall_repo }}
-      matrix_firmware_release_tag_prefix: ${{ matrix.firmware_release_tag_prefix }}
-      matrix_passwall_tag:       ${{ matrix.passwall_tag }}
-      matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
-      matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
-      matrix_sdk_packages:       ${{ matrix.sdk_packages }}
-      # P2: SDK 文件解析由 plan 完成, executor 透传 (本地回退仅兜底)
-      matrix_sdk_file:           ${{ matrix.sdk_file }}
-      matrix_sdk_version:        ${{ matrix.sdk_version }}
-      matrix_sdk_sha256:         ${{ matrix.sdk_sha256 }}
-      matrix_sdk_source_sha:     ${{ matrix.sdk_source_sha }}
-      matrix_config_sha:          ${{ matrix.current_config_sha }}
-      packages_feed_repo:        ${{ matrix.packages_feed_repo }}
-      packages_feed_name:        ${{ matrix.packages_feed_name }}
-      version:                   ${{ needs.plan.outputs.version }}
-      cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
-      skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
-    secrets:
-      ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}
-      APK_BUILD_KEY:        ${{ secrets.APK_BUILD_KEY }}
-      USIGN_KEY:            ${{ secrets.USIGN_KEY }}
-    concurrency:
-      group: compile-pkgs-${{ matrix.target }}-${{ needs.plan.outputs.version }}
-      cancel-in-progress: false
-
   # ════════════════════ persist-state: 仅合并已发布构建状态 ════════════════════
   # 发布在各 reusable executor 内完成；本 job 只持久化其中已成功发布的 target SHA。
   persist-state:
     name: Persist build state
-    needs: [plan, run-firmware, run-sdk-ib, run-packages]
+    needs: [plan, run-firmware, run-sdk]
     if: |
       always() &&
       !cancelled() &&
       (
         (needs.plan.outputs.has_firmware == 'true' && needs.run-firmware.result != 'skipped' && needs.run-firmware.result != 'cancelled') ||
-        (needs.plan.outputs.has_sdk_ib == 'true' && needs.run-sdk-ib.result != 'skipped' && needs.run-sdk-ib.result != 'cancelled') ||
-        (needs.plan.outputs.has_packages == 'true' && needs.run-packages.result != 'skipped' && needs.run-packages.result != 'cancelled')
+        (needs.plan.outputs.has_sdk == 'true' && needs.run-sdk.result != 'skipped' && needs.run-sdk.result != 'cancelled')
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -1222,15 +1211,21 @@ jobs:
             STD_PKG_BRANCH=$(jq -r '.standard_packages_branch // empty' "$info" 2>/dev/null)
             STD_PKG_SHA=$(jq -r '.standard_packages_sha // empty' "$info" 2>/dev/null)
             CFG_SHA=$(jq -r '.config_sha // empty' "$info" 2>/dev/null)
-            FEED_TREES_JSON=$(jq -c '.feed_trees // {}' "$info" 2>/dev/null || echo '{}')
+            INPUT_TREES_JSON=$(jq -c '.input_trees // {}' "$info" 2>/dev/null || echo '{}')
+            STD_TREES_JSON=$(jq -c '.std_input_trees // {}' "$info" 2>/dev/null || echo '{}')
+            UPSTREAM_TREES_JSON=$(jq -c '.upstream_input_trees // {}' "$info" 2>/dev/null || echo '{}')
             FEEDS_SHA_JSON=$(jq -c '.feeds_sha // {}' "$info" 2>/dev/null || echo '{}')
+            DEFERRED_JSON=$(jq -c '.deferred_pkgs // []' "$info" 2>/dev/null || echo '[]')
             [ -z "$STATE_TARGET" ] && continue
             echo "ℹ️ 合并状态来自 $(basename "$(dirname "$info")") → ${STATE_TARGET}"
             jq --arg target "$STATE_TARGET" --arg src "$SRC_SHA" --arg pkg "$PKG_SHA" \
               --arg std_pkg_repo "$STD_PKG_REPO" --arg std_pkg_branch "$STD_PKG_BRANCH" --arg std_pkg_sha "$STD_PKG_SHA" \
               --arg cfg "$CFG_SHA" \
-              --argjson feed_trees "$FEED_TREES_JSON" \
+              --argjson input_trees "$INPUT_TREES_JSON" \
+              --argjson std_trees "$STD_TREES_JSON" \
+              --argjson upstream_trees "$UPSTREAM_TREES_JSON" \
               --argjson feeds_sha "$FEEDS_SHA_JSON" \
+              --argjson deferred "$DEFERRED_JSON" \
               --arg mode "$(jq -r '.build_mode // "unknown"' "$info" 2>/dev/null)" \
               --arg now "$(date +'%Y-%m-%d %H:%M:%S')" \
               '.[$target] = (((.[$target] // {})
@@ -1240,9 +1235,12 @@ jobs:
                 + (if $std_pkg_branch != "" then {standard_packages_branch:$std_pkg_branch} else {} end)
                 + (if $std_pkg_sha != "" then {standard_packages_sha:$std_pkg_sha} else {} end)
                 + (if $cfg != "" then {config_sha:$cfg} else {} end)
-                + (if ($feed_trees | length) > 0 then {feed_trees:$feed_trees} else {} end)
+                + (if ($input_trees | length) > 0 then {input_trees:$input_trees} else {} end)
+                + (if ($std_trees | length) > 0 then {std_input_trees:$std_trees} else {} end)
+                + (if ($upstream_trees | length) > 0 then {upstream_input_trees:$upstream_trees} else {} end)
                 + (if ($feeds_sha | length) > 0 then {feeds_sha:$feeds_sha} else {} end)
-                + {last_build:$now, last_mode:$mode}) | del(.packages))' \
+                + (if ($deferred | length) > 0 then {deferred_pkgs:$deferred} else {} end)
+                + {last_build:$now, last_mode:$mode}) | del(.packages) | del(.feed_trees))' \
               build-state.json > build-state.new
             mv build-state.new build-state.json
             MERGED_COUNT=$((MERGED_COUNT + 1))

@@ -21,6 +21,8 @@ on:
       matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_sdk_packages:       { required: false, type: string, default: '*' }
       matrix_config_sha:       { required: false, type: string, default: '' }
+      # plan 下传的搁置包清单 (outside-sdk 变更, sdk-ib 增量时原样保留累计)
+      matrix_deferred_pkgs:     { required: false, type: string, default: '' }
       # ── plan 预计算下传 (IB 组装参数; 为空时 executor 回退自提取) ──
       ib_packages:               { required: false, type: string, default: '' }
       ib_profiles:               { required: false, type: string, default: '' }
@@ -1083,19 +1085,49 @@ jobs:
             fi
           fi
 
-          # ── 构建输入指纹 (G6): custom feed 目录 tree SHA + 各 feed 实际消费 commit ──
-          # 与 compile-firmware 同公式; plan 侧 trees API 读同一 git 对象, SHA 天然一致。
+          # ── 构建输入指纹 (G6): 逐包 tree SHA 短哈希 + 各 feed 实际消费 commit ──
+          # 与 compile-firmware 同公式; plan 侧 trees API 读同一 git 对象。
           # pkgs-feed 即 custom feed 的 git checkout (cp -rlf 到 package/ 的源头)。
-          FEED_TREES_JSON=$(git -C pkgs-feed ls-tree HEAD 2>/dev/null | \
-            jq -Rrs 'split("\n") | map(select(length > 0)) | map(split("\t")) | map(select(.[0] | test("^040000 tree "))) | map({(.[1]): (.[0] | split(" ")[2])}) | add // {}') || FEED_TREES_JSON='{}'
-          FEEDS_SHA_JSON=$(
+          # 短哈希 7 位 + seed 引用过滤 (方案 A), 与 plan 侧 fetch_pkg_trees 同规则。
+          SHORT=7
+          SEED_REF_JSON=$(find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f -name '*.seed' -print0 | xargs -0 cat | \
+            grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
+            sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | grep -vE '^luci-i18n-' | sort -u | \
+            jq -Rrs 'split("\n") | map(select(length > 0))')
+          INPUT_TREES_JSON=$(git -C pkgs-feed ls-tree HEAD 2>/dev/null | \
+            jq -Rrs --argjson short "$SHORT" 'split("\n") | map(select(length > 0)) | map(split("\t")) | map(select(.[0] | test("^040000 tree "))) | map({(.[1]): (.[0] | split(" ")[2][0:$short])}) | add // {}') || INPUT_TREES_JSON='{}'
+          STD_INPUT_TREES_JSON='{}'
+          UPSTREAM_INPUT_TREES_JSON='{}'
+          FEEDS_SHA_JSON='{}'
+          if [ -d openwrt/feeds ]; then
             for d in openwrt/feeds/*/; do
               [ -d "$d" ] || continue
+              fname=$(basename "$d")
+              # .tmp 是 feeds update 的中间目录, 跳过
+              case "$fname" in *.tmp) continue ;; esac
               f_sha=$(git -C "$d" rev-parse HEAD 2>/dev/null) || continue
               [ -n "$f_sha" ] || continue
-              printf '%s %s\n' "$(basename "$d")" "$f_sha"
-            done | jq -Rrs 'split("\n") | map(select(length > 0)) | map(split(" ")) | map({(.[0]): .[1]}) | add // {}'
-          ) || FEEDS_SHA_JSON='{}'
+              FEEDS_SHA_JSON=$(echo "$FEEDS_SHA_JSON" | jq --arg n "$fname" --arg s "$f_sha" '. + {($n): $s}')
+              FTREES=$(git -C "$d" ls-tree -r HEAD 2>/dev/null | \
+                jq -Rrs --argjson short "$SHORT" --argjson ref "$SEED_REF_JSON" '
+                  split("\n") | map(select(length > 0)) | map(split("\t"))
+                  | map(select(.[0] | test("^040000 tree ")))
+                  | map(. + {depth: (.[1] | split("/") | length)})
+                  | map(select(.depth <= 2))
+                  | map({(.[1] | split("/") | last): (.[0] | split(" ")[2][0:$short])})
+                  | add // {} | with_entries(select(.key as $k | $ref | index($k)))') || continue
+              if [ "$fname" = "packages" ]; then
+                STD_INPUT_TREES_JSON="$FTREES"
+              else
+                UPSTREAM_INPUT_TREES_JSON=$(echo "$UPSTREAM_INPUT_TREES_JSON" | jq --arg n "$fname" --argjson t "$FTREES" '. + {($n): $t}')
+              fi
+            done
+          fi
+
+          # 搁置包清单: plan 下传 (outside-sdk 变更累计), sdk-ib 增量时原样保留;
+          # 全量构建 (compile-firmware) 收编后清零。空输入 → 空数组。
+          DEFERRED_PKGS_JSON=$(printf '%s' "${{ inputs.matrix_deferred_pkgs }}" | \
+            tr ' ' '\n' | sed '/^$/d' | jq -Rrs 'split("\n") | map(select(length > 0)) | unique')
 
           cat > build-info.json <<JSONEOF
           {
@@ -1106,8 +1138,11 @@ jobs:
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${PKG_COMMIT_FULL}",
             "packages_commit": "${PKG_COMMIT}",
-            "feed_trees": ${FEED_TREES_JSON},
+            "input_trees": ${INPUT_TREES_JSON},
+            "std_input_trees": ${STD_INPUT_TREES_JSON},
+            "upstream_input_trees": ${UPSTREAM_INPUT_TREES_JSON},
             "feeds_sha": ${FEEDS_SHA_JSON},
+            "deferred_pkgs": ${DEFERRED_PKGS_JSON},
             "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
             "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
             "standard_packages_sha": "${{ steps.compile.outputs.standard_packages_sha }}",

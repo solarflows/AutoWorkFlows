@@ -1575,25 +1575,56 @@ jobs:
             CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
           fi
 
-          # ── 构建输入指纹 (G6): custom feed 目录 tree SHA + 各 feed 实际消费 commit ──
+          # ── 构建输入指纹 (G6): 逐包 tree SHA 短哈希 + 各 feed 实际消费 commit ──
           # tree SHA 内容寻址: 目录内容不变则指纹不变 (run 36211341719 教训: 上游仓库
           # HEAD 的无关提交不应触碰构建指纹)。本地 git ls-tree 与 plan 侧 trees API 读
-          # 同一 git 对象, SHA 天然一致; feeds_sha 记录 feeds update 后各 feed 实际
-          # 消费 commit, 供 plan 侧 ls-remote 比对。
+          # 同一 git 对象; 短哈希 7 位 (git 惯例, 千包规模碰撞 <1e-7) 控制 state 体积;
+          # 标准/上游 feed 只记 seed 引用的包 (方案 A: 未引用的包不影响固件)。
+          # 布局兼容: feeds/<name> 为 分类/包 (openwrt 布局) 或 包 (routing 布局),
+          # 取「路径深度 ≤2 的 tree 目录」末级名作包键, 与 plan 侧 fetch_pkg_trees 同规则。
+          SHORT=7
+          SEED_REF_JSON=$(find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f -name '*.seed' -print0 | xargs -0 cat | \
+            grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
+            sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | grep -vE '^luci-i18n-' | sort -u | \
+            jq -Rrs 'split("\n") | map(select(length > 0))')
+          ls_tree_short() {
+            # $1=git 目录; 输出 {pkg: sha7} (路径深度 ≤2 的 tree 目录, 末级名为键)
+            git -C "$1" ls-tree -r HEAD --directory 2>/dev/null || git -C "$1" ls-tree HEAD 2>/dev/null
+          }
           FEED_DIR="${GITHUB_WORKSPACE}/openwrt/package/${{ inputs.packages_feed_name }}"
-          FEED_TREES_JSON='{}'
+          INPUT_TREES_JSON='{}'
           if [ -d "$FEED_DIR" ]; then
-            FEED_TREES_JSON=$(git -C "$FEED_DIR" ls-tree HEAD 2>/dev/null | \
-              jq -Rrs 'split("\n") | map(select(length > 0)) | map(split("\t")) | map(select(.[0] | test("^040000 tree "))) | map({(.[1]): (.[0] | split(" ")[2])}) | add // {}') || FEED_TREES_JSON='{}'
+            INPUT_TREES_JSON=$(git -C "$FEED_DIR" ls-tree HEAD 2>/dev/null | \
+              jq -Rrs --argjson short "$SHORT" 'split("\n") | map(select(length > 0)) | map(split("\t")) | map(select(.[0] | test("^040000 tree "))) | map({(.[1]): (.[0] | split(" ")[2][0:$short])}) | add // {}') || INPUT_TREES_JSON='{}'
           fi
-          FEEDS_SHA_JSON=$(
+          STD_INPUT_TREES_JSON='{}'
+          UPSTREAM_INPUT_TREES_JSON='{}'
+          FEEDS_SHA_JSON='{}'
+          if [ -d "${GITHUB_WORKSPACE}/openwrt/feeds" ]; then
             for d in "${GITHUB_WORKSPACE}/openwrt/feeds"/*/; do
               [ -d "$d" ] || continue
+              fname=$(basename "$d")
+              # .tmp 是 feeds update 的中间目录, 跳过
+              case "$fname" in *.tmp) continue ;; esac
               f_sha=$(git -C "$d" rev-parse HEAD 2>/dev/null) || continue
               [ -n "$f_sha" ] || continue
-              printf '%s %s\n' "$(basename "$d")" "$f_sha"
-            done | jq -Rrs 'split("\n") | map(select(length > 0)) | map(split(" ")) | map({(.[0]): .[1]}) | add // {}'
-          ) || FEEDS_SHA_JSON='{}'
+              FEEDS_SHA_JSON=$(echo "$FEEDS_SHA_JSON" | jq --arg n "$fname" --arg s "$f_sha" '. + {($n): $s}')
+              # 逐包短哈希表 (深度 ≤2 目录), 过滤 seed 引用
+              FTREES=$(git -C "$d" ls-tree -r HEAD 2>/dev/null | \
+                jq -Rrs --argjson short "$SHORT" --argjson ref "$SEED_REF_JSON" '
+                  split("\n") | map(select(length > 0)) | map(split("\t"))
+                  | map(select(.[0] | test("^040000 tree ")))
+                  | map(. + {depth: (.[1] | split("/") | length)})
+                  | map(select(.depth <= 2))
+                  | map({(.[1] | split("/") | last): (.[0] | split(" ")[2][0:$short])})
+                  | add // {} | with_entries(select(.key as $k | $ref | index($k)))') || continue
+              if [ "$fname" = "packages" ]; then
+                STD_INPUT_TREES_JSON="$FTREES"
+              else
+                UPSTREAM_INPUT_TREES_JSON=$(echo "$UPSTREAM_INPUT_TREES_JSON" | jq --arg n "$fname" --argjson t "$FTREES" '. + {($n): $t}')
+              fi
+            done
+          fi
 
           cat > build-info.json <<JSONEOF
           {
@@ -1606,8 +1637,11 @@ jobs:
             "packages_repo": "${{ inputs.packages_feed_repo }}",
             "packages_branch": "${{ inputs.matrix_packages_branch }}",
             "packages_sha": "${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}",
-            "feed_trees": ${FEED_TREES_JSON},
+            "input_trees": ${INPUT_TREES_JSON},
+            "std_input_trees": ${STD_INPUT_TREES_JSON},
+            "upstream_input_trees": ${UPSTREAM_INPUT_TREES_JSON},
             "feeds_sha": ${FEEDS_SHA_JSON},
+            "deferred_pkgs": [],
             "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
             "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
             "standard_packages_sha": "${{ steps.retry.outputs.standard_packages_sha || steps.update-feeds.outputs.standard_packages_sha }}",
