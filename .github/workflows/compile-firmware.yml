@@ -887,11 +887,19 @@ jobs:
           fi
 
           # ── 原地增量重编 (stamp 机制自动拾取变更包; 保留首轮日志为 build.2.log) ──
+          # 受限 make 目标 (run 36442582547 教训): 追平轮不跑 world 的 target/install。
+          # world 重入会以"全新"状态重做 install——33 设备全部重新生成 kernel FIT
+          # (qualcommax FEATURES ramdisk → ROOTFS_INITRAMFS 默认 y → kernel 嵌
+          # rootfs 178MB), 有 KERNEL_SIZE 限定的 10 个设备全部超限被 check-size
+          # rm, sysupgrade/factory 组装依赖断裂 → target/linux failed to build。
+          # 首轮 world 一气呵成时 sysupgrade 走 KDIR/tmp 路径成功, 重入则断链。
+          # 本地等价语义: git pull + make 只重编变更包; 镜像不重做 (固件底层
+          # 保持首轮, 包变更经 bin/packages 产物与下轮构建生效)。
           cp build.log build.2.log || echo "⚠️ 备份 build.log 失败: $?"
           START_TIME=$(date +%s)
           REBUILD_EXIT=1
           set +o pipefail
-          make BUILD_LOG=1 -j$(nproc) -k 2>&1 | tee build.log
+          make BUILD_LOG=1 -j$(nproc) -k package/compile package/install package/index 2>&1 | tee build.log
           REBUILD_EXIT=${PIPESTATUS[0]}
           set -o pipefail
           END_TIME=$(date +%s)
