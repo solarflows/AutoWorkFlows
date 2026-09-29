@@ -1237,7 +1237,11 @@ jobs:
                 + (if ($std_trees | length) > 0 then {std_input_trees:$std_trees} else {} end)
                 + (if ($upstream_trees | length) > 0 then {upstream_input_trees:$upstream_trees} else {} end)
                 + (if ($feeds_sha | length) > 0 then {feeds_sha:$feeds_sha} else {} end)
-                + (if ($deferred | length) > 0 then {deferred_pkgs:$deferred} else {} end)
+                # deferred 无条件写入: 空数组 = 全量收编清零是合法信号 (length>0
+                # 守卫会丢弃清零 → Bug A 时代的脏 deferred 永远清不掉, run
+                # 36557139597: mt798x 全量后仍是 28); 指纹字段的空 = 计算失败
+                # 保守保留, 与此语义不同
+                + {deferred_pkgs:$deferred}
                 + {last_build:$now, last_mode:$mode}) | del(.packages) | del(.feed_trees))' \
               build-state.json > build-state.new
             mv build-state.new build-state.json

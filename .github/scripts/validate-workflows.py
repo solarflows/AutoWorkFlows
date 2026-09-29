@@ -435,6 +435,51 @@ def check_semantics(bash: str, files: list[Path], rep: Report) -> None:
     else:
         rep.ok("指纹命令: ls-tree -r -t 齐备 / 无 gh api --jq --argjson 组合")
 
+    # 4m. 追平闸门语义 (executor 侧 BEFORE/AFTER 顶层 tree 表 diff, Python 等价)
+    # run 36557139597: custom-feed README 时间戳每次必提交 → SHA 闸门必开 → 每次
+    # 构建后空转一轮 make (diff 仅 README+lock, 313 个 stamp 检查 0 真实编译)。
+    # 闸门 = 顶层 tree 条目 (包目录) 变化非空才重编; blob 根文件不算; 双向计入
+    # (< 删除 / > 新增或变更)。diff 行前缀是 "< "/" > " (含空格)。
+    catchup_before = (
+        "040000 tree aaaa111111111111111111111111111111111111\tsing-box\n"
+        "040000 tree bbbb222222222222222222222222222222222222\tmosdns\n"
+        "100644 blob cccc333333333333333333333333333333333333\tREADME.md\n"
+        "100644 blob dddd444444444444444444444444444444444444\tpackages.lock.json\n"
+    )
+
+    def gate_changed(before: str, after: str) -> set[str]:
+        def entries(raw: str) -> dict[str, str]:
+            out: dict[str, str] = {}
+            for l in raw.split("\n"):
+                if not l.startswith("040000 tree "):
+                    continue
+                sha, path = l.split("\t", 1)
+                out[path] = sha
+            return out
+        b, a = entries(before), entries(after)
+        return {p for p in set(b) | set(a) if b.get(p) != a.get(p)}
+
+    g_meta = gate_changed(catchup_before, catchup_before.replace("cccc333", "dddd444"))
+    g_pkg = gate_changed(catchup_before, catchup_before.replace("aaaa111", "ffff555"))
+    g_del = gate_changed(catchup_before, catchup_before.replace(
+        "040000 tree bbbb222222222222222222222222222222222222\tmosdns\n", ""))
+    if g_meta == set() and g_pkg == {"sing-box"} and g_del == {"mosdns"}:
+        rep.ok("追平闸门: 元数据跳过 / 包变更触发 / 删除检出")
+    else:
+        rep.fail(f"追平闸门: got meta={g_meta} pkg={g_pkg} del={g_del}")
+
+    # 4m 静态防退化: 两个 executor 的追平 diff 必须 tree 条目过滤且前缀含空格
+    # (漏空格 → 永不匹配 → 恒跳过 → 真实包变更静默漏检, 本地测试拦截过)
+    bad = []
+    for f in files:
+        if f.name in ("compile-firmware.yml", "compile-packages.yml"):
+            if "grep -E '^[<>] 040000 tree '" not in f.read_text(encoding="utf-8"):
+                bad.append(f"{f.name}: 追平闸门缺 tree 条目过滤 (或 diff 前缀漏空格)")
+    if bad:
+        rep.fail("追平闸门静态检查", "\n".join(bad))
+    else:
+        rep.ok("追平闸门静态: 两 executor 均含 tree 条目过滤")
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

@@ -870,12 +870,26 @@ jobs:
             echo "🟡 feed 快照不稳定 (本地 ${NEW_SHA:0:7} vs 远端 ${REMOTE_HEAD:0:7}), 重拉第 ${CATCHUP_ATTEMPT} 轮"
           done
           AFTER_TREES=$(git -C "$FEED_DIR" ls-tree HEAD)
-          # 变更包目录 = tree SHA 不同或新增的目录 (内容寻址, 同 feed_trees 指纹)
-          CHANGED_DIRS=$(diff <(printf '%s\n' "$BEFORE_TREES") <(printf '%s\n' "$AFTER_TREES") | grep '^>' | cut -f2 || true)
+          # 变更包目录 = 顶层 tree 条目 SHA 不同/新增/删除 (内容寻址, 同 input_trees
+          # 指纹); blob 根文件 (README/lock) 不算——custom-feed 每次运行 README 带
+          # 时间戳必提交 → feed HEAD 必前进, 不过滤则 SHA 闸门必开、每次构建后空转
+          # 一轮 make (run 36557139597 实证: diff 仅 README+lock, 313 个 stamp 检查
+          # 0 真实编译, 224s 浪费)。闸门 = 变更包目录非空才重编。
+          # 注意: diff 行前缀是 "< "/"> " (含空格), grep 必须带空格——漏掉则
+          # 永不匹配 → 恒跳过 → 真实包变更静默漏检 (本地三场景测试拦截)。
+          CHANGED_DIRS=$(diff <(printf '%s\n' "$BEFORE_TREES") <(printf '%s\n' "$AFTER_TREES") \
+            | grep -E '^[<>] 040000 tree ' | cut -f2 | sort -u || true)
           echo "packages_sha_full=${NEW_SHA}" >> "$GITHUB_OUTPUT"
+          if [ -z "$CHANGED_DIRS" ]; then
+            # 仅元数据变更: 首轮产物与 feed 包内容自洽, 只更新 SHA 基线 (下轮 plan
+            # 的逐包指纹对比同样无变更, 不会误报)
+            echo "✅ feed 仅元数据变更 (无包目录 tree 变化), 跳过追平重编"
+            echo "rebuilt=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "rebuilt=true" >> "$GITHUB_OUTPUT"
           echo "🟡 feed 已更新: ${BEFORE_SHA:0:7} → ${NEW_SHA:0:7}, 原地重编一轮"
-          echo "   变更目录: $(printf '%s ' $CHANGED_DIRS)"
+          echo "   变更包目录: $(printf '%s ' $CHANGED_DIRS)"
 
           # ── 清掉变更包的旧产物 (版本变更时新旧 ipk/apk 并存会污染发布物) ──
           if [ -n "$CHANGED_DIRS" ]; then
