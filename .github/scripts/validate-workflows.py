@@ -258,28 +258,34 @@ def check_semantics(bash: str, files: list[Path], rep: Report) -> None:
     else:
         rep.ok("包名提取: 两类 feed 布局 + 根文件跳过")
 
-    # 4c. ls-tree -> {pkg: tree_sha} (executor 侧 jq -Rrs 管道, Python 等价)
+    # 4c. ls-tree -> {pkg: tree_sha} (executor 侧 INPUT_TREES jq -Rrs 管道, Python 等价)
+    # 深度 ≤2 与 plan 侧 fetch_pkg_trees 同规则 (键集不对齐 → 每轮幽灵子目录键
+    # 误判新增); 输入为 ls-tree -r -t 形态 (含深度 3 子目录与 blob 行)
     ls_tree_out = (
-        "100644 blob aaaa111111111111111111111111111111111111\tpackages.lock.json\n"
-        "040000 tree bbbb222222222222222222222222222222222222\ttailscale\n"
-        "040000 tree cccc333333333333333333333333333333333333\tsmartdns\n"
-        "100644 blob dddd444444444444444444444444444444444444\tREADME.md\n"
+        "040000 tree aaaa111111111111111111111111111111111111\tnet\n"
+        "040000 tree bbbb222222222222222222222222222222222222\tnet/curl\n"
+        "100644 blob cccc333333333333333333333333333333333333\tnet/curl/Makefile\n"
+        "040000 tree dddd444444444444444444444444444444444444\tnet/curl/src\n"
+        "100644 blob eeee555555555555555555555555555555555555\tpackages.lock.json\n"
     )
 
     def jq_lstree(raw: str) -> dict:
         lines = [l for l in raw.split("\n") if l]                    # select(length>0)
         pairs = [l.split("\t") for l in lines]                       # split("\t")
-        dirs = [p for p in pairs
-                if len(p) == 2 and p[0].startswith("040000 tree ")]  # select(test(...))
-        return {p[1]: p[0].split(" ")[2] for p in dirs} or {}        # {(.[1]): sha} | add // {}
+        out: dict[str, str] = {}
+        for p in pairs:
+            if len(p) != 2 or not p[0].startswith("040000 tree "):   # select(test)
+                continue
+            parts = p[1].split("/")
+            if len(parts) > 2:                                       # select(depth <= 2)
+                continue
+            out[parts[-1]] = p[0].split(" ")[2][0:7]                 # last + sha[0:7]
+        return out
 
     got = jq_lstree(ls_tree_out)
-    want = {
-        "tailscale": "bbbb222222222222222222222222222222222222",
-        "smartdns": "cccc333333333333333333333333333333333333",
-    }
+    want = {"net": "aaaa111", "curl": "bbbb222"}
     if got == want:
-        rep.ok("ls-tree 树表: 目录过滤 + tree SHA 提取 (blob/root 文件排除)")
+        rep.ok("ls-tree 树表: -t tree 行 + 深度≤2 + SHA 提取 (blob/深目录排除)")
     else:
         rep.fail(f"ls-tree 树表: got {got}")
 
@@ -373,6 +379,61 @@ def check_semantics(bash: str, files: list[Path], rep: Report) -> None:
         rep.fail("JSONL 落盘 -c 检查", "\n".join(bad))
     else:
         rep.ok("JSONL 落盘: 所有 jq -n 写 .jsonl 处均带 -c")
+
+    # 4k. FTREES 深度管道语义 (executor 侧 ls-tree -r -t 输出, Python 等价)
+    # run 36519189440: ls-tree -r 无 -t 只出 blob 行 → tree 过滤恒空;
+    # 旧 jq map(. + {depth:...}) 数组加 object 亦是语法错误 (被空输入掩盖)。
+    ftrees_raw = (
+        "040000 tree aaaa111111111111111111111111111111111111\tnet\n"
+        "040000 tree bbbb222222222222222222222222222222222222\tnet/curl\n"
+        "100644 blob cccc333333333333333333333333333333333333\tnet/curl/Makefile\n"
+        "040000 tree dddd444444444444444444444444444444444444\tnet/curl/src\n"
+        "040000 tree eeee555555555555555555555555555555555555\tlibs\n"
+        "040000 tree ffff666666666666666666666666666666666666\tlibs/libxml2\n"
+        "100644 blob gggg777777777777777777777777777777777777\tlibs/libxml2/Makefile\n"
+        "100644 blob hhhh888888888888888888888888888888888888\tpackages.lock.json\n"
+    )
+
+    def jq_ftrees(raw: str, seed: list[str]) -> dict:
+        lines = [l for l in raw.split("\n") if l]                     # select(length>0)
+        pairs = [l.split("\t") for l in lines]                        # split("\t")
+        trees = [p for p in pairs
+                 if len(p) == 2 and p[0].startswith("040000 tree ")]  # select(test)
+        out: dict[str, str] = {}
+        for p in trees:
+            parts = p[1].split("/")
+            if len(parts) > 2:                                        # select(depth <= 2)
+                continue
+            key = parts[-1]                                           # last
+            if key in seed:                                           # with_entries(seed 过滤)
+                out[key] = p[0].split(" ")[2][0:SHORT]                # [0:$short]
+        return out
+
+    got = jq_ftrees(ftrees_raw, ["curl", "libxml2"])
+    want = {"curl": "bbbb222", "libxml2": "ffff666"}
+    if got == want:
+        rep.ok("FTREES 深度管道: -t tree 行 + 深度≤2 + seed 过滤 + 7 位截断")
+    else:
+        rep.fail(f"FTREES 深度管道: got {got}")
+
+    # 4l. 指纹命令防退化 (静态): ① executor 的 ls-tree -r 必须带 -t (缺 -t 则
+    # tree 行恒缺 → 指纹恒空); ② gh api 的 --jq 不支持 --argjson (f3d11091
+    # 重蹈已记录坑 → CURR_TREES 恒空, 旧基线全包误判删除)
+    bad = []
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        if f.name in ("compile-firmware.yml", "compile-packages.yml"):
+            for i, line in enumerate(text.splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue  # 注释里的说明文字不算代码
+                if _re.search(r"ls-tree -r(?! -t)", line):
+                    bad.append(f"{f.name}:{i}: ls-tree -r 缺 -t (tree 行恒缺)")
+        if _re.search(r"--jq\s+--argjson", text):
+            bad.append(f"{f.name}: gh api --jq 搭配 --argjson (gh 不支持)")
+    if bad:
+        rep.fail("指纹命令防退化", "\n".join(bad))
+    else:
+        rep.ok("指纹命令: ls-tree -r -t 齐备 / 无 gh api --jq --argjson 组合")
 
 
 def main() -> int:

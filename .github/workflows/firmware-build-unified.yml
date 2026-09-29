@@ -575,13 +575,11 @@ jobs:
           fetch_pkg_trees() {
             local FP_REPO="$1" FP_REF="$2" FP_CACHE="$3"
             if [ -f "$FP_CACHE" ]; then return 0; fi
+            # gh 的 --jq 只接受单个表达式, 不支持 --argjson/--arg (同文件 run list
+            # 查询处已记录的坑, f3d11091 重蹈 → CURR_TREES 恒空, 旧基线全包误判
+            # 删除); SHORT 为纯数字, 直接嵌入表达式 (双引号内不做路径名展开, [] 安全)
             gh api "repos/${FP_REPO}/git/trees/${FP_REF}?recursive=1" \
-              --jq --argjson short "$SHORT" '
-                [.tree[] | select(.type == "tree")
-                 | select((.path | split("/") | length) <= 2)
-                 | {pkg: (.path | split("/") | last), sha: (.sha[0:$short])}]
-                | map(select(.pkg != ""))
-                | map({(.pkg): .sha}) | add // {}' \
+              --jq "[.tree[] | select(.type == \"tree\") | select((.path | split(\"/\") | length) <= 2) | {pkg: (.path | split(\"/\") | last), sha: (.sha[0:${SHORT}])}] | map(select(.pkg != \"\")) | map({(.pkg): .sha}) | add // {}" \
               > "$FP_CACHE" 2>/dev/null || echo '{}' > "$FP_CACHE"
           }
           while IFS= read -r STAGE; do

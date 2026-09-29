@@ -1614,15 +1614,14 @@ jobs:
             grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
             sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | grep -vE '^luci-i18n-' | sort -u | \
             jq -Rrs 'split("\n") | map(select(length > 0))')
-          ls_tree_short() {
-            # $1=git 目录; 输出 {pkg: sha7} (路径深度 ≤2 的 tree 目录, 末级名为键)
-            git -C "$1" ls-tree -r HEAD --directory 2>/dev/null || git -C "$1" ls-tree HEAD 2>/dev/null
-          }
           FEED_DIR="${GITHUB_WORKSPACE}/openwrt/package/${{ inputs.packages_feed_name }}"
           INPUT_TREES_JSON='{}'
           if [ -d "$FEED_DIR" ]; then
-            INPUT_TREES_JSON=$(git -C "$FEED_DIR" ls-tree HEAD 2>/dev/null | \
-              jq -Rrs --argjson short "$SHORT" 'split("\n") | map(select(length > 0)) | map(split("\t")) | map(select(.[0] | test("^040000 tree "))) | map({(.[1]): (.[0] | split(" ")[2][0:$short])}) | add // {}') || INPUT_TREES_JSON='{}'
+            # 深度 ≤2 与 plan 侧 fetch_pkg_trees 同规则 (键集不对齐会致每轮
+            # 幽灵子目录键误判新增); custom feed 扁平布局下含包内子目录键,
+            # 两侧一致即语义自洽; -t 必需 (递归默认只出 blob 行)
+            INPUT_TREES_JSON=$(git -C "$FEED_DIR" ls-tree -r -t HEAD 2>/dev/null | \
+              jq -Rrs --argjson short "$SHORT" 'split("\n") | map(select(length > 0)) | map(split("\t")) | map(select(.[0] | test("^040000 tree "))) | map(select((.[1] | split("/") | length) <= 2)) | map({(.[1] | split("/") | last): (.[0] | split(" ")[2][0:$short])}) | add // {}') || INPUT_TREES_JSON='{}'
           fi
           STD_INPUT_TREES_JSON='{}'
           UPSTREAM_INPUT_TREES_JSON='{}'
@@ -1637,12 +1636,16 @@ jobs:
               [ -n "$f_sha" ] || continue
               FEEDS_SHA_JSON=$(echo "$FEEDS_SHA_JSON" | jq --arg n "$fname" --arg s "$f_sha" '. + {($n): $s}')
               # 逐包短哈希表 (深度 ≤2 目录), 过滤 seed 引用
-              FTREES=$(git -C "$d" ls-tree -r HEAD 2>/dev/null | \
+              # -t 必需: ls-tree -r 递归默认只输出 blob 行, 缺 -t 则 tree 行全缺 →
+              # jq 过滤 ^040000 tree 恒空 (run 36519189440: std/upstream 基线恒空,
+              # ipq 系每轮"无逐包基线"全量死循环); 深度判断内联 select——原
+              # map(. + {depth:...}) 数组加 object 是 jq 语法错误, 之前仅因输入
+              # 恒空未触发
+              FTREES=$(git -C "$d" ls-tree -r -t HEAD 2>/dev/null | \
                 jq -Rrs --argjson short "$SHORT" --argjson ref "$SEED_REF_JSON" '
                   split("\n") | map(select(length > 0)) | map(split("\t"))
                   | map(select(.[0] | test("^040000 tree ")))
-                  | map(. + {depth: (.[1] | split("/") | length)})
-                  | map(select(.depth <= 2))
+                  | map(select((.[1] | split("/") | length) <= 2))
                   | map({(.[1] | split("/") | last): (.[0] | split(" ")[2][0:$short])})
                   | add // {} | with_entries(select(.key as $k | $ref | index($k)))') || continue
               if [ "$fname" = "packages" ]; then
