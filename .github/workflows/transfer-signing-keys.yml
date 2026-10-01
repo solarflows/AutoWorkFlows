@@ -1,0 +1,32 @@
+name: Transfer Signing Keys
+
+on:
+  workflow_dispatch:
+
+jobs:
+  transfer:
+    name: Transfer Keys
+    runs-on: ubuntu-latest
+    steps:
+      - name: Transfer Keys to Passwall Repo
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          USIGN: ${{ secrets.USIGN_KEY }}
+          APK: ${{ secrets.APK_BUILD_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "$USIGN" ]; then
+            printf '%s' "$USIGN" | gh secret set USIGN_KEY --repo solarflows/openwrt-passwall
+            echo "✅ USIGN_KEY transferred successfully."
+          else
+            echo "::error::USIGN_KEY is empty in source repository."
+            exit 1
+          fi
+
+          if [ -n "$APK" ]; then
+            printf '%s' "$APK" | gh secret set APK_BUILD_KEY --repo solarflows/openwrt-passwall
+            echo "✅ APK_BUILD_KEY transferred successfully."
+          else
+            echo "::error::APK_BUILD_KEY is empty in source repository."
+            exit 1
+          fi
