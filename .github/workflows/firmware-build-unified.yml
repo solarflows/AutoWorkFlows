@@ -29,8 +29,8 @@ on:
         options:
           - 'smart'           # 智能检测 (自动选择最快构建路径)
           - 'full'            # 全量编译 (固件 + SDK + IB)
-          - 'sdk-packages'    # 仅用 SDK 编译软件包
-          - 'sdk-config'      # 手动强制 SDK+IB 增量固件 (SDK 编译 sdk.config 全集, IB 组装; 缺 SDK/IB 回退全量)
+          - 'sdk-packages'    # 仅用 SDK 编译软件包 (不组装固件)
+          - 'firmware-repack' # 手动强制 SDK+IB 增量组装固件 (复用 smart 增量逻辑: 有变更包则编译后组装, 无变更则纯 IB 重组装)
       clean_cache:
         description: '刷新缓存 (跳过缓存恢复, 强制全量重建并重写快照)'
         required: false
@@ -906,7 +906,7 @@ jobs:
             if [ "$CLEAN_CACHE" != "true" ]; then
               if [ "$TRIGGER" = "sdk-packages" ] && [ "$STANDARD_PKG_CHANGED" = "false" ]; then
                 need_sdk=true
-              elif [ "$TRIGGER" = "sdk-config" ]; then
+              elif [ "$TRIGGER" = "firmware-repack" ]; then
                 # 手动强制: 无条件探测 SDK/IB (决策分支依赖真实就绪状态,
                 # probe 同时解析 sdk_file/ib_file 供 executor 透传)
                 need_sdk=true
@@ -956,19 +956,27 @@ jobs:
                 echo "⚠️ [${MATRIX_TARGET}] SDK 不存在,升级为全量编译"
                 SHOULD_FW=true; SHOULD_PUB_FW=true
               fi
-            elif [ "$TRIGGER" = "sdk-config" ]; then
-              # 手动强制 SDK+IB 增量固件: 不依赖变更检测 (smart 无变更时会 skip,
-              # 此模式无条件出固件)。Stage 2 非 smart 分支保留 sdk_packages="*"
-              # → executor 回退读 sdk.config 全集编译; IB 组装新固件。
+            elif [ "$TRIGGER" = "firmware-repack" ]; then
+              # 手动强制 SDK+IB 增量组装固件 (复用 smart 增量逻辑):
+              # Stage 2 对非 smart 触发跳过包级检测 → sdk_packages 保留 "*"。
+              # 此处置为空集语义: 有变更包则 plan 下传变更集 (SDK 只编译变更包,
+              # 与 smart 增量同构); 无变更则空集 → executor 跳过 SDK 编译,
+              # 直接 IB 重组装 (纯 repack, 最快路径)。
               # 配置/源码漂移仅告警 (用户显式选择增量, 内核相关变更不生效);
               # SDK/IB 缺失或版本漂移 (probe 置 not ready) 回退全量。
               if [ "$CONFIG_CHANGED" = "true" ]; then
-                echo "::notice::[${MATRIX_TARGET}] sdk-config 手动模式: 配置已变更但按用户要求走增量 (内核相关 seed 变更不生效)"
+                echo "::notice::[${MATRIX_TARGET}] firmware-repack 手动模式: 配置已变更但按用户要求走增量 (内核相关 seed 变更不生效)"
               fi
               if [ "$SRC_CHANGED" = "true" ]; then
-                echo "::notice::[${MATRIX_TARGET}] sdk-config 手动模式: 源码已前进, 增量固件基于现有 SDK/IB 基线"
+                echo "::notice::[${MATRIX_TARGET}] firmware-repack 手动模式: 源码已前进, 增量固件基于现有 SDK/IB 基线"
               fi
               if [ "$SDK_READY" = "true" ] && [ "$IB_READY" = "true" ]; then
+                # 复用 smart 的包级检测结果: 变更集非空 → 编译后组装; 空 → 纯重组装
+                REPACK_PKGS=$(echo "$CHANGE" | jq -r '.sdk_packages // "*"')
+                if [ "$REPACK_PKGS" = "*" ]; then
+                  echo "ℹ️ [${MATRIX_TARGET}] firmware-repack: 无变更包检测数据, 空集纯重组装"
+                  REPACK_PKGS=""
+                fi
                 SHOULD_SDK_PKGS=true; SHOULD_SDK_IB=true
                 SHOULD_PUB_PKGS=true; SHOULD_PUB_FW=true
               else
@@ -1017,16 +1025,26 @@ jobs:
               IB_VERSION=$(jq -r '.key // empty' "/tmp/ib-probe-${MATRIX_TARGET}/selected.json")
             fi
 
+            # firmware-repack: 复用 smart 的包级变更集 (Stage 2 非 smart 跳过检测时
+            # sdk_packages 恒为 "*", 此处替换为 repack 决策分支算出的 REPACK_PKGS:
+            # 变更集非空 → SDK 只编译变更包; 空 → executor 跳过编译纯 IB 重组装)
+            PLANNED_PKGS=$(echo "$CHANGE" | jq -r '.sdk_packages // "*"')
+            REPACK_MODE=false
+            if [ "$TRIGGER" = "firmware-repack" ] && [ "$SHOULD_SDK_IB" = "true" ]; then
+              PLANNED_PKGS="${REPACK_PKGS:-}"
+              REPACK_MODE=true
+            fi
             jq --argjson config "$TARGET_CONFIG" --arg mode "$BUILD_MODE" \
               --argjson sdk_ready "$SDK_READY" --argjson ib_ready "$IB_READY" \
               --argjson fw "$SHOULD_FW" --argjson sdk_ib "$SHOULD_SDK_IB" --argjson pkgs "$SHOULD_SDK_PKGS" \
               --argjson pub_fw "$SHOULD_PUB_FW" --argjson pub_pkgs "$SHOULD_PUB_PKGS" \
+              --argjson repack_mode "$REPACK_MODE" \
               --argjson change "$CHANGE" \
-              --arg planned_pkgs "$(echo "$CHANGE" | jq -r '.sdk_packages // "*"')" \
+              --arg planned_pkgs "$PLANNED_PKGS" \
               --arg sdk_file "$SDK_FILE" --arg sdk_version "$SDK_VERSION" \
               --arg sdk_sha256 "$SDK_SHA256" --arg sdk_source_sha "$SDK_SOURCE_SHA" \
               --arg ib_file "$IB_FILE" --arg ib_version "$IB_VERSION" \
-              '. + [$config + $change + {sdk_packages:$planned_pkgs, sdk_ready:$sdk_ready, ib_ready:$ib_ready, build_mode:$mode, build_firmware:$fw, build_sdk_ib:$sdk_ib, build_sdk_pkgs:$pkgs, publish_firmware:$pub_fw, publish_pkgs:$pub_pkgs}
+              '. + [$config + $change + {sdk_packages:$planned_pkgs, sdk_ready:$sdk_ready, ib_ready:$ib_ready, build_mode:$mode, build_firmware:$fw, build_sdk_ib:$sdk_ib, build_sdk_pkgs:$pkgs, publish_firmware:$pub_fw, publish_pkgs:$pub_pkgs, repack_mode:$repack_mode}
                 + (if $sdk_file != "" then {sdk_file:$sdk_file} else {} end)
                 + (if $sdk_version != "" then {sdk_version:$sdk_version} else {} end)
                 + (if $sdk_sha256 != "" then {sdk_sha256:$sdk_sha256} else {} end)
@@ -1150,6 +1168,8 @@ jobs:
       matrix_artifacts_release_repo: ${{ matrix.artifacts_release_repo }}
       matrix_artifacts_release_tag:  ${{ matrix.artifacts_release_tag }}
       matrix_build_sdk_ib:       ${{ matrix.build_sdk_ib }}
+      # firmware-repack 纯组装模式 (无变更包时仍走 IB 组装)
+      matrix_repack_mode:       ${{ matrix.repack_mode || false }}
       # 增量只重编变更包 (plan 计算 ∩ sdk.config 范围)，IB 基线保留其余包的旧版本
       matrix_sdk_packages:     ${{ matrix.sdk_packages }}
       matrix_deferred_pkgs:    ${{ matrix.deferred_pkgs }}
@@ -1228,6 +1248,12 @@ jobs:
             UPSTREAM_TREES_JSON=$(jq -c '.upstream_input_trees // {}' "$info" 2>/dev/null || echo '{}')
             FEEDS_SHA_JSON=$(jq -c '.feeds_sha // {}' "$info" 2>/dev/null || echo '{}')
             DEFERRED_JSON=$(jq -c '.deferred_pkgs // []' "$info" 2>/dev/null || echo '[]')
+            BUILD_MODE_INFO=$(jq -r '.build_mode // "unknown"' "$info" 2>/dev/null)
+            # repack 纯组装不回写 deferred (空数组会清掉累计的搁置包清单,
+            # repack 未收编任何包, 语义上应保留 state 现值)
+            if [ "$BUILD_MODE_INFO" = "repack" ]; then
+              DEFERRED_JSON="__KEEP__"
+            fi
             [ -z "$STATE_TARGET" ] && continue
             echo "ℹ️ 合并状态来自 $(basename "$(dirname "$info")") → ${STATE_TARGET}"
             jq --arg target "$STATE_TARGET" --arg src "$SRC_SHA" --arg pkg "$PKG_SHA" \
@@ -1237,8 +1263,8 @@ jobs:
               --argjson std_trees "$STD_TREES_JSON" \
               --argjson upstream_trees "$UPSTREAM_TREES_JSON" \
               --argjson feeds_sha "$FEEDS_SHA_JSON" \
-              --argjson deferred "$DEFERRED_JSON" \
-              --arg mode "$(jq -r '.build_mode // "unknown"' "$info" 2>/dev/null)" \
+              --arg deferred "$DEFERRED_JSON" \
+              --arg mode "$BUILD_MODE_INFO" \
               --arg now "$(date +'%Y-%m-%d %H:%M:%S')" \
               '.[$target] = (((.[$target] // {})
                 + (if $src != "" then {source_sha:$src} else {} end)
@@ -1254,8 +1280,9 @@ jobs:
                 # deferred 无条件写入: 空数组 = 全量收编清零是合法信号 (length>0
                 # 守卫会丢弃清零 → Bug A 时代的脏 deferred 永远清不掉, run
                 # 36557139597: mt798x 全量后仍是 28); 指纹字段的空 = 计算失败
-                # 保守保留, 与此语义不同
-                + {deferred_pkgs:$deferred}
+                # 保守保留, 与此语义不同。repack 纯组装未收编任何包, 保留现值
+                # (DEFERRED_JSON="__KEEP__" 哨兵 → 不写入该字段)。
+                + (if $deferred == "__KEEP__" then {} else {deferred_pkgs:($deferred | fromjson? // $deferred)} end)
                 + {last_build:$now, last_mode:$mode}) | del(.packages) | del(.feed_trees))' \
               build-state.json > build-state.new
             mv build-state.new build-state.json

@@ -17,6 +17,8 @@ on:
       matrix_release_repo:        { required: false, type: string, default: '' }
       matrix_firmware_release_tag_prefix: { required: false, type: string, default: '' }
       matrix_build_sdk_ib:       { required: false, type: boolean, default: false }
+      # firmware-repack 纯组装模式: 无变更包 (package_count=0) 时仍走 IB 组装
+      matrix_repack_mode:       { required: false, type: boolean, default: false }
       matrix_artifacts_release_repo: { required: true, type: string }
       matrix_artifacts_release_tag:  { required: true, type: string }
       matrix_sdk_packages:       { required: false, type: string, default: '*' }
@@ -1082,9 +1084,56 @@ jobs:
           echo '```'
 
       - name: Generate build info
-        if: steps.artifacts.outputs.package_count > 0
+        if: steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true
         run: |
           set -euo pipefail
+          # 纯重组装 (repack, 无变更包): 不回写指纹基线 (feeds 未安装, input_trees
+          # 恒为空会污染 state 基线 → 下轮 smart 误判全量)。persist-state 的
+          # `if $cfg != ""` / 指纹合并保护会保留 state 旧值。
+          if [ "${{ inputs.matrix_repack_mode }}" = "true" ] && [ "${{ steps.artifacts.outputs.package_count || '0' }}" -eq 0 ]; then
+            echo "ℹ️ 纯重组装模式: build-info 仅记录元数据, 不回写指纹基线"
+            PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
+            PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
+            PKG_FORMAT="${{ steps.signing_key.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
+            FIRMWARE_RELEASE_TAG="${{ inputs.version }}"
+            if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
+              FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+            fi
+            cat > build-info.json <<JSONEOF
+          {
+            "target": "${IMMWRT_TARGET}",
+            "config": "${IMMWRT_TARGET}",
+            "config_sha": "",
+            "packages_repo": "${{ inputs.packages_feed_repo }}",
+            "packages_branch": "${{ inputs.matrix_packages_branch }}",
+            "packages_sha": "${PKG_COMMIT_FULL}",
+            "packages_commit": "${PKG_COMMIT}",
+            "input_trees": {},
+            "std_input_trees": {},
+            "upstream_input_trees": {},
+            "feeds_sha": {},
+            "deferred_pkgs": [],
+            "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
+            "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
+            "standard_packages_sha": "",
+            "packages_format": "${PKG_FORMAT}",
+            "sdk_version": "${{ steps.resolve.outputs.sdk_version }}",
+            "plan_version": "${{ inputs.version }}",
+            "sdk_file": "${{ steps.resolve.outputs.sdk_file }}",
+            "build_mode": "repack",
+            "release_tag": "${FIRMWARE_RELEASE_TAG}",
+            "passwall_repo": "${{ inputs.matrix_passwall_repo }}",
+            "passwall_tag": "${{ inputs.matrix_passwall_tag }}",
+            "release_repo": "${{ inputs.matrix_passwall_repo }}",
+            "use_apk": ${{ steps.signing_key.outputs.use_apk }},
+            "signing_key_fingerprint": "${{ steps.signing_key.outputs.fingerprint || 'none' }}",
+            "signing_mode": "${{ steps.signing_key.outputs.sign_mode || 'none' }}",
+            "file_count": "0",
+            "timestamp": "$(TZ=$TZ date +'%Y-%m-%d %H:%M:%S')"
+          }
+          JSONEOF
+            exit 0
+          fi
           PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
           PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
           PKG_FORMAT="${{ steps.signing_key.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
@@ -1210,8 +1259,9 @@ jobs:
 
       # P2: IB 文件选择是 plan 的决策 (plan 已验证与 SDK 同源同版本)。
       # plan 值缺失时回退 executor 本地自解析 (向后兼容)。
+      # repack 模式: 无变更包 (package_count=0) 时仍需 IB 组装。
       - name: Resolve IB file for combined build
-        if: inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
+        if: inputs.matrix_build_sdk_ib == true && (steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true)
         id: resolve-ib
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1251,7 +1301,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Download and extract IB for combined build
-        if: inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
+        if: inputs.matrix_build_sdk_ib == true && (steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true)
         id: inject-ib-packages
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1305,7 +1355,7 @@ jobs:
           fi
 
       - name: Build firmware via IB from SDK packages
-        if: inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
+        if: inputs.matrix_build_sdk_ib == true && (steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true)
         id: build-ib
         run: |
           set -euo pipefail
@@ -1433,7 +1483,7 @@ jobs:
           }
 
       - name: Upload combined firmware artifact
-        if: success() && inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0
+        if: success() && inputs.matrix_build_sdk_ib == true && (steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true)
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.matrix_target }}-sdk-ib-firmware
@@ -1441,7 +1491,7 @@ jobs:
           retention-days: 7
 
       - name: Publish combined firmware
-        if: success() && inputs.matrix_build_sdk_ib == true && steps.artifacts.outputs.package_count > 0 && inputs.matrix_release_repo != ''
+        if: success() && inputs.matrix_build_sdk_ib == true && (steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true) && inputs.matrix_release_repo != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -1595,7 +1645,7 @@ jobs:
           fi
 
       - name: Upload published state
-        if: success() && steps.artifacts.outputs.package_count > 0
+        if: success() && (steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true)
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-published-state
