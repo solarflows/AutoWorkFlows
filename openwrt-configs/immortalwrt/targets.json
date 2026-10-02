@@ -3,6 +3,7 @@
   "targets": [
     {
       "target": "mt798x",
+      "disabled": true,
       "repo": "solarflows/immortalwrt-mt798x",
       "ref": "test",
       "standard_packages_repo": "solarflows/packages",

@@ -67,6 +67,12 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 
 > 种子配置目录固定为 `openwrt-configs/immortalwrt/<target>/`，不再有独立的 `config` 字段。改名 target 时须同步重命名目录。
 
+### 目标禁用
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `disabled` | `false` | `true` 时该 target 不参与 `all`/`both` 默认构建与 feed 更新触发（含周日定时 cron）；显式 `target=<name>` 仍可单独构建。用于上游停止维护但保留配置与手动构建能力的场景 |
+
 ---
 
 ## 可选字段 — 固件发布相关

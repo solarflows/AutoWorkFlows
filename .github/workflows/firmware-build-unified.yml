@@ -106,7 +106,9 @@ jobs:
           SELECTED_TARGET="${{ github.event.inputs.target || 'all' }}"
           TARGETS_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/targets.json"
           if [ "$SELECTED_TARGET" = "both" ] || [ "$SELECTED_TARGET" = "all" ]; then
-            UPDATER_TARGETS=$(jq -r '.targets | map(.packages_branch // .target) | unique | join(",")' "$TARGETS_FILE")
+            # disabled target 不参与默认 (all/both) 构建与 feed 更新触发;
+            # 显式 target=<name> 仍可单独构建 (else 分支不过滤)。
+            UPDATER_TARGETS=$(jq -r '[.targets[] | select(.disabled != true)] | map(.packages_branch // .target) | unique | join(",")' "$TARGETS_FILE")
           else
             UPDATER_TARGETS=$(jq -r --arg selected "$SELECTED_TARGET" \
               '[.targets[] | select(.target == $selected) | (.packages_branch // .target)] | unique | join(",")' \
@@ -314,7 +316,7 @@ jobs:
             --arg pkg_name "${{ env.PACKAGES_FEED_NAME }}" \
             --arg artifacts_repo "${{ env.ARTIFACTS_RELEASE_REPO }}" \
             --argjson artifacts_keep "${{ env.ARTIFACTS_KEEP_VERSIONS }}" '
-            if $t == "both" or $t == "all" then .targets
+            if $t == "both" or $t == "all" then [.targets[] | select(.disabled != true)]
             else [.targets[] | select(.target == $t)] end |
             map(. + {
               packages_branch:   (.packages_branch   // .target),

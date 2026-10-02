@@ -53,6 +53,7 @@
 | B5 | P1 | persist-state 不使用 `merge-multiple` | ✅ | `firmware-build-unified.yml` | 同名 `build-info.json` 会互相覆盖 |
 | B6 | P1 | 版本号解析 4 级纯字符串顺序 + make 表达式防御 | ✅ | `version-extraction.instructions.md` | exit 127 根因 |
 | C7 | P1 | 编译后 custom-feed 追平重编（全量 + SDK 增量） | 🟨 | `compile-firmware.yml` / `compile-packages.yml` `🔄 Rebuild on feed update`（`validate-workflows.py` 全过：YAML + 97 bash 块 + 指纹回归）；待真实 run 验证 | 编译成功后触发 custom-feed 更新本 target 分支并等待完成，`ls-remote` 对比 HEAD 前进则 fetch+reset 拉新 feed 原地增量重编一轮（最多 1 轮，再更新留待下次构建），防构建周期内 feed 更新没跟上。产物只保留最终轮（打包/发布/缓存保存均在重编之后）。SDK 路径按 feed 目录 tree SHA 对比变更包 clean 强制失效（U12 教训：同版本内容变更不可依赖 stamp）+ 硬链接 feed 重新复制；全量路径依赖 `STAMP_PREPARED` 内嵌 `find_md5` 哈希自动拾取（已对照 `solarflows/immortalwrt-mt798x@test` `include/package.mk` 验证）。追平触发/等待/拉取失败仅告警跳过（首轮产物仍自洽）；重编失败硬失败（bin/ 已混入新旧产物）且缓存保存以 `outcome != 'failure'` 联动跳过。`skip_upstream=true` 时经 `skip_feed_catchup` 接线跳过 |
+| C8 | P2 | mt798x 默认禁用（`disabled: true`）+ 清理其 Actions Cache | 🟨 | `targets.json` mt798x 条目、`firmware-build-unified.yml` 两处 jq 过滤（`Resolve packages updater targets` / `Load targets & check changes`）；cache 清理见本地终端执行记录 | 上游 `solarflows/immortalwrt-mt798x@test` 停止维护，设备已转普通 AP/路由，固件功能稳定。`all`/`both`/周日 cron 不再构建 mt798x、不再触发其 feed 更新；显式 `target=mt798x` 保留手动构建能力。seed/overlay/补丁/custom-feed 分支全保留，`IMMWRT_BUILD_STATE` 旧条目无害保留 |
 
 ## D. 上游同步与 Feed
 
