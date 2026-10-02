@@ -30,6 +30,7 @@ on:
           - 'smart'           # 智能检测 (自动选择最快构建路径)
           - 'full'            # 全量编译 (固件 + SDK + IB)
           - 'sdk-packages'    # 仅用 SDK 编译软件包
+          - 'sdk-config'      # 手动强制 SDK+IB 增量固件 (SDK 编译 sdk.config 全集, IB 组装; 缺 SDK/IB 回退全量)
       clean_cache:
         description: '刷新缓存 (跳过缓存恢复, 强制全量重建并重写快照)'
         required: false
@@ -905,6 +906,11 @@ jobs:
             if [ "$CLEAN_CACHE" != "true" ]; then
               if [ "$TRIGGER" = "sdk-packages" ] && [ "$STANDARD_PKG_CHANGED" = "false" ]; then
                 need_sdk=true
+              elif [ "$TRIGGER" = "sdk-config" ]; then
+                # 手动强制: 无条件探测 SDK/IB (决策分支依赖真实就绪状态,
+                # probe 同时解析 sdk_file/ib_file 供 executor 透传)
+                need_sdk=true
+                need_ib=true
               elif [ "$TRIGGER" = "smart" ]; then
                 # 标准/上游 feed 的变更已在 Stage 1 折入变更包集合 (packages_changed),
                 # 由 sdk.config 交集统一路由, 不再一刀切排除增量路径。
@@ -948,6 +954,25 @@ jobs:
                 SHOULD_SDK_PKGS=true; SHOULD_PUB_PKGS=true
               else
                 echo "⚠️ [${MATRIX_TARGET}] SDK 不存在,升级为全量编译"
+                SHOULD_FW=true; SHOULD_PUB_FW=true
+              fi
+            elif [ "$TRIGGER" = "sdk-config" ]; then
+              # 手动强制 SDK+IB 增量固件: 不依赖变更检测 (smart 无变更时会 skip,
+              # 此模式无条件出固件)。Stage 2 非 smart 分支保留 sdk_packages="*"
+              # → executor 回退读 sdk.config 全集编译; IB 组装新固件。
+              # 配置/源码漂移仅告警 (用户显式选择增量, 内核相关变更不生效);
+              # SDK/IB 缺失或版本漂移 (probe 置 not ready) 回退全量。
+              if [ "$CONFIG_CHANGED" = "true" ]; then
+                echo "::notice::[${MATRIX_TARGET}] sdk-config 手动模式: 配置已变更但按用户要求走增量 (内核相关 seed 变更不生效)"
+              fi
+              if [ "$SRC_CHANGED" = "true" ]; then
+                echo "::notice::[${MATRIX_TARGET}] sdk-config 手动模式: 源码已前进, 增量固件基于现有 SDK/IB 基线"
+              fi
+              if [ "$SDK_READY" = "true" ] && [ "$IB_READY" = "true" ]; then
+                SHOULD_SDK_PKGS=true; SHOULD_SDK_IB=true
+                SHOULD_PUB_PKGS=true; SHOULD_PUB_FW=true
+              else
+                echo "⚠️ [${MATRIX_TARGET}] SDK 或 IB 不可用,升级为全量编译"
                 SHOULD_FW=true; SHOULD_PUB_FW=true
               fi
             else

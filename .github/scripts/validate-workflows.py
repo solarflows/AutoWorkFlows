@@ -52,9 +52,10 @@ RESIDUAL_TOKENS = {
     "firmware-build-unified.yml": [
         "LAST_PKG_MAP", "PKG_COMMITS_JSON", "packages.lock.json 无",
         # 2026-10-02 dispatch 输入裁剪: cache_strategy 5 值收敛为 clean_cache 布尔,
-        # sdk-config 为零消费者死选项, no-cache (不持久化) 模式移除。
+        # no-cache (不持久化) 模式移除。sdk-config 曾被误判为死选项删除,
+        # 2026-10-03 恢复并真正接线 (手动强制 SDK+IB), 故不在残留名单。
         "cache_strategy", "CACHE_STRATEGY", "clean-toolchain", "clean-ccache",
-        "clean-all", "no-cache", "sdk-config",
+        "clean-all", "no-cache",
     ],
     "compile-firmware.yml": [
         "PACKAGE_COMMITS_JSON", "PKG_LOCK_FILE",
