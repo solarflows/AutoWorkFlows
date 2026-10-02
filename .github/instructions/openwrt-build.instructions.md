@@ -15,17 +15,17 @@ applyTo: [".github/workflows/compile-*.yml", ".github/workflows/firmware-build-u
 
 - 依赖了被跳过 job 的 job 会被隐式跳过。不要把可能被跳过的 job 放进 `needs`；需要其结果时用 `always()` 加显式 `needs.<job>.result` 判断。
 - 不要导出名为 `TARGET`、`HOST`、`BUILD` 的通用 workflow、job 或 shell 环境变量（详见 [project-constraints.instructions.md](project-constraints.instructions.md) § 环境变量禁令）。使用 `matrix_target` 内联或领域特定命名。
-- 保持缓存策略 `smart`、`clean-toolchain`、`clean-ccache`、`clean-all`、`no-cache` 行为互不相同。
+- 缓存控制是单一布尔输入 `clean_cache`（默认 false = smart 增量路径；true = 跳过全部 restore、toolchain hash 加 force 前缀、强制全量路由并重写快照）。不存在按命名空间分别清理的中间态；`no-cache`（不持久化）模式已移除。
 - 仅当构建成功后才保存当前 toolchain 与 ccache 快照；失败的构建不得替换已有缓存。先保存当前 key 再清理旧条目，并把当前 key 排除在清理范围外。这样即使保存或清理失败，仍保留可用的旧缓存。
 - 保存成功后，清理当前 target 下 `immwrt-v2-toolchain-<target>-*` 与 `immwrt-v2-ccache-<target>-*` 的所有旧条目。v2 策略为每 target 只保留最新一份；不清理 v1 或无关 workflow 的缓存。
 - 每个缓存命名空间都要有有限的保留上限；绝不能让按 run 滚动的命名空间无界增长。`immwrt-v2-toolchain-<target>-*` 与 `immwrt-v2-ccache-<target>-*` 每 target 只保留最新快照；写入 `immwrt-v2-sdk-hostpkg-<target>-<run_id>` 的一方（全量 executor 或 SDK 路径）必须把该命名空间收敛为当前 target 的最新单份快照，避免只跑全量构建的时期无限增长。GitHub 自身驱逐**不是**原因：超配额时平台先保存新缓存，再按 last-access 从旧到新驱逐——run 35313768877 中被驱逐的恰是上一代、从未被读过的 `sdk-hostpkg` 快照（3.10GB），与 latest-only 策略删除的集合相同。写入方主动清理的意义在于可控性：在我们自己的步骤里释放空间、保留「新快照保存成功后才清理」的兜底，并让驱逐根本无需发生——因为当旧代太小（或 7 天过期后不存在）时，下一个候选就是 toolchain 快照，代价是 40 分钟重建。
 - toolchain 快照 key 是内容寻址的（`tools`/`toolchain` 树哈希）。当完全相同的 key 已存在时，跳过保存而不是让它报 `Unable to reserve cache ...`（Actions Cache key 不可变）；清理步骤必须把已存在的快照视为可用，而不是依赖保存步骤的结果。
 - 两个 executor 都恢复并保存共享的 `immwrt-v2-ccache-<target>-<run_id>` 命名空间，并把旧快照清理到每 target 最新一份；`source_sha` 是产物/SDK-IB 匹配元数据，不属于 SDK hostpkg key。
-- `plan` job 把 `smart` 以外的所有缓存策略路由到全量构建 executor。executor 负责所选策略的缓存操作：restore、save、purge 都在 reusable workflow 中、`plan` 做出路由决策之后执行。
+- `plan` job 把 `clean_cache=true` 路由到全量构建 executor。executor 负责 restore、save、purge，都在 reusable workflow 中、`plan` 做出路由决策之后执行。
 - 工具链缓存命中时禁止显式调用 `make tools/compile toolchain/compile` 或其它子目录目标：工具链缓存只含 `openwrt/staging_dir/host*` 与 `openwrt/staging_dir/tool*`，而各 host 工具的 `.built` 标记位于 `build_dir/`（`include/host-build.mk` 的 `HOST_STAMP_BUILT`）。显式传入子目录目标会绕过顶层 stamp 守门（`timestamp.pl` 不再运行），make 转而逐工具检查 `build_dir` 中缺失的 `.built`，使缓存命中时仍全量重编（实测 warm-cache 的 `Prepare` 步骤在 GCC 14 目标上仍耗 40+ 分钟）。工具链主体编译必须交由默认目标 `world` 调度；仅当 `staging_dir/host/bin/ccache` 缺失/不可执行时才允许显式 `make tools/ccache/compile` 以提供 ccache 命令。
 - `dl/` 残损下载清理必须限定深度：使用 `find dl -maxdepth 1 -type f -size -1024c`，禁止递归。`dl/go-mod-cache`（Go module）与 `dl/cargo`（crate）内含大量合法的小于 1KB 的文件，递归删除会破坏 Go `//go:embed` 资源（如 protobuf `editions_defaults.binpb`）与 cargo checksum（`Cargo.toml.orig`），导致整批 Go/Rust 包编译失败。
-- `no-cache` 模式下跳过 Actions Cache 的 restore/save/purge。不要导出 workflow 级 ccache `CC`/`CXX` 包装器；ccache 可用时正常配置，构建内行为跟随 seed 的 `CONFIG_CCACHE`。
-- 完全不要在 workflow 级导出 `CC`/`CXX` 包装器：seed 已设 `CONFIG_CCACHE=y`，`rules.mk` 会自动包装编译器命令（OpenWrt 21.02 设置 `TARGET_CC:=ccache_cc`，新版/SNAPSHOT 设置 `TARGET_CC:=ccache $(TARGET_CC)`），且 `HOSTCC:=ccache $(HOSTCC)`。环境 `CC`/`CXX` 导出是冗余的，还可能把系统 `gcc` 泄漏进不读 `TARGET_CONFIGURE_OPTS` 的包。`no-cache` 策略因此只关闭远端缓存持久化，而不强制关闭构建系统原生的 ccache 设置。
+- 不要导出 workflow 级 ccache `CC`/`CXX` 包装器；ccache 可用时正常配置，构建内行为跟随 seed 的 `CONFIG_CCACHE`。
+- 完全不要在 workflow 级导出 `CC`/`CXX` 包装器：seed 已设 `CONFIG_CCACHE=y`，`rules.mk` 会自动包装编译器命令（OpenWrt 21.02 设置 `TARGET_CC:=ccache_cc`，新版/SNAPSHOT 设置 `TARGET_CC:=ccache $(TARGET_CC)`），且 `HOSTCC:=ccache $(HOSTCC)`。环境 `CC`/`CXX` 导出是冗余的，还可能把系统 `gcc` 泄漏进不读 `TARGET_CONFIGURE_OPTS` 的包。
 - SDK 增量构建环境下：系统未全局安装 ccache 时，配置和统计命令必须显式定位 SDK 自带的 `staging_dir/host/bin/ccache`（或在 PATH 中探测），禁止假设系统 PATH 中存在裸 `ccache` 命令。
 - 不要通过 `--set-config` 设置 ccache `compiler_check`：`rules.mk` 导出 `CCACHE_COMPILERCHECK`，而 ccache 的环境变量优先级高于配置文件，文件值会被静默忽略。workflow 中只设置 `hash_dir` 与已验证的 `sloppiness` 选项；不要强制 ccache 压缩，因为 qualcommax 可能导出 `CCACHE_NOCOMPRESS`，而 Actions Cache 的归档压缩与之独立。`base_dir` 由 `rules.mk` 原生导出（`CCACHE_BASEDIR=$(TOPDIR)`）。
 - `.github/upstream-sync/patches/packages/` 下的 feed 补丁（由 `upstream-sync.yml` 通过 `git apply` 应用）合并前必须用 `git apply --check` 验证。hunk 内的每个内容行必须以 `+`、`-` 或空格开头；新增行缺 `+` 前缀会让 `git apply` 报 `corrupt patch`。`upstream-sync.yml` 也由这些补丁的 `push.paths` 触发——推送补丁改动会自动重跑同步。

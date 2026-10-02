@@ -30,18 +30,11 @@ on:
           - 'smart'           # 智能检测 (自动选择最快构建路径)
           - 'full'            # 全量编译 (固件 + SDK + IB)
           - 'sdk-packages'    # 仅用 SDK 编译软件包
-          - 'sdk-config'       # 手动强制 SDK+IB 增量固件 (sdk.config ∩ 变更包, outside-sdk 仅告警)
-      cache_strategy:
-        description: '缓存策略 (非 smart 策略强制全量编译)'
+      clean_cache:
+        description: '刷新缓存 (跳过缓存恢复, 强制全量重建并重写快照)'
         required: false
-        default: 'smart'
-        type: choice
-        options:
-          - 'smart'            # 使用工具链 + ccache 缓存
-          - 'clean-toolchain'  # 不用工具链缓存, ccache 正常
-          - 'clean-ccache'     # 不用 ccache, 工具链缓存正常
-          - 'clean-all'        # 两者都清空重建
-          - 'no-cache'         # 不持久化 Actions Cache,仍允许构建内 ccache
+        default: false
+        type: boolean
       skip_upstream:
         description: '跳过上游同步 (节省时间)'
         required: false
@@ -88,7 +81,7 @@ jobs:
       version:                  ${{ steps.version.outputs.version }}
       has_firmware:             ${{ steps.decision.outputs.has_firmware }}
       has_sdk:                  ${{ steps.decision.outputs.has_sdk }}
-      cache_strategy:              ${{ steps.decision.outputs.cache_strategy }}
+      clean_cache:                 ${{ steps.decision.outputs.clean_cache }}
     steps:
       - name: Checkout AutoWorkflows (sparse)
         uses: actions/checkout@v6
@@ -851,15 +844,8 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           TRIGGER="${{ github.event.inputs.trigger || 'smart' }}"
-          CACHE_STRATEGY="${{ github.event.inputs.cache_strategy || 'smart' }}"
-          case "$CACHE_STRATEGY" in
-            smart|clean-toolchain|clean-ccache|clean-all|no-cache) ;;
-            *)
-              echo "::warning::未知缓存策略 '$CACHE_STRATEGY', 回退到 smart"
-              CACHE_STRATEGY=smart
-              ;;
-          esac
-          echo "cache_strategy=$CACHE_STRATEGY" >> "$GITHUB_OUTPUT"
+          CLEAN_CACHE="${{ github.event.inputs.clean_cache == 'true' }}"
+          echo "clean_cache=$CLEAN_CACHE" >> "$GITHUB_OUTPUT"
           FILTERED=$(cat /tmp/filtered_targets.json)
           CHANGES=$(cat /tmp/target_changes.json)
           echo '[]' > /tmp/target_plan.json
@@ -913,10 +899,10 @@ jobs:
 
             need_sdk=false
             need_ib=false
-            # Non-default cache strategies are a routing decision, not an executor
-            # fallback: they always use the full-build workflow so its cache
-            # maintenance can perform the requested clean/rebuild operation.
-            if [ "$CACHE_STRATEGY" = "smart" ]; then
+            # clean_cache is a routing decision, not an executor fallback: it
+            # always uses the full-build workflow so its cache maintenance can
+            # perform the requested clean/rebuild operation.
+            if [ "$CLEAN_CACHE" != "true" ]; then
               if [ "$TRIGGER" = "sdk-packages" ] && [ "$STANDARD_PKG_CHANGED" = "false" ]; then
                 need_sdk=true
               elif [ "$TRIGGER" = "smart" ]; then
@@ -949,8 +935,8 @@ jobs:
               fi
             fi
 
-            if [ "$CACHE_STRATEGY" != "smart" ]; then
-              echo "ℹ️ [${MATRIX_TARGET}] cache_strategy=${CACHE_STRATEGY},强制全量编译"
+            if [ "$CLEAN_CACHE" = "true" ]; then
+              echo "ℹ️ [${MATRIX_TARGET}] clean_cache=true, 跳过缓存恢复, 强制全量编译"
               SHOULD_FW=true; SHOULD_PUB_FW=true
             elif [ "$TRIGGER" = "full" ]; then
               SHOULD_FW=true; SHOULD_PUB_FW=true
@@ -1042,7 +1028,8 @@ jobs:
           {
             echo "## 🎯 Build Decision"
             echo ""
-            echo "**触发**: \`${TRIGGER}\` | **目标**: \`${{ github.event.inputs.target || 'all' }}\` | **缓存**: \`${CACHE_STRATEGY}\`"
+            CACHE_LABEL="smart (增量)"; [ "$CLEAN_CACHE" = "true" ] && CACHE_LABEL="刷新 (跳过恢复)"
+            echo "**触发**: \`${TRIGGER}\` | **目标**: \`${{ github.event.inputs.target || 'all' }}\` | **缓存**: \`${CACHE_LABEL}\`"
             echo ""
             echo "**计划版本**: \`${VER}\`"
             echo ""
@@ -1100,7 +1087,7 @@ jobs:
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
-      cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
+      clean_cache:               ${{ needs.plan.outputs.clean_cache == 'true' }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
       publish_sdk_ib:             true
       skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
@@ -1154,7 +1141,7 @@ jobs:
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
-      cache_strategy:            ${{ needs.plan.outputs.cache_strategy }}
+      clean_cache:               ${{ needs.plan.outputs.clean_cache == 'true' }}
       skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
     secrets:
       ACCESS_TOKEN:         ${{ secrets.ACCESS_TOKEN }}

@@ -29,7 +29,7 @@ on:
       packages_feed_name:   { required: false, type: string, default: 'solarflows' }
       # ── 全局上下文 ──
       version:              { required: true, type: string }
-      cache_strategy:       { required: false, type: string, default: 'smart' }
+      clean_cache:          { required: false, type: boolean, default: false }
       free_disk_space:      { required: false, type: boolean, default: false }
       publish_sdk_ib:       { required: false, type: boolean, default: true }
       # 跳过编译后约 custom-feed 追平重编 (与 unified 的 skip_upstream 语义对齐)
@@ -133,8 +133,7 @@ jobs:
           TOOLS_TREE=$(git -C openwrt rev-parse HEAD:tools 2>/dev/null || echo "missing")
           TOOLCHAIN_TREE=$(git -C openwrt rev-parse HEAD:toolchain 2>/dev/null || echo "missing")
           HASH=$(printf '%s\n%s\n' "$TOOLS_TREE" "$TOOLCHAIN_TREE" | sha256sum | cut -c1-16)
-          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
-          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-toolchain" ]; then
+          if [ "${{ inputs.clean_cache }}" = "true" ]; then
             # Cache keys are immutable. A clean rebuild must write a new snapshot
             # even when the source hash has not changed since the previous clean run.
             HASH="force-${HASH}-${GITHUB_RUN_ID}"
@@ -218,11 +217,11 @@ jobs:
 
       # ───────── 工具链缓存恢复（独立 restore, 仅非 clean 模式）─────────
       # 刻意设计: 拆为独立 restore + save(见 Purge 前) 而非一体式 actions/cache@v5。
-      # clean-toolchain/clean-all 时跳过 restore(不下载旧缓存), 实现真正的刷新。
+      # clean_cache=true 时跳过 restore(不下载旧缓存), 实现真正的刷新。
       # save 仅构建成功时触发(if: success()), 避免失败半成品污染缓存 key。
       - name: Restore toolchain cache
         id: cache-tc-restore
-        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
+        if: inputs.clean_cache != true
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
@@ -234,7 +233,7 @@ jobs:
             openwrt/staging_dir/tool*
 
       - name: Restore ccache
-        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-ccache'
+        if: inputs.clean_cache != true
         id: cache-cc
         continue-on-error: true
         uses: actions/cache/restore@v5
@@ -248,13 +247,12 @@ jobs:
       # 刻意设计: 诊断性质步骤(v1 遗产), 缓存恢复失败不应阻塞后续构建,
       # 故 continue-on-error: true, 由 ccache Stats 步骤做指标报告
       - name: Verify & report cache status
-        if: inputs.cache_strategy != 'no-cache'
         id: cache-refresh
         continue-on-error: true
         run: |
-          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
-          # clean-toolchain 模式: restore 已跳过(见上一步), 无需 rm -rf
-          if [ "$CACHE_STRATEGY" = "clean-all" ] || [ "$CACHE_STRATEGY" = "clean-ccache" ]; then
+          CLEAN_CACHE="${{ inputs.clean_cache }}"
+          # clean_cache=true: restore 已跳过(见上一步), 本地残留一并清空
+          if [ "$CLEAN_CACHE" = "true" ]; then
             CCACHE_BIN="$(pwd)/openwrt/staging_dir/host/bin/ccache"
             [ -x "$CCACHE_BIN" ] || CCACHE_BIN="$(command -v ccache 2>/dev/null || true)"
             [ -n "$CCACHE_BIN" ] && "$CCACHE_BIN" -C 2>/dev/null || true
@@ -262,7 +260,7 @@ jobs:
           fi
 
           TOOLCHAIN_RESTORED=false
-          if [ "$CACHE_STRATEGY" != "clean-all" ] && [ "$CACHE_STRATEGY" != "clean-toolchain" ] \
+          if [ "$CLEAN_CACHE" != "true" ] \
              && [ -d openwrt/staging_dir ] \
              && [ "$(find openwrt/staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | head -1)" ]; then
             TOOLCHAIN_RESTORED=true
@@ -271,7 +269,7 @@ jobs:
           echo "toolchain_exact=${{ steps.cache-tc-restore.outputs.cache-hit || 'false' }}" >> $GITHUB_OUTPUT
 
           CCACHE_RESTORED=false
-          if [ "$CACHE_STRATEGY" != "clean-all" ] && [ "$CACHE_STRATEGY" != "clean-ccache" ] \
+          if [ "$CLEAN_CACHE" != "true" ] \
              && [ -d openwrt/.ccache ] \
              && [ "$(find openwrt/.ccache -type f 2>/dev/null | head -1)" ]; then
             CCACHE_RESTORED=true
@@ -689,9 +687,6 @@ jobs:
             echo "::warning::ccache 包装器变量验证失败, 禁止保存共享 ccache"
           fi
           ls -la staging_dir/host/bin/ccache_cc staging_dir/host/bin/ccache_cxx 2>/dev/null || true
-          if [ "${{ inputs.cache_strategy }}" = "no-cache" ]; then
-            echo "🔧 no-cache 模式: 构建内 ccache 仍由 seed CONFIG_CCACHE 控制, 仅跳过 actions/cache 持久化"
-          fi
           MAKE_EXIT=1
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           START_TIME=$(date +%s)
@@ -1026,10 +1021,9 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ───────── ccache 统计与清理（独立步骤，不受构建成败影响）─────────
-      # 刻意设计: ccache 命中率/压缩比是判断"缓存是否有效"的关键指标,
-      # no-cache 模式跳过本步骤(无缓存可统计)
+      # 刻意设计: ccache 命中率/压缩比是判断"缓存是否有效"的关键指标
       - name: 📈 ccache Stats & Cleanup
-        if: always() && inputs.cache_strategy != 'no-cache'
+        if: always()
         run: |
           echo "╔══════════════════════════════════════╗"
           echo "║  📈 ccache 统计与压缩测量             ║"
@@ -1311,7 +1305,7 @@ jobs:
       # 下一批候选落在工具链快照上（代价 40 分钟全量重编）。
       - name: Check existing toolchain snapshot
         id: cache-tc-existing
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
+        if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1339,7 +1333,7 @@ jobs:
           fi
 
       - name: Save toolchain cache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.cache-tc-existing.outputs.exists != 'true' && steps.feed-rebuild.outcome != 'failure'
+        if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.cache-tc-existing.outputs.exists != 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-tc-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -1350,7 +1344,7 @@ jobs:
             openwrt/staging_dir/tool*
 
       - name: Save ccache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.build.outputs.ccache_wrapper_valid == 'true' && steps.feed-rebuild.outcome != 'failure'
+        if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.build.outputs.ccache_wrapper_valid == 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-cc-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -1359,7 +1353,7 @@ jobs:
           path: openwrt/.ccache
 
       - name: Save SDK hostpkg cache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
+        if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
         id: cache-sdk-hostpkg-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -1379,7 +1373,7 @@ jobs:
       - name: Purge stale toolchain caches
         id: cache-tc-purge
         # 快照已精确存在（save 被跳过）时同样执行清理，避免旧 key 长期滞留配额。
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && (steps.cache-tc-save.outcome == 'success' || steps.cache-tc-existing.outputs.exists == 'true')
+        if: always() && !cancelled() && (steps.cache-tc-save.outcome == 'success' || steps.cache-tc-existing.outputs.exists == 'true')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1420,7 +1414,7 @@ jobs:
       # ───────── 清理远端 ccache（独立维护）─────────
       - name: Purge stale ccache snapshots
         id: cache-cc-purge
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-cc-save.outcome == 'success'
+        if: always() && !cancelled() && steps.cache-cc-save.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1467,7 +1461,7 @@ jobs:
       # 显式排除本轮 key，清理失败只告警不阻塞，两个 executor 交替写入也能收敛。
       - name: Purge stale SDK hostpkg snapshots
         id: cache-hostpkg-purge
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-sdk-hostpkg-save.outcome == 'success'
+        if: always() && !cancelled() && steps.cache-sdk-hostpkg-save.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1505,7 +1499,7 @@ jobs:
             echo "ℹ️ 无旧 SDK hostpkg 快照 (保留最新 1 份)"
           fi
 
-      # no-cache 不保存任何 Actions Cache；其余策略按各自策略恢复、保存并清理。
+      # 缓存保存与清理不再按策略过滤: smart 与 clean_cache 均维护快照。
       # 每个 namespace 的写入方都负责把自己那一份收敛到保留上限，避免依赖
       # 平台驱逐这种不可控的兜底。
 
@@ -2272,32 +2266,30 @@ jobs:
           note() {
             printf '%s\n' "$1" >> "$ANNOTATIONS_FILE"
           }
-          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
-          if [ "$CACHE_STRATEGY" != "no-cache" ]; then
-            if [ "${{ steps.cache-tc-restore.outcome || 'skipped' }}" = "failure" ]; then
-              note '- 工具链缓存恢复失败，已继续构建。'
-            fi
-            if [ "${{ steps.cache-cc.outcome || 'skipped' }}" = "failure" ]; then
-              note '- ccache 快照恢复失败，已继续构建。'
-            fi
-            if [ "${{ steps.cache-tc-save.outcome || 'skipped' }}" = "failure" ]; then
-              note '- 工具链缓存保存失败，本次固件产物仍可用。'
-            fi
-            if [ "${{ steps.cache-cc-save.outcome || 'skipped' }}" = "failure" ]; then
-              note '- ccache 快照保存失败，本次固件产物仍可用。'
-            fi
-            if [ "${{ steps.cache-sdk-hostpkg-save.outcome || 'skipped' }}" = "failure" ]; then
-              note '- SDK host/tool 快照保存失败，本次固件产物仍可用。'
-            fi
-            if [ "${{ steps.cache-tc-purge.outcome || 'skipped' }}" = "failure" ]; then
-              note '- 工具链缓存清理步骤失败，旧快照已保留。'
-            fi
-            if [ "${{ steps.cache-cc-purge.outcome || 'skipped' }}" = "failure" ]; then
-              note '- ccache 快照清理步骤失败，旧快照已保留。'
-            fi
-            if [ "${{ steps.cache-hostpkg-purge.outcome || 'skipped' }}" = "failure" ]; then
-              note '- SDK hostpkg 快照清理步骤失败，旧快照已保留。'
-            fi
+          # 缓存注记: smart 与 clean_cache 下 restore/save/purge 均有活动, 无条件收集
+          if [ "${{ steps.cache-tc-restore.outcome || 'skipped' }}" = "failure" ]; then
+            note '- 工具链缓存恢复失败，已继续构建。'
+          fi
+          if [ "${{ steps.cache-cc.outcome || 'skipped' }}" = "failure" ]; then
+            note '- ccache 快照恢复失败，已继续构建。'
+          fi
+          if [ "${{ steps.cache-tc-save.outcome || 'skipped' }}" = "failure" ]; then
+            note '- 工具链缓存保存失败，本次固件产物仍可用。'
+          fi
+          if [ "${{ steps.cache-cc-save.outcome || 'skipped' }}" = "failure" ]; then
+            note '- ccache 快照保存失败，本次固件产物仍可用。'
+          fi
+          if [ "${{ steps.cache-sdk-hostpkg-save.outcome || 'skipped' }}" = "failure" ]; then
+            note '- SDK host/tool 快照保存失败，本次固件产物仍可用。'
+          fi
+          if [ "${{ steps.cache-tc-purge.outcome || 'skipped' }}" = "failure" ]; then
+            note '- 工具链缓存清理步骤失败，旧快照已保留。'
+          fi
+          if [ "${{ steps.cache-cc-purge.outcome || 'skipped' }}" = "failure" ]; then
+            note '- ccache 快照清理步骤失败，旧快照已保留。'
+          fi
+          if [ "${{ steps.cache-hostpkg-purge.outcome || 'skipped' }}" = "failure" ]; then
+            note '- SDK hostpkg 快照清理步骤失败，旧快照已保留。'
           fi
           if [ "${{ steps.build.outputs.ccache_wrapper_valid || 'false' }}" != "true" ] && [ "${{ steps.build.outcome || 'skipped' }}" = "success" ]; then
             note '- ccache 包装器校验未通过，未保存 full ccache 快照。'

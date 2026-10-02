@@ -49,9 +49,23 @@ DEFAULT_WORKFLOWS = [
 # 旧 lock 逐包指纹机制的标识符: 该机制已于 2026-09-26 重构为 tree SHA 真值锁,
 # 这些 token 重新出现意味着回退或半截子改造。
 RESIDUAL_TOKENS = {
-    "firmware-build-unified.yml": ["LAST_PKG_MAP", "PKG_COMMITS_JSON", "packages.lock.json 无"],
-    "compile-firmware.yml": ["PACKAGE_COMMITS_JSON", "PKG_LOCK_FILE"],
-    "compile-packages.yml": ["PACKAGE_COMMITS", "package_commits"],
+    "firmware-build-unified.yml": [
+        "LAST_PKG_MAP", "PKG_COMMITS_JSON", "packages.lock.json 无",
+        # 2026-10-02 dispatch 输入裁剪: cache_strategy 5 值收敛为 clean_cache 布尔,
+        # sdk-config 为零消费者死选项, no-cache (不持久化) 模式移除。
+        "cache_strategy", "CACHE_STRATEGY", "clean-toolchain", "clean-ccache",
+        "clean-all", "no-cache", "sdk-config",
+    ],
+    "compile-firmware.yml": [
+        "PACKAGE_COMMITS_JSON", "PKG_LOCK_FILE",
+        "cache_strategy", "CACHE_STRATEGY", "clean-toolchain", "clean-ccache",
+        "clean-all", "no-cache",
+    ],
+    "compile-packages.yml": [
+        "PACKAGE_COMMITS", "package_commits",
+        "cache_strategy", "CACHE_STRATEGY", "clean-toolchain", "clean-ccache",
+        "clean-all", "no-cache",
+    ],
 }
 
 

@@ -40,7 +40,7 @@ on:
       packages_feed_name:        { required: false, type: string, default: 'solarflows' }
       # ── 全局上下文 ──
       version:                   { required: true, type: string }
-      cache_strategy:            { required: false, type: string, default: 'smart' }
+      clean_cache:               { required: false, type: boolean, default: false }
       # 跳过编译后的 custom-feed 追平重编 (与 unified 的 skip_upstream 语义对齐)
       skip_feed_catchup:        { required: false, type: boolean, default: false }
     secrets:
@@ -177,7 +177,7 @@ jobs:
       # ───────── ccache 恢复（与 compile-firmware 完全共享同一 namespace）─────────
       - name: Restore ccache
         id: cache-cc-restore
-        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-ccache'
+        if: inputs.clean_cache != true
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
@@ -190,7 +190,7 @@ jobs:
 
       - name: Restore SDK hostpkg cache
         id: cache-hostpkg-restore
-        if: inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
+        if: inputs.clean_cache != true
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
@@ -210,7 +210,7 @@ jobs:
         id: cache-sdk-toolchain-fallback
         # Use the full cache only when the target-specific SDK snapshot was not
         # restored exactly. The path list remains identical to the full producer.
-        if: steps.cache-hostpkg-restore.outputs.cache-hit != 'true' && inputs.cache_strategy != 'no-cache' && inputs.cache_strategy != 'clean-all' && inputs.cache_strategy != 'clean-toolchain'
+        if: steps.cache-hostpkg-restore.outputs.cache-hit != 'true' && inputs.clean_cache != true
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
@@ -783,9 +783,9 @@ jobs:
       # rustc/go/node 等 host 工具经 SDK 自举安装到 staging_dir/hostpkg、
       # staging_dir/target-*/host, GOCACHE 在 tmp/go-build, crate 在 dl/。
       # key 使用 target + run_id，利用 Actions Cache 不可覆盖的语义发布滚动快照；
-      # selected SDK 的 source_sha 仍在 SDK/IB 配对校验中使用；失败或 no-cache 不保存。
+      # selected SDK 的 source_sha 仍在 SDK/IB 配对校验中使用；失败不保存。
       - name: Save SDK hostpkg cache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success' && steps.feed-rebuild.outcome != 'failure'
+        if: always() && !cancelled() && steps.compile.outcome == 'success' && steps.feed-rebuild.outcome != 'failure'
         id: cache-hostpkg-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -800,7 +800,7 @@ jobs:
 
       # ccache 共享：SDK 增量编译后直接写回全量共享的 immwrt-v2-ccache-*。
       - name: Save ccache
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_wrapper_valid == 'true' && steps.feed-rebuild.outcome != 'failure'
+        if: always() && !cancelled() && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_wrapper_valid == 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-cc-save
         continue-on-error: true
         uses: actions/cache/save@v5
@@ -813,7 +813,7 @@ jobs:
       # 与全量 immwrt-v2-toolchain-* / immwrt-v2-ccache-* 前缀完全隔离。
       - name: Purge stale SDK hostpkg snapshots
         id: hostpkg-purge
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-hostpkg-save.outcome == 'success'
+        if: always() && !cancelled() && steps.cache-hostpkg-save.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -863,7 +863,7 @@ jobs:
 
       - name: Purge stale ccache snapshots
         id: cache-cc-purge
-        if: always() && !cancelled() && inputs.cache_strategy != 'no-cache' && steps.cache-cc-save.outcome == 'success'
+        if: always() && !cancelled() && steps.cache-cc-save.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
@@ -1687,29 +1687,27 @@ jobs:
           note() {
             printf '%s\n' "$1" >> "$ANNOTATIONS_FILE"
           }
-          CACHE_STRATEGY="${{ inputs.cache_strategy }}"
-          if [ "$CACHE_STRATEGY" != "no-cache" ]; then
-            if [ "${{ steps.cache-cc-restore.outcome || 'skipped' }}" = "failure" ]; then
-              note '- ccache 快照恢复失败，已继续构建。'
-            fi
-            if [ "${{ steps.cache-hostpkg-restore.outcome || 'skipped' }}" = "failure" ]; then
-              note '- SDK host/tool 快照恢复失败，已继续构建。'
-            fi
-            if [ "${{ steps.cache-sdk-toolchain-fallback.outcome || 'skipped' }}" = "failure" ]; then
-              note '- full toolchain fallback 恢复失败，已继续构建。'
-            fi
-            if [ "${{ steps.cache-hostpkg-save.outcome || 'skipped' }}" = "failure" ]; then
-              note '- SDK host/tool 快照保存失败，本次 SDK/IB 产物仍可用。'
-            fi
-            if [ "${{ steps.cache-cc-save.outcome || 'skipped' }}" = "failure" ]; then
-              note '- ccache 快照保存失败，本次 SDK/IB 产物仍可用。'
-            fi
-            if [ "${{ steps.hostpkg-purge.outcome || 'skipped' }}" = "failure" ]; then
-              note '- SDK host/tool 快照清理步骤失败，旧快照已保留。'
-            fi
-            if [ "${{ steps.cache-cc-purge.outcome || 'skipped' }}" = "failure" ]; then
-              note '- ccache 清理步骤失败，旧快照已保留。'
-            fi
+          # 缓存注记: smart 与 clean_cache 下 restore/save/purge 均有活动, 无条件收集
+          if [ "${{ steps.cache-cc-restore.outcome || 'skipped' }}" = "failure" ]; then
+            note '- ccache 快照恢复失败，已继续构建。'
+          fi
+          if [ "${{ steps.cache-hostpkg-restore.outcome || 'skipped' }}" = "failure" ]; then
+            note '- SDK host/tool 快照恢复失败，已继续构建。'
+          fi
+          if [ "${{ steps.cache-sdk-toolchain-fallback.outcome || 'skipped' }}" = "failure" ]; then
+            note '- full toolchain fallback 恢复失败，已继续构建。'
+          fi
+          if [ "${{ steps.cache-hostpkg-save.outcome || 'skipped' }}" = "failure" ]; then
+            note '- SDK host/tool 快照保存失败，本次 SDK/IB 产物仍可用。'
+          fi
+          if [ "${{ steps.cache-cc-save.outcome || 'skipped' }}" = "failure" ]; then
+            note '- ccache 快照保存失败，本次 SDK/IB 产物仍可用。'
+          fi
+          if [ "${{ steps.hostpkg-purge.outcome || 'skipped' }}" = "failure" ]; then
+            note '- SDK host/tool 快照清理步骤失败，旧快照已保留。'
+          fi
+          if [ "${{ steps.cache-cc-purge.outcome || 'skipped' }}" = "failure" ]; then
+            note '- ccache 清理步骤失败，旧快照已保留。'
           fi
           if [ "${{ steps.compile.outputs.ccache_enabled || 'false' }}" = "true" ] && [ "${{ steps.compile.outputs.ccache_wrapper_valid || 'false' }}" != "true" ]; then
             note '- SDK ccache 包装器校验未通过，未保存 ccache 快照。'

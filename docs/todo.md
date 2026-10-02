@@ -21,7 +21,7 @@
 ## A. 缓存治理
 
 | ID | P | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | C1 | P2 | 工具链快照命中即跳过重复 save | 🟨 | `compile-firmware.yml` `Check existing toolchain snapshot` | 修复前每轮固定报 `Unable to reserve cache`（内容寻址 key 不可覆盖，与配额无关） |
 | C2 | P2 | 全量执行器收敛自己写入的 sdk-hostpkg 种子快照 | 🟨 | `compile-firmware.yml` `Purge stale SDK hostpkg snapshots` | 修复前该 namespace 只写不清理，每轮净增 0.5~1.7GB/target |
 | C3 | P2 | 三个命名空间均为"每 target 最新 1 份" | ✅ | 两个 executor 各自的 purge 步骤 | 锚定正则 + 显式排除当前 key |
@@ -36,7 +36,7 @@
 ## B. Release 与产物
 
 | ID | P | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | R1 | P1 | 固件目录排除 `*-sdk-*` / `*-imagebuilder-*` | ✅ | commit `ae76ca7` | 修复前 SDK/IB 混入固件 Release，致上传 43 分钟后 502 |
 | R2 | P1 | Release 资产上传逐文件重试（3 次退避） | ✅ | commit `ae76ca7` | 覆盖固件、Passwall、SDK/IB、index.json |
 | R3 | P1 | 空固件目录拒绝创建 Release | ✅ | `compile-firmware.yml` `Publish firmware release` | |
@@ -45,7 +45,7 @@
 ## C. 构建正确性
 
 | ID | P | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | B1 | P1 | 工具链缓存命中时不得显式调子目录目标 | ✅ | commit `273fc79` | 显式 `make tools/compile toolchain/compile` 绕过 stamp → 重编 40+ 分钟 |
 | B2 | P1 | `dl/` 残损清理限定 `-maxdepth 1` | ✅ | commit `273fc79` | 递归破坏 `dl/go-mod-cache`、`dl/cargo` |
 | B3 | P1 | defconfig 后刷新工具链 stamp 时间戳 | ✅ | commit `530bb50` | 否则 stamp 早于 `.config`，缓存命中失效 |
@@ -54,11 +54,12 @@
 | B6 | P1 | 版本号解析 4 级纯字符串顺序 + make 表达式防御 | ✅ | `version-extraction.instructions.md` | exit 127 根因 |
 | C7 | P1 | 编译后 custom-feed 追平重编（全量 + SDK 增量） | 🟨 | `compile-firmware.yml` / `compile-packages.yml` `🔄 Rebuild on feed update`（`validate-workflows.py` 全过：YAML + 97 bash 块 + 指纹回归）；待真实 run 验证 | 编译成功后触发 custom-feed 更新本 target 分支并等待完成，`ls-remote` 对比 HEAD 前进则 fetch+reset 拉新 feed 原地增量重编一轮（最多 1 轮，再更新留待下次构建），防构建周期内 feed 更新没跟上。产物只保留最终轮（打包/发布/缓存保存均在重编之后）。SDK 路径按 feed 目录 tree SHA 对比变更包 clean 强制失效（U12 教训：同版本内容变更不可依赖 stamp）+ 硬链接 feed 重新复制；全量路径依赖 `STAMP_PREPARED` 内嵌 `find_md5` 哈希自动拾取（已对照 `solarflows/immortalwrt-mt798x@test` `include/package.mk` 验证）。追平触发/等待/拉取失败仅告警跳过（首轮产物仍自洽）；重编失败硬失败（bin/ 已混入新旧产物）且缓存保存以 `outcome != 'failure'` 联动跳过。`skip_upstream=true` 时经 `skip_feed_catchup` 接线跳过 |
 | C8 | P2 | mt798x 默认禁用（`disabled: true`）+ 清理其 Actions Cache | 🟨 | `targets.json` mt798x 条目、`firmware-build-unified.yml` 两处 jq 过滤（`Resolve packages updater targets` / `Load targets & check changes`）；cache 清理见本地终端执行记录 | 上游 `solarflows/immortalwrt-mt798x@test` 停止维护，设备已转普通 AP/路由，固件功能稳定。`all`/`both`/周日 cron 不再构建 mt798x、不再触发其 feed 更新；显式 `target=mt798x` 保留手动构建能力。seed/overlay/补丁/custom-feed 分支全保留，`IMMWRT_BUILD_STATE` 旧条目无害保留 |
+| C9 | P2 | dispatch 输入裁剪：`cache_strategy` 5 选项 → `clean_cache` 布尔；删死选项 `sdk-config` 与 `no-cache` 模式 | 🟨 | 三个 workflow + `validate-workflows.py` 残留 token 检查（本地全绿）；待真实 run 验证 smart 与 clean_cache 两路径 | `clean_cache=true` = 旧 `clean-all` 语义（跳过全部 restore、toolchain hash 加 force 前缀、plan 强制全量路由）；`clean-toolchain`/`clean-ccache` 中间态与 `no-cache` 不持久化模式移除（历史 run 全为默认值，从未单独使用）；`sdk-config` grep 全仓库零消费者纯删；`sdk-packages` 保留（跳过 upstream-sync 等待等 3 处真实消费）。save/purge 不再按策略过滤（smart 与 clean_cache 均维护快照） |
 
 ## D. 上游同步与 Feed
 
 | ID | P | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | U1 | P1 | `upstream-sync` 定向 fetch + `--force-with-lease` + askpass | ✅ | `upstream-sync.yml` | |
 | U2 | P1 | `custom-feed` 提交前 `diff --cached --check` | ✅ | `custom-feed.yml` | trailing whitespace 仅 warning |
 | U3 | P1 | `checkout_partial_code` 缺失路径硬失败 | 🚫 | `openwrt-packages/core` | 刻意为：硬失败才能让上游删包立刻暴露，不要改成告警 |
@@ -75,14 +76,14 @@
 ## E. 文档体系
 
 | ID | P | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | D1 | P2 | `handoff.md`（一次性交接文档） | 🚫 | 2026-09-19 核对后删除 | 不再重建：状态进本台账、结构进 `ci-flow.md`、故障进 pitfalls |
 | D2 | P2 | 全局规则只写在 `AGENTS.md` | ✅ | 2026-09-19 实测自定义 agent 继承 AGENTS.md | 不要复制进 `.github/agents/*` 或 instructions |
 
 ## F. 固件功能配置（seeds）
 
 | ID | P | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | F1 | P2 | ipq60xx / ipq807x 启用 SONiC fullcone | 🟨 | `ipq60xx/04-extras.seed`、`ipq807x/04-extras.seed`（后端 + LuCI）、两处 `02-pkgs.seed` 加中文包 | 必须显式 `=y`：IB 路径的 PACKAGES 只从 seed 提取，Kconfig `default` 不生效。待真实构建验证 |
 | F2 | P2 | mt798x 无法使用 SONiC fullcone | 🚫 | 仓库 `solarflows/immortalwrt-mt798x@test` 为 `KERNEL_PATCHVER:=5.4`，无 `hack-6.18`；包带 `@LINUX_6_18` | 已有旧版 `fullconenat`/`kmod-ipt-fullconenat`（fw3），继续保留；不要提议给 mt798x 加 sonic |
 | F3 | P1 | LuCI feed 耦合风险（sonic 补丁桥） | ❓ | `fullconenat-sonic/patches/apply-luci-feed.sh` 在补丁上下文不匹配时 `exit 1` | 见待决 4 |
@@ -92,7 +93,7 @@
 设计文档：`docs/pkg-incremental-build.md`（P1/P2/P3 全貌与数据流）
 
 | ID | P | 项目 | 状态 | 证据 | 备注 |
-|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|
 | G1 | P2 | 移除 sdk-cache-lookup 冗余预查步骤 | ✅ | commit `4c0d45c4`，run `35861454202` | 修复前每次 run 先预查 SDK 缓存再被正式 restore 覆盖 |
 | G2 | P2 | SDK 编译前屏蔽 kmod 包（防内核全模块重编） | 🟨 | commit `455421e0`，`compile-packages.yml` `🔒 Freeze kernel modules` | 修复前 SDK `.config` 保留 `CONFIG_PACKAGE_kmod-*=y`，任一 make 触发 stale-stamp 内核重编摧毁预编译 kmod ipk（ipq807x 根因，见 pitfalls） |
 | G3 | P2 | 包级指纹变更检测（plan 侧） | 🟨 | `firmware-build-unified.yml` `Load targets & check changes`（tree SHA 版，2026-09-26 重构） | custom feed 顶层目录 tree SHA 对比（内容寻址，上游无关提交不再触碰指纹）；空集撤销 feed 变更信号。前史：`1dad4519` lock 逐包 commit 方案 → run `36130960021` 键错配、run `36211341719` 锚上游 HEAD 误报（tailscale 被 rsync/banip 翻转），待构建验证 |

@@ -26,10 +26,10 @@ Status rules live in `AGENTS.md` § Project Status (always loaded). Knowledge ro
 
 ### libffi（mt798x）
 
-libffi 在特定缓存策略下反复失败，报 `configure: error: cannot run C compiled programs`。mt798x feed（`solarflows/packages;hanwckf`）中的 libffi 包对 `TARGET`/`HOST` 环境变量极度敏感。
+libffi 在特定缓存配置下反复失败，报 `configure: error: cannot run C compiled programs`。mt798x feed（`solarflows/packages;hanwckf`）中的 libffi 包对 `TARGET`/`HOST` 环境变量极度敏感。
 
 缓解措施：
-- 使用 `clean-toolchain` 或 `clean-all` 策略时清理 toolchain stamp
+- 使用 `clean_cache=true`（刷新缓存）时清理 toolchain stamp
 - 确保 workflow 中不导出禁用变量
 - 用 `make -j1 V=sc` 重试以获得完整诊断输出
 
