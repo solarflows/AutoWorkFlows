@@ -143,7 +143,13 @@ CONFIG_PACKAGE_kmod=y
 # ── LED 调光与点亮模式 (LED Triggers & PWM) ──
 # 注: 内核 6.18 起 timer/heartbeat/netdev/default-on 触发器已内建、leds-pwm 模块
 # 路径已变, 这 5 个 kmod 无产出 (全量 defconfig 静默丢弃, run 36211341719 IB 亦报
-# no such package); 保留的 6 个为全量构建实际产出 (见 V260925 config.buildinfo)。
+# no such package); 保留的 7 个为全量构建实际产出 (见 V260925 config.buildinfo)。
+# kmod-leds-pwm (run 36883184563): fork 源码 qualcommax 的 DEFAULT_PACKAGES 硬
+# 编码请求该包, 但 ipq807x 的 config-default 无 CONFIG_PWM → 包永不产出; IB 的
+# world 默认包清单字面保留请求 → 组装报 "required by: world[kmod-leds-pwm]"。
+# 显式排除: EXCLUDES 管道转 -kmod-leds-pwm, IB 组装时连同默认清单同名请求一并
+# 剔除 (与全量固件一致); 全量构建不受影响 (kconfig 选项不可见, 此行惰性)。
+# CONFIG_PACKAGE_kmod-leds-pwm is not set
 CONFIG_PACKAGE_kmod-ledtrig-activity=y
 CONFIG_PACKAGE_kmod-ledtrig-oneshot=y
 CONFIG_PACKAGE_kmod-ledtrig-transient=y
