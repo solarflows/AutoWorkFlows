@@ -646,7 +646,12 @@ jobs:
               if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
                 echo "ℹ️ 远端已存在同名 tag $TAG，跳过保存"
               else
-                SAME_TAG=$(git ls-remote origin "refs/tags/*" 2>/dev/null | awk -v want="$CURRENT_REMOTE_SHA" '$1 == want { tag=$2; sub("^refs/tags/", "", tag); print tag; exit }')
+                # SIGPIPE 防护：awk 禁止提前 exit。ls-remote 是流式写端，读端提前退出后
+                # git 再写入已关闭的管道会被 SIGPIPE 杀死（退出码 141），在 set -euo pipefail
+                # 下直接终止整个步骤（run 37505535269 实发：旧 HEAD 的既有 tag 排在 134 行
+                # 输出的中段，awk 命中即退时 git 还有 28 行未写完）。tag 列表仅数 KB，读完
+                # 整个流零成本；found 标志保证只打印首个匹配（同一 SHA 可能有多个 tag）。
+                SAME_TAG=$(git ls-remote origin "refs/tags/*" 2>/dev/null | awk -v want="$CURRENT_REMOTE_SHA" '$1 == want && !found { tag=$2; sub("^refs/tags/", "", tag); print tag; found=1 }')
                 if [ -n "$SAME_TAG" ]; then
                   echo "🟢 远端已有指向相同内容的 tag（$SAME_TAG），跳过保存"
                 else
