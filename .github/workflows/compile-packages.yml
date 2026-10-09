@@ -13,8 +13,9 @@ on:
       matrix_packages_branch:    { required: true, type: string }
       standard_packages_repo:    { required: false, type: string, default: 'solarflows/packages' }
       standard_packages_branch:  { required: false, type: string, default: 'master' }
-      matrix_passwall_repo:      { required: true, type: string }
-      matrix_passwall_tag:        { required: true, type: string }
+      # ── passwall release 目标 (可选): 空值 = 不发布 Release, 包产物仅上传 CI artifact ──
+      matrix_passwall_repo:      { required: false, type: string, default: '' }
+      matrix_passwall_tag:        { required: false, type: string, default: '' }
       matrix_release_repo:        { required: false, type: string, default: '' }
       matrix_firmware_release_tag_prefix: { required: false, type: string, default: '' }
       matrix_build_sdk_ib:       { required: false, type: boolean, default: false }
@@ -79,6 +80,73 @@ jobs:
       # 配置根目录 (seed/sdk.config 来源): 默认 caller 仓库, 可用 config_repo 覆盖
       CONFIG_ROOT: ${{ github.workspace }}/CallerConfig/${{ inputs.config_path }}
     steps:
+      # ── 前置参数校验 (fail-fast): 纯参数校验不依赖文件系统, 先于所有 checkout。
+      #    拦住 required 穿透的空字符串 / 格式非法 / repo 不可达 (拼错或无权限),
+      #    避免构建数小时后发布步骤才失败。
+      - name: Validate inputs
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          ERRORS=()
+          fail() { ERRORS+=("$1"); }
+          validate_repo() {
+            local value="$1" name="$2"
+            [ -n "$value" ] || return 0
+            case "$value" in
+              */*) ;;
+              *) fail "${name} 格式无效: '${value}' (应为 owner/repo)" ;;
+            esac
+          }
+          validate_name() {
+            local value="$1" name="$2"
+            [ -n "$value" ] || return 0
+            case "$value" in
+              ''|*[!A-Za-z0-9._/-]*) fail "${name} 含非法字符: '${value}'" ;;
+            esac
+          }
+
+          # ── 非空校验 (required 穿透空字符串的兜底) ──
+          [ -n "${{ inputs.matrix_target }}" ] || fail "matrix_target 为空"
+          [ -n "${{ inputs.matrix_packages_branch }}" ] || fail "matrix_packages_branch 为空"
+          [ -n "${{ inputs.version }}" ] || fail "version 为空"
+          # SDK 增量路径必需 (resolve 步骤从该 release 下载 SDK), 保持 required: true
+          [ -n "${{ inputs.matrix_artifacts_release_repo }}" ] || fail "matrix_artifacts_release_repo 为空 (SDK 增量路径必需)"
+          [ -n "${{ inputs.matrix_artifacts_release_tag }}" ] || fail "matrix_artifacts_release_tag 为空 (SDK 增量路径必需)"
+
+          # ── 格式校验 ──
+          validate_name "${{ inputs.matrix_target }}" "matrix_target"
+          validate_name "${{ inputs.matrix_packages_branch }}" "matrix_packages_branch"
+          validate_repo "${{ inputs.matrix_release_repo }}" "matrix_release_repo"
+          validate_repo "${{ inputs.matrix_passwall_repo }}" "matrix_passwall_repo"
+          validate_repo "${{ inputs.matrix_artifacts_release_repo }}" "matrix_artifacts_release_repo"
+          validate_name "${{ inputs.matrix_passwall_tag }}" "matrix_passwall_tag"
+          validate_name "${{ inputs.matrix_artifacts_release_tag }}" "matrix_artifacts_release_tag"
+          validate_name "${{ inputs.matrix_firmware_release_tag_prefix }}" "matrix_firmware_release_tag_prefix"
+          case "${{ inputs.config_path }}" in
+            /*|*..*) fail "config_path 非法: '${{ inputs.config_path }}' (禁止绝对路径与 ..)" ;;
+          esac
+
+          # ── 可达性探测 (repo 类参数非空时; 拦住拼错/无权限, 防几小时后发布才失败) ──
+          for repo_entry in \
+            "matrix_release_repo:${{ inputs.matrix_release_repo }}" \
+            "matrix_passwall_repo:${{ inputs.matrix_passwall_repo }}" \
+            "matrix_artifacts_release_repo:${{ inputs.matrix_artifacts_release_repo }}"; do
+            name="${repo_entry%%:*}"
+            repo="${repo_entry#*:}"
+            [ -n "$repo" ] || continue
+            if ! gh repo view "$repo" --json name >/dev/null 2>&1; then
+              fail "${name} 不可达 (不存在或 ACCESS_TOKEN 无读权限): ${repo}"
+            fi
+          done
+
+          if [ "${#ERRORS[@]}" -gt 0 ]; then
+            for e in "${ERRORS[@]}"; do echo "::error::${e}"; done
+            echo "::error::参数校验失败 (${#ERRORS[@]} 项), 构建未开始即终止"
+            exit 1
+          fi
+          echo "✅ 参数校验通过"
+
       - name: Checkout defaults repo
         uses: actions/checkout@v6
         with:
@@ -1599,7 +1667,7 @@ jobs:
           done < <(find ib/release/firmware -maxdepth 1 -type f | LC_ALL=C sort)
 
       - name: Publish SDK packages
-        if: steps.artifacts.outputs.package_count > 0
+        if: steps.artifacts.outputs.package_count > 0 && inputs.matrix_passwall_repo != '' && inputs.matrix_passwall_tag != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |

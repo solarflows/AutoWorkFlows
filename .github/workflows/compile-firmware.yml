@@ -15,12 +15,15 @@ on:
       matrix_packages_branch: { required: true, type: string }
       standard_packages_repo: { required: false, type: string, default: 'solarflows/packages' }
       standard_packages_branch: { required: false, type: string, default: 'master' }
-      matrix_release_repo:  { required: true, type: string }
-      matrix_passwall_repo: { required: true, type: string }
-      matrix_passwall_tag:  { required: true, type: string }
+      # ── release 目标 (可选): 空值 = 不发布 Release, 产物仅上传 CI artifact (retention 7 天)。
+      #    不指定 artifacts release repo 时 sdk-index.json/ib-index.json 不维护,
+      #    后续 compile-packages SDK 增量路径不可用 (需先跑 full 发布 SDK)。
+      matrix_release_repo:  { required: false, type: string, default: '' }
+      matrix_passwall_repo: { required: false, type: string, default: '' }
+      matrix_passwall_tag:  { required: false, type: string, default: '' }
       matrix_firmware_release_tag_prefix: { required: false, type: string, default: '' }
-      matrix_artifacts_release_repo: { required: true, type: string }
-      matrix_artifacts_release_tag:  { required: true, type: string }
+      matrix_artifacts_release_repo: { required: false, type: string, default: '' }
+      matrix_artifacts_release_tag:  { required: false, type: string, default: '' }
       matrix_artifacts_keep_versions: { required: false, type: number, default: 7 }
       matrix_config_sha:    { required: false, type: string, default: '' }
       # ── 默认值（workflow 内置;调用方不传则用这里,见 firmware-build-unified env）──
@@ -67,6 +70,84 @@ jobs:
       # 配置根目录 (seed/sdk.config 来源): 默认 caller 仓库, 可用 config_repo 覆盖
       CONFIG_ROOT: ${{ github.workspace }}/CallerConfig/${{ inputs.config_path }}
     steps:
+      # ── 前置参数校验 (fail-fast): 纯参数校验不依赖文件系统, 先于所有 checkout。
+      #    拦住 required 穿透的空字符串 / 格式非法 / repo 不可达 (拼错或无权限),
+      #    避免构建数小时后发布步骤才失败。
+      - name: Validate inputs
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          ERRORS=()
+          fail() { ERRORS+=("$1"); }
+          validate_repo() {
+            local value="$1" name="$2"
+            [ -n "$value" ] || return 0
+            case "$value" in
+              */*) ;;
+              *) fail "${name} 格式无效: '${value}' (应为 owner/repo)" ;;
+            esac
+          }
+          validate_name() {
+            local value="$1" name="$2"
+            [ -n "$value" ] || return 0
+            case "$value" in
+              ''|*[!A-Za-z0-9._/-]*) fail "${name} 含非法字符: '${value}'" ;;
+            esac
+          }
+
+          # ── 非空校验 (required 穿透空字符串的兜底) ──
+          [ -n "${{ inputs.matrix_target }}" ] || fail "matrix_target 为空"
+          [ -n "${{ inputs.matrix_repo }}" ] || fail "matrix_repo 为空"
+          [ -n "${{ inputs.matrix_ref }}" ] || fail "matrix_ref 为空"
+          [ -n "${{ inputs.matrix_packages_branch }}" ] || fail "matrix_packages_branch 为空"
+          [ -n "${{ inputs.version }}" ] || fail "version 为空"
+
+          # ── 格式校验 ──
+          validate_name "${{ inputs.matrix_target }}" "matrix_target"
+          validate_repo "${{ inputs.matrix_repo }}" "matrix_repo"
+          validate_name "${{ inputs.matrix_ref }}" "matrix_ref"
+          validate_name "${{ inputs.matrix_packages_branch }}" "matrix_packages_branch"
+          validate_repo "${{ inputs.matrix_release_repo }}" "matrix_release_repo"
+          validate_repo "${{ inputs.matrix_passwall_repo }}" "matrix_passwall_repo"
+          validate_repo "${{ inputs.matrix_artifacts_release_repo }}" "matrix_artifacts_release_repo"
+          validate_name "${{ inputs.matrix_passwall_tag }}" "matrix_passwall_tag"
+          validate_name "${{ inputs.matrix_artifacts_release_tag }}" "matrix_artifacts_release_tag"
+          validate_name "${{ inputs.matrix_firmware_release_tag_prefix }}" "matrix_firmware_release_tag_prefix"
+          case "${{ inputs.config_path }}" in
+            /*|*..*) fail "config_path 非法: '${{ inputs.config_path }}' (禁止绝对路径与 ..)" ;;
+          esac
+          KEEP_V="${{ inputs.matrix_artifacts_keep_versions }}"
+          case "$KEEP_V" in
+            ''|*[!0-9]*) fail "matrix_artifacts_keep_versions 非数字: '${KEEP_V}'" ;;
+            *)
+              if [ "$KEEP_V" -lt 1 ] || [ "$KEEP_V" -gt 30 ]; then
+                fail "matrix_artifacts_keep_versions 超出范围 [1,30]: ${KEEP_V}"
+              fi
+              ;;
+          esac
+
+          # ── 可达性探测 (repo 类参数非空时; 拦住拼错/无权限, 防几小时后发布才失败) ──
+          for repo_entry in \
+            "matrix_repo:${{ inputs.matrix_repo }}" \
+            "matrix_release_repo:${{ inputs.matrix_release_repo }}" \
+            "matrix_passwall_repo:${{ inputs.matrix_passwall_repo }}" \
+            "matrix_artifacts_release_repo:${{ inputs.matrix_artifacts_release_repo }}"; do
+            name="${repo_entry%%:*}"
+            repo="${repo_entry#*:}"
+            [ -n "$repo" ] || continue
+            if ! gh repo view "$repo" --json name >/dev/null 2>&1; then
+              fail "${name} 不可达 (不存在或 ACCESS_TOKEN 无读权限): ${repo}"
+            fi
+          done
+
+          if [ "${#ERRORS[@]}" -gt 0 ]; then
+            for e in "${ERRORS[@]}"; do echo "::error::${e}"; done
+            echo "::error::参数校验失败 (${#ERRORS[@]} 项), 构建未开始即终止"
+            exit 1
+          fi
+          echo "✅ 参数校验通过"
+
       - name: Checkout defaults repo (AutoWorkflows)
         uses: actions/checkout@v6
         with:
@@ -1822,7 +1903,7 @@ jobs:
           retention-days: 7
 
       - name: Publish firmware release
-        if: success()
+        if: success() && inputs.matrix_release_repo != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -1875,7 +1956,7 @@ jobs:
           done < <(find "$FIRMWARE_DIR" -maxdepth 1 -type f | LC_ALL=C sort)
 
       - name: Publish Passwall packages
-        if: success()
+        if: success() && inputs.matrix_passwall_repo != '' && inputs.matrix_passwall_tag != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -2073,8 +2154,22 @@ jobs:
           fi
           echo '```'
 
+      # release 目标未指定 (matrix_artifacts_release_repo/tag 为空) 时 SDK/IB tarball
+      # 降级为 CI artifact (retention 7 天) 供手动取回; sdk-index.json/ib-index.json
+      # 不维护, compile-packages SDK 增量路径不可用。
+      - name: Upload SDK/IB artifact
+        if: success() && inputs.publish_sdk_ib == true && (steps.sdk_ib.outputs.sdk_primary != '' || steps.sdk_ib.outputs.ib_primary != '')
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.IMMWRT_TARGET }}-sdk-ib-tarballs
+          path: |
+            openwrt/release/sdk/*.tar.*
+            openwrt/release/ib/*.tar.*
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Upload SDK to release
-        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.sdk_primary != ''
+        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.sdk_primary != '' && inputs.matrix_artifacts_release_repo != '' && inputs.matrix_artifacts_release_tag != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -2186,7 +2281,7 @@ jobs:
           done <<< "$SDK_GROUP_LIST"
 
       - name: Upload IB to release
-        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.ib_primary != ''
+        if: success() && inputs.publish_sdk_ib == true && steps.sdk_ib.outputs.ib_primary != '' && inputs.matrix_artifacts_release_repo != '' && inputs.matrix_artifacts_release_tag != ''
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
