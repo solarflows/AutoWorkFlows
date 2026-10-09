@@ -187,6 +187,16 @@ jobs:
           echo "✅ 配置来源: ${CONFIG_REPO} @ ${CONFIG_REF} → ${SEED_DIR}"
           ls "$SEED_DIR"/*.seed | xargs -n1 basename | sed 's/^/  📄 /'
 
+          # ── CRLF 检测: Windows 换行会污染 Kconfig 值 (CONFIG_FOO=y\r 被当作
+          # 值的一部分), defconfig 不报错但行为异常; 检出即 dos2unix 转换
+          # (幂等) + warning 指明文件, 让 caller 在源头仓库修复 ──
+          # grep rc=1 (无 CRLF) 是预期状态; -I 排除二进制
+          CRLF_FILES=$(grep -rlI $'\r' "$SEED_DIR" --include='*.seed' --include='sdk.config' 2>/dev/null || true)
+          if [ -n "$CRLF_FILES" ]; then
+            echo "::warning::检测到 CRLF 换行, 已自动转换 (dos2unix): ${CRLF_FILES}"
+            printf '%s\n' "$CRLF_FILES" | xargs -r dos2unix
+          fi
+
       - name: Checkout Source Repo
         uses: actions/checkout@v6
         with:
@@ -317,17 +327,34 @@ jobs:
           '
 
           run_bounded "更新 apt 索引" 600 sudo -E apt-get update
-          run_bounded "安装 runner 基础依赖" 600 sudo -E apt-get -yqq install dos2unix libfuse-dev
 
-          INIT_SCRIPT="$RUNNER_TEMP/init_build_environment.sh"
-          run_bounded "下载 ImmortalWrt 环境初始化脚本" 120 \
-            curl -fsSL --connect-timeout 15 --max-time 120 \
-            https://build-scripts.immortalwrt.org/init_build_environment.sh \
-            -o "$INIT_SCRIPT"
-          test -s "$INIT_SCRIPT"
-
-          run_bounded "执行 ImmortalWrt 环境初始化" 2700 sudo bash "$INIT_SCRIPT"
-          echo "✅ 环境初始化脚本已返回，跳过 systemd reload 和 timedatectl"
+          # ── 声明式依赖安装 (替代 build-scripts.immortalwrt.org 外部脚本, 消除 SPOF) ──
+          # 包列表 = init_build_environment.sh noble 主列表 ∪ immortalwrt/docker
+          # Dockerfile.base 依赖; runner 已预装部分由 APT 状态机幂等跳过 (零网络零解压)。
+          # 刻意不做的 (外部脚本面向实体机, runner 上无意义或有风险):
+          #   apt full-upgrade / 测速换源 / 换 sources.list (runner 镜像每周滚动)
+          #   PPA 与外部源 (git/gh/node/go/clang 为 runner 预装, 版本等价或更新)
+          #   upx/padjffs2/po2lmo 外部二进制 (tools/upx 与 luci-base 构建期自举;
+          #    padjffs2 仅 jffs2 镜像需要, 本仓库 target 均为 squashfs)
+          run_bounded "安装 OpenWrt 编译依赖" 900 \
+            sudo -E apt-get -yqq --no-install-recommends install \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential bzip2 ccache clang-18 cmake cpio curl \
+            device-tree-compiler dos2unix ecj fakeroot fastjar file flex gawk \
+            g++-multilib gcc-multilib genisoimage gettext gnutls-dev gperf \
+            haveged help2man intltool irqbalance jq lib32gcc-s1 libc6-dev-i386 \
+            libclang-18-dev libdw-dev libelf-dev libfuse-dev libglib2.0-dev \
+            libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev \
+            libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld-18 \
+            locales llvm-18 lrzsz msmtp nano ninja-build p7zip p7zip-full \
+            patch pkgconf pv pwgen python3 python3-pip python3-cryptography \
+            python3-docutils python3-ply python3-pyelftools python3-requests \
+            qemu-utils quilt re2c rsync scons sharutils signify-openbsd \
+            squashfs-tools subversion swig texinfo uglifyjs unzip upx-ucl \
+            vim wget xmlto xxd zlib1g-dev zstd
+          # 32 位 host 汇编头 (init 脚本等价逻辑, 幂等)
+          [ -e /usr/include/asm ] || \
+            sudo ln -svf "/usr/include/$(gcc -dumpmachine)/asm" /usr/include/asm
 
       # ───────── 磁盘空间监控（第 2 阶段：环境准备后）─────────
       - name: 💽 Disk space · After env prep
@@ -1877,10 +1904,16 @@ jobs:
           else
             SIGN_LINE="**签名**: ❌ 未签名"
           fi
+          # 内核版本: .config 的 CONFIG_LINUX_x_y=y (defconfig 后必然存在;
+          # 缺失/无匹配时跳过该行, 不阻断 notes 生成)
+          KERNEL_VER=$(grep -oP '^CONFIG_LINUX_\K[0-9]+_[0-9]+(?==y$)' openwrt/.config 2>/dev/null | head -1 | tr '_' '.') || true
           {
             echo "## ${IMMWRT_TARGET} Build"
             echo ""
             echo "**源码**: [${{ inputs.matrix_ref }}](https://github.com/${{ inputs.matrix_repo }}) @ [${SHA_SHORT}](https://github.com/${{ inputs.matrix_repo }}/commit/${{ steps.clone_packages.outputs.sha_full }})"
+            if [ -n "$KERNEL_VER" ]; then
+              echo "**内核**: Linux ${KERNEL_VER}"
+            fi
             echo "**编译耗时**: ${{ steps.total_duration.outputs.duration_fmt }}"
             echo "${SIGN_LINE}"
             if [ -n "$FEEDS_MD_JSON" ]; then
@@ -1890,6 +1923,20 @@ jobs:
               echo "| Feed | 版本 |"
               echo "|------|------|"
               printf '%s\n' "$FEEDS_MD_JSON"
+            fi
+            if [ "$SIGN_MODE" = "usign" ] || [ "$SIGN_MODE" = "apk" ]; then
+              echo ""
+              echo "### 🔐 签名核验"
+              echo ""
+              echo "公钥随 Passwall Packages Release 发布 (\`solarflows-usign-public.pub\` / \`solarflows-apk-public.pem\`)。"
+              if [ "$SIGN_MODE" = "usign" ]; then
+                echo ""
+                echo "固件清单核验 (sha256sums 与 sha256sums.sig 同目录):"
+                echo ""
+                echo '```bash'
+                echo "usign -V -P solarflows-usign-public.pub -m sha256sums"
+                echo '```'
+              fi
             fi
             echo ""
             echo "---"
@@ -1975,6 +2022,14 @@ jobs:
             [ -f "$file" ] || continue
             upload_asset_retry "$RELEASE_TAG" "$RELEASE_REPO" "$file"
           done < <(find "$FIRMWARE_DIR" -maxdepth 1 -type f | LC_ALL=C sort)
+
+          # ── 构建元数据随 Release 永久留存 (CI artifact 仅 7 天过期) ──
+          # input_trees/feeds_sha/签名指纹等溯源字段见 build-info.json 本体
+          if [ -f build-info.json ]; then
+            upload_asset_retry "$RELEASE_TAG" "$RELEASE_REPO" build-info.json
+          else
+            echo "::warning::build-info.json 缺失, 跳过附加到 Release"
+          fi
 
       - name: Publish Passwall packages
         if: success() && inputs.matrix_passwall_repo != '' && inputs.matrix_passwall_tag != ''

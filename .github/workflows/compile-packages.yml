@@ -186,6 +186,16 @@ jobs:
           echo "✅ 配置来源: ${CONFIG_REPO} @ ${CONFIG_REF} → ${SEED_DIR}"
           ls "$SEED_DIR"/*.seed | xargs -n1 basename | sed 's/^/  📄 /'
 
+          # ── CRLF 检测: Windows 换行会污染 Kconfig 值 (CONFIG_FOO=y\r 被当作
+          # 值的一部分), defconfig 不报错但行为异常; 检出即 dos2unix 转换
+          # (幂等) + warning 指明文件, 让 caller 在源头仓库修复 ──
+          # grep rc=1 (无 CRLF) 是预期状态; -I 排除二进制
+          CRLF_FILES=$(grep -rlI $'\r' "$SEED_DIR" --include='*.seed' --include='sdk.config' 2>/dev/null || true)
+          if [ -n "$CRLF_FILES" ]; then
+            echo "::warning::检测到 CRLF 换行, 已自动转换 (dos2unix): ${CRLF_FILES}"
+            printf '%s\n' "$CRLF_FILES" | xargs -r dos2unix
+          fi
+
       - name: Checkout packages feed repo
         uses: actions/checkout@v6
         with:
@@ -1685,6 +1695,13 @@ jobs:
             [ -f "$file" ] || continue
             upload_asset_retry "$TAG" "$REPO" "$file"
           done < <(find ib/release/firmware -maxdepth 1 -type f | LC_ALL=C sort)
+
+          # ── 构建元数据随 Release 永久留存 (CI artifact 仅 7 天过期) ──
+          if [ -f build-info.json ]; then
+            upload_asset_retry "$TAG" "$REPO" build-info.json
+          else
+            echo "::warning::build-info.json 缺失, 跳过附加到 Release"
+          fi
 
       - name: Publish SDK packages
         if: steps.artifacts.outputs.package_count > 0 && inputs.matrix_passwall_repo != '' && inputs.matrix_passwall_tag != ''
