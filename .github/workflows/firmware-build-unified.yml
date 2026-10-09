@@ -88,7 +88,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository }}
-          ref: ${{ github.ref }}
+          # github.sha (run 触发 commit) 而非 github.ref (可变分支名): plan 等待
+          # upstream-sync 最长 1h+, 窗口内分支前进不得改变本 run 读到的配置;
+          # executor 侧 Checkout config source 用同一 github.sha 钉死一致。
+          ref: ${{ github.sha }}
           sparse-checkout: |
             openwrt-configs/immortalwrt
           path: AutoWorkFlows
@@ -1113,7 +1116,8 @@ jobs:
         include: ${{ fromJson(needs.plan.outputs.firmware_matrix_json) }}
     uses: ./.github/workflows/compile-firmware.yml
     with:
-      defaults_ref:               ${{ github.ref }}
+      # github.sha 钉死 AutoWorkFlows 基础设施 (脚本/targets.json) 到 run 触发 commit
+      defaults_ref:               ${{ github.sha }}
       matrix_target:             ${{ matrix.target }}
       matrix_repo:               ${{ matrix.repo }}
       matrix_ref:                ${{ matrix.ref }}
@@ -1157,7 +1161,8 @@ jobs:
         include: ${{ fromJson(needs.plan.outputs.sdk_matrix_json) }}
     uses: ./.github/workflows/compile-packages.yml
     with:
-      defaults_ref:               ${{ github.ref }}
+      # github.sha 钉死 AutoWorkFlows 基础设施 (脚本/targets.json) 到 run 触发 commit
+      defaults_ref:               ${{ github.sha }}
       matrix_target:             ${{ matrix.target }}
       matrix_packages_branch:    ${{ matrix.packages_branch }}
       standard_packages_repo:     ${{ matrix.standard_packages_repo }}

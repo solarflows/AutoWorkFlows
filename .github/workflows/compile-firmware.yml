@@ -29,6 +29,9 @@ on:
       packages_feed_repo:   { required: false, type: string, default: 'solarflows/openwrt-packages' }
       packages_feed_name:   { required: false, type: string, default: 'solarflows' }
       # ── 配置来源 (seed / sdk.config); 空值 = 当前运行仓库 (caller) ──
+      # config_repo 空 → caller 仓库 @ github.sha (run 触发 commit, 不可变,
+      #   与 plan 的 sparse checkout 钉死同一 commit, 消除长等待窗口内的 ref 漂移)
+      # config_repo 非空 → config_ref 空 = 该仓库默认分支; 显式传 = 锁定 ref
       config_repo:  { required: false, type: string, default: '' }
       config_ref:   { required: false, type: string, default: '' }
       config_path:  { required: false, type: string, default: 'openwrt-configs/immortalwrt' }
@@ -75,7 +78,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: ${{ inputs.config_repo || github.repository }}
-          ref: ${{ inputs.config_ref || github.ref }}
+          # config_repo 空 → github.sha (run 触发 commit, 不可变); 非空 → config_ref
+          # (空 = config_repo 默认分支)。表达式语义: a && b || c 按 JS 真值返回操作数。
+          ref: ${{ inputs.config_repo == '' && github.sha || inputs.config_ref }}
           token: ${{ secrets.CONFIG_TOKEN || github.token }}
           path: CallerConfig
           sparse-checkout: |
@@ -85,7 +90,8 @@ jobs:
         run: |
           set -euo pipefail
           CONFIG_REPO="${{ inputs.config_repo || github.repository }}"
-          CONFIG_REF="${{ inputs.config_ref || github.ref }}"
+          CONFIG_REF="${{ inputs.config_repo == '' && github.sha || inputs.config_ref }}"
+          [ -n "$CONFIG_REF" ] || CONFIG_REF="(default branch)"
           SEED_DIR="${CONFIG_ROOT}/${{ inputs.matrix_target }}"
           if [ ! -d "$SEED_DIR" ]; then
             echo "::error::配置目录不存在: ${SEED_DIR} (config_repo=${CONFIG_REPO}, config_path=${{ inputs.config_path }}, target=${{ inputs.matrix_target }})"
