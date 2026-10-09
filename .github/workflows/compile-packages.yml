@@ -1,6 +1,7 @@
 # Reusable workflow: compile-packages
 # 使用自建 SDK 编译指定的软件包列表 (替代 v1 的 compile-passwall + compile-packages)
 # 由 firmware-build-unified.yml 调用
+# seed/sdk.config 配置默认取自 caller 仓库 (github.repository)，可用 config_repo 覆盖
 name: Compile Packages
 
 on:
@@ -40,6 +41,10 @@ on:
       defaults_ref:              { required: false, type: string, default: 'main' }
       packages_feed_repo:        { required: false, type: string, default: 'solarflows/openwrt-packages' }
       packages_feed_name:        { required: false, type: string, default: 'solarflows' }
+      # ── 配置来源 (seed / sdk.config); 空值 = 当前运行仓库 (caller) ──
+      config_repo:  { required: false, type: string, default: '' }
+      config_ref:   { required: false, type: string, default: '' }
+      config_path:  { required: false, type: string, default: 'openwrt-configs/immortalwrt' }
       # ── 全局上下文 ──
       version:                   { required: true, type: string }
       clean_cache:               { required: false, type: boolean, default: false }
@@ -49,6 +54,7 @@ on:
       ACCESS_TOKEN:              { required: true }
       APK_BUILD_KEY:             { required: false }
       USIGN_KEY:                 { required: false }
+      CONFIG_TOKEN:              { required: false }
 
 env:
   TZ: Asia/Shanghai
@@ -67,6 +73,8 @@ jobs:
     env:
       # 刻意加前缀: 裸 TARGET/HOST 会被 autoconf 的 AX_ENABLE_BUILDDIR 当作 builddir 名
       IMMWRT_TARGET: ${{ inputs.matrix_target }}
+      # 配置根目录 (seed/sdk.config 来源): 默认 caller 仓库, 可用 config_repo 覆盖
+      CONFIG_ROOT: ${{ github.workspace }}/CallerConfig/${{ inputs.config_path }}
     steps:
       - name: Checkout defaults repo
         uses: actions/checkout@v6
@@ -74,6 +82,33 @@ jobs:
           repository: ${{ inputs.defaults_repo }}
           ref: ${{ inputs.defaults_ref }}
           path: AutoWorkFlows
+
+      - name: Checkout config source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.config_repo || github.repository }}
+          ref: ${{ inputs.config_ref || github.ref }}
+          token: ${{ secrets.CONFIG_TOKEN || github.token }}
+          path: CallerConfig
+          sparse-checkout: |
+            ${{ inputs.config_path }}
+
+      - name: Validate config source
+        run: |
+          set -euo pipefail
+          CONFIG_REPO="${{ inputs.config_repo || github.repository }}"
+          CONFIG_REF="${{ inputs.config_ref || github.ref }}"
+          SEED_DIR="${CONFIG_ROOT}/${{ inputs.matrix_target }}"
+          if [ ! -d "$SEED_DIR" ]; then
+            echo "::error::配置目录不存在: ${SEED_DIR} (config_repo=${CONFIG_REPO}, config_path=${{ inputs.config_path }}, target=${{ inputs.matrix_target }})"
+            exit 1
+          fi
+          if ! ls "$SEED_DIR"/*.seed >/dev/null 2>&1; then
+            echo "::error::配置目录无 *.seed 文件: ${SEED_DIR} (config_repo=${CONFIG_REPO})"
+            exit 1
+          fi
+          echo "✅ 配置来源: ${CONFIG_REPO} @ ${CONFIG_REF} → ${SEED_DIR}"
+          ls "$SEED_DIR"/*.seed | xargs -n1 basename | sed 's/^/  📄 /'
 
       - name: Checkout packages feed repo
         uses: actions/checkout@v6
@@ -333,7 +368,7 @@ jobs:
           # 兼容旧路径: 若传入 "*" (plan 未计算或无变更检测)，回退读取 sdk.config。
           SDK_PKGS="${{ inputs.matrix_sdk_packages }}"
           if [ "$SDK_PKGS" = "*" ]; then
-            CONFIG_FILE="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_target }}/sdk.config"
+            CONFIG_FILE="${CONFIG_ROOT}/${{ inputs.matrix_target }}/sdk.config"
             if [ -f "$CONFIG_FILE" ]; then
               SDK_PKGS=$(grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]*=[ym]$' "$CONFIG_FILE" | sed -E 's/CONFIG_PACKAGE_(.*)=[ym]/\1/' | tr '\n' ' ')
               SDK_PKGS=$(echo "$SDK_PKGS" | sed 's/shadowsocksr-libev-ssr-[^ ]*/shadowsocksr-libev/g')
@@ -1150,11 +1185,14 @@ jobs:
           CONFIG_SHA=""
           if [ "${{ inputs.matrix_build_sdk_ib }}" = "true" ]; then
             # config_sha 由 plan 计算并通过 matrix_config_sha 传入以保证 plan↔exec↔persist 闭环一致；
-            # 若外部调用方未传（向后兼容），则本地用与 plan 相同的公式（原始 targets.json + 绝对路径）计算。
+            # 若外部调用方未传（向后兼容），本地回退公式现 hash caller 配置目录 (CONFIG_ROOT)：
+            # AutoWorkflows 自身运行时 plan 必传 matrix_config_sha，本地回退不执行；
+            # 外部 caller 直调时本地公式即 caller 配置指纹。targets.json 部分仍读
+            # AutoWorkFlows（元数据），seed 目录部分改 CONFIG_ROOT。
             CONFIG_SHA="${{ inputs.matrix_config_sha }}"
             if [ -z "$CONFIG_SHA" ]; then
               TARGET_CONFIG_JSON=$(jq -c --arg t "${IMMWRT_TARGET}" '.targets[] | select(.target == $t)' "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/targets.json" 2>/dev/null || echo "")
-              CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
+              CONFIG_SHA=$( (echo "$TARGET_CONFIG_JSON"; find "${CONFIG_ROOT}/${IMMWRT_TARGET}" -type f 2>/dev/null | sort | xargs sha256sum 2>/dev/null) | sha256sum | cut -d' ' -f1 || echo "")
             fi
           fi
 
@@ -1163,7 +1201,7 @@ jobs:
           # pkgs-feed 即 custom feed 的 git checkout (cp -rlf 到 package/ 的源头)。
           # 短哈希 7 位 + seed 引用过滤 (方案 A), 与 plan 侧 fetch_pkg_trees 同规则。
           SHORT=7
-          SEED_REF_JSON=$(find "${GITHUB_WORKSPACE}/AutoWorkFlows/openwrt-configs/immortalwrt/${IMMWRT_TARGET}" -type f -name '*.seed' -print0 | xargs -0 cat | \
+          SEED_REF_JSON=$(find "${CONFIG_ROOT}/${IMMWRT_TARGET}" -type f -name '*.seed' -print0 | xargs -0 cat | \
             grep -E '^CONFIG_PACKAGE_[a-z0-9][a-z0-9+._-]+=y$' | \
             sed -E 's/CONFIG_PACKAGE_([^=]+)=y/\1/' | grep -vE '^luci-i18n-' | sort -u | \
             jq -Rrs 'split("\n") | map(select(length > 0))')
@@ -1361,7 +1399,7 @@ jobs:
           set -euo pipefail
           # 包清单与设备列表优先使用 plan 侧预计算结果 (firmware-build-unified.yml
           # 的 ib_packages/ib_profiles input)；为空时才回退本地 seed 提取 (向后兼容)。
-          SEED_DIR="AutoWorkFlows/openwrt-configs/immortalwrt/${{ inputs.matrix_target }}"
+          SEED_DIR="${CONFIG_ROOT}/${{ inputs.matrix_target }}"
           PACKAGES="${{ inputs.ib_packages }}"
           if [ -z "$PACKAGES" ]; then
             PACKAGES=$(find "$SEED_DIR" -type f -name '*.seed' -print0 | xargs -0 cat | \
