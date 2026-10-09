@@ -12,7 +12,9 @@ on:
       matrix_target:             { required: true, type: string }
       matrix_packages_branch:    { required: true, type: string }
       standard_packages_repo:    { required: false, type: string, default: 'solarflows/packages' }
-      standard_packages_branch:  { required: false, type: string, default: 'master' }
+      # 空值 = 回退 targets.json 的 target 编排元数据 (与 unified 传值同源,
+      # 保证外部 caller 与官方构建的标准 feed 一致); 均缺失则构建开始即硬失败
+      standard_packages_branch:  { required: false, type: string, default: '' }
       # ── passwall release 目标 (可选): 空值 = 不发布 Release, 包产物仅上传 CI artifact ──
       matrix_passwall_repo:      { required: false, type: string, default: '' }
       matrix_passwall_tag:        { required: false, type: string, default: '' }
@@ -492,6 +494,24 @@ jobs:
 
           STANDARD_PACKAGES_REPO="${{ inputs.standard_packages_repo }}"
           STANDARD_PACKAGES_BRANCH="${{ inputs.standard_packages_branch }}"
+          # ── standard_packages_branch 回退链: 显式传 > targets.json 编排元数据 > 硬失败 ──
+          # 不回退 matrix_packages_branch (custom feed 与标准 feed 是两个仓库,
+          # 分支名无必然关联, 同名仅是 ipq 系的巧合); targets.json 与 unified
+          # 传值同源, 外部 caller 回退读它 = 与官方构建 feed 一致
+          if [ -z "$STANDARD_PACKAGES_BRANCH" ]; then
+            TARGETS_JSON="../AutoWorkFlows/openwrt-configs/immortalwrt/targets.json"
+            [ -f "$TARGETS_JSON" ] || { echo "::error::targets.json 不存在: ${TARGETS_JSON}"; exit 1; }
+            STANDARD_PACKAGES_BRANCH=$(jq -r --arg t "${{ inputs.matrix_target }}" \
+              '.targets[] | select(.target == $t) | .standard_packages_branch // empty' \
+              "$TARGETS_JSON" || true)
+            if [ -n "$STANDARD_PACKAGES_BRANCH" ]; then
+              echo "ℹ️ standard_packages_branch 未传入, 回退 targets.json: ${STANDARD_PACKAGES_BRANCH}"
+            else
+              echo "::error::standard_packages_branch 未传入且 targets.json 中 target=${{ inputs.matrix_target }} 未配置该字段; 请显式传入或补充 targets.json"
+              exit 1
+            fi
+          fi
+          echo "standard_packages_branch=${STANDARD_PACKAGES_BRANCH}" >> $GITHUB_OUTPUT
           case "$STANDARD_PACKAGES_REPO" in
             */*) ;;
             *) echo "::error::标准 packages 仓库格式无效: $STANDARD_PACKAGES_REPO"; exit 1 ;;
@@ -1223,7 +1243,7 @@ jobs:
             "feeds_sha": {},
             "deferred_pkgs": [],
             "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
-            "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
+            "standard_packages_branch": "${{ steps.compile.outputs.standard_packages_branch }}",
             "standard_packages_sha": "",
             "packages_format": "${PKG_FORMAT}",
             "sdk_version": "${{ steps.resolve.outputs.sdk_version }}",
@@ -1334,7 +1354,7 @@ jobs:
             "feeds_sha": ${FEEDS_SHA_JSON},
             "deferred_pkgs": ${DEFERRED_PKGS_JSON},
             "standard_packages_repo": "${{ inputs.standard_packages_repo }}",
-            "standard_packages_branch": "${{ inputs.standard_packages_branch }}",
+            "standard_packages_branch": "${{ steps.compile.outputs.standard_packages_branch }}",
             "standard_packages_sha": "${{ steps.compile.outputs.standard_packages_sha }}",
             "packages_format": "${PKG_FORMAT}",
             "sdk_version": "${{ steps.resolve.outputs.sdk_version }}",

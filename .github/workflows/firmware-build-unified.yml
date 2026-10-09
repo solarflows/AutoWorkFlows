@@ -320,7 +320,9 @@ jobs:
               packages_feed_repo: (.packages_feed_repo // $pkg_repo),
               packages_feed_name: (.packages_feed_name // $pkg_name),
               standard_packages_repo: (.standard_packages_repo // "solarflows/packages"),
-              standard_packages_branch: (.standard_packages_branch // "master"),
+              # 空值穿透到 executor 回退链 (targets.json 同源) 而非静默拉 master;
+              # plan 侧 L363 校验兜底 (未配置 → fail-fast)
+              standard_packages_branch: (.standard_packages_branch // ""),
               release_repo:      (.release_repo      // .repo),
               # 固件 release tag 统一为 <target>-<version> (分支/目标 + 版本):
               # 同仓库多 target (ipq60xx/ipq807x) 必须分开 release, 否则同名资产
@@ -361,6 +363,12 @@ jobs:
             CURR_PKG_REPO=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .packages_feed_repo')
             CURR_STD_PKG_REPO=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .standard_packages_repo')
             CURR_STD_PKG_BRANCH=$(echo "$FILTERED" | jq -r --arg t "$MATRIX_TARGET" '.[] | select(.target == $t) | .standard_packages_branch')
+            # standard_packages_branch 不再回退 master (静默拉错 feed 分支):
+            # targets.json 未配置即 fail-fast, 与 executor 回退链语义一致
+            [ -n "$CURR_STD_PKG_BRANCH" ] || {
+              echo "::error::[${MATRIX_TARGET}] targets.json 未配置 standard_packages_branch (不回退 master); 请补充该字段"
+              exit 1
+            }
 
             CURR_SRC=$(git ls-remote "https://github.com/${CURR_REPO}" "${CURR_REF}" 2>/dev/null | cut -f1 | head -1)
             if [ -z "$CURR_SRC" ]; then
