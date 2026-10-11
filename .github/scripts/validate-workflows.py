@@ -534,6 +534,33 @@ def check_semantics(bash: str, files: list[Path], rep: Report) -> None:
     else:
         rep.ok("追平闸门静态: 两 executor 均含 tree 条目过滤")
 
+    # 4n. seed 自动补齐检测语义 (run 38112393097: caller seed 行带尾注释
+    # "CONFIG_X=y  # 注释", 严格 ^OPT=y$ 行尾匹配误报缺失 → 重复追加 + 假告警)。
+    # 行为等价: 容忍模式 ([[:space:]#]|$) 对带注释/干净/缺失三种 fixture 的判定。
+    autofix_pat = _re.compile(r"^CONFIG_[A-Z0-9_]+=y([ \t#]|$)")
+
+    def opt_present(opt: str, config: str) -> bool:
+        return any(autofix_pat.match(l) for l in config.splitlines() if l.startswith(opt + "="))
+
+    fx_comment = "CONFIG_DEVEL=y                     # 开发者模式\nCONFIG_CCACHE=y\t# cache\nCONFIG_BUILD_LOG=y\n"
+    fx_missing = "CONFIG_TARGET_qualcommax=y\n# CONFIG_CCACHE is not set\n"
+    ok_comment = all(opt_present(o, fx_comment) for o in ("CONFIG_DEVEL", "CONFIG_CCACHE", "CONFIG_BUILD_LOG"))
+    ok_missing = [o for o in ("CONFIG_DEVEL", "CONFIG_CCACHE", "CONFIG_BUILD_LOG") if not opt_present(o, fx_missing)]
+    if ok_comment and ok_missing == ["CONFIG_DEVEL", "CONFIG_CCACHE", "CONFIG_BUILD_LOG"]:
+        rep.ok("seed 补齐检测: 尾注释行正确识别 / 真缺失正确检出")
+    else:
+        rep.fail(f"seed 补齐检测: comment_ok={ok_comment} missing={ok_missing}")
+
+    # 4n 静态防退化: compile-firmware 的补齐 grep 必须用容忍模式
+    # (回退到 ^OPT=y$ 严格行尾 → 尾注释 seed 误报, run 38112393097)
+    fw_text = next((f.read_text(encoding="utf-8") for f in files if f.name == "compile-firmware.yml"), "")
+    m = _re.search(_re.escape('grep -qE "^${OPT}=y([[:space:]#]|$)" .config'), fw_text)
+    strict = _re.search(_re.escape('grep -q "^${OPT}=y$" .config'), fw_text)
+    if m and not strict:
+        rep.ok("seed 补齐静态: 容忍模式在位 (无严格行尾回退)")
+    else:
+        rep.fail("seed 补齐静态: 补齐 grep 缺容忍模式或回退到严格行尾匹配 (run 38112393097 教训)")
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

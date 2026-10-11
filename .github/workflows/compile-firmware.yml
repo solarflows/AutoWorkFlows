@@ -574,9 +574,11 @@ jobs:
           # 逐项检测缺失才追加 (不重复追加已有项, 防 make 校验变严后重复定义报错);
           # CONFIG_DEVEL=y 必须先于 CCACHE/BUILD_LOG (Kconfig "if DEVEL" 可见性,
           # 缺 DEVEL 时 defconfig 会把后两者当未知符号丢弃)。
+          # 匹配容忍尾随空白/行内注释 (caller seed 常见 "CONFIG_X=y  # 注释" 格式,
+          # 严格 $ 行尾匹配会误报缺失并重复追加 — run 38112393097 实证)。
           AUTO_FIXED=""
           for OPT in CONFIG_DEVEL CONFIG_CCACHE CONFIG_BUILD_LOG; do
-            if ! grep -q "^${OPT}=y$" .config; then
+            if ! grep -qE "^${OPT}=y([[:space:]#]|$)" .config; then
               printf '%s=y\n' "$OPT" >> .config
               AUTO_FIXED="${AUTO_FIXED} ${OPT}=y"
             fi
