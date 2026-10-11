@@ -217,14 +217,14 @@ jobs:
           echo "✅ 参数校验通过"
 
       - name: Checkout defaults repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.defaults_repo }}
           ref: ${{ inputs.defaults_ref }}
           path: AutoWorkFlows
 
       - name: Checkout config source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.config_repo || github.repository }}
           # config_repo 空 → github.sha (run 触发 commit, 不可变); 非空 → config_ref
@@ -264,7 +264,7 @@ jobs:
           fi
 
       - name: Checkout packages feed repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.packages_feed_repo }}
           ref: ${{ inputs.matrix_packages_branch }}
@@ -369,7 +369,7 @@ jobs:
         id: cache-cc-restore
         if: inputs.clean_cache != true
         continue-on-error: true
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           # run_id 后缀保证本 run 内绝不重复；restore-keys 前缀命中最近一次
           # 成功保存的 ccache 快照（由 purge 保留最近 1 份）。
@@ -382,7 +382,7 @@ jobs:
         id: cache-hostpkg-restore
         if: inputs.clean_cache != true
         continue-on-error: true
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           # key 与保存端 (immwrt-v2-sdk-hostpkg-<target>-<run_id>) 同构；
           # restore-keys 前缀命中最近一次成功保存的 SDK hostpkg 快照。
@@ -402,7 +402,7 @@ jobs:
         # restored exactly. The path list remains identical to the full producer.
         if: steps.cache-hostpkg-restore.outputs.cache-hit != 'true' && inputs.clean_cache != true
         continue-on-error: true
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           # key 为本 run 唯一占位（命中概率为 0）；restore-keys 前缀命中
           # compile-firmware 保存的最近一份 full toolchain 快照（内容哈希 key）。
@@ -960,7 +960,7 @@ jobs:
         if: always() && !cancelled() && steps.compile.outcome == 'success' && steps.feed-rebuild.outcome != 'failure'
         id: cache-hostpkg-save
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: |
@@ -975,7 +975,7 @@ jobs:
         if: always() && !cancelled() && steps.compile.outcome == 'success' && steps.compile.outputs.ccache_wrapper_valid == 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-cc-save
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: openwrt/.ccache

@@ -231,14 +231,14 @@ jobs:
           echo "✅ 参数校验通过"
 
       - name: Checkout defaults repo (AutoWorkflows)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.defaults_repo }}
           ref: ${{ inputs.defaults_ref }}
           path: AutoWorkFlows
 
       - name: Checkout config source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.config_repo || github.repository }}
           # config_repo 空 → github.sha (run 触发 commit, 不可变); 非空 → config_ref
@@ -278,7 +278,7 @@ jobs:
           fi
 
       - name: Checkout Source Repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.matrix_repo }}
           ref: ${{ inputs.matrix_ref }}
@@ -473,7 +473,7 @@ jobs:
         id: cache-tc-restore
         if: inputs.clean_cache != true
         continue-on-error: true
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
           restore-keys: |
@@ -486,7 +486,7 @@ jobs:
         if: inputs.clean_cache != true
         id: cache-cc
         continue-on-error: true
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           restore-keys: |
@@ -1576,7 +1576,7 @@ jobs:
         if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.cache-tc-existing.outputs.exists != 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-tc-save
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
           path: |
@@ -1587,7 +1587,7 @@ jobs:
         if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.build.outputs.ccache_wrapper_valid == 'true' && steps.feed-rebuild.outcome != 'failure'
         id: cache-cc-save
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: openwrt/.ccache
@@ -1596,7 +1596,7 @@ jobs:
         if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
         id: cache-sdk-hostpkg-save
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: |
