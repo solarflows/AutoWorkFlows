@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: 检出仓库
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -172,7 +172,7 @@ jobs:
 
     steps:
       - name: 检出仓库
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -369,7 +369,7 @@ jobs:
 
     steps:
       - name: 检出仓库
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -574,7 +574,7 @@ jobs:
 
     steps:
       - name: 检出自动化仓库
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -584,7 +584,7 @@ jobs:
           token: ${{ secrets.ACCESS_TOKEN }}
 
       - name: 检出目标仓库
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: solarflows/ImmortalWrt-QualcommAX
           ref: VIKINGYFY-main

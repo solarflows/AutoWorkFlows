@@ -1,4 +1,4 @@
-﻿name: v2ray-geodata Updater
+name: v2ray-geodata Updater
 
 concurrency:
   group: v2ray-geodata-updater
@@ -38,7 +38,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 

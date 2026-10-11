@@ -98,7 +98,7 @@ jobs:
       clean_cache:                 ${{ steps.decision.outputs.clean_cache }}
     steps:
       - name: Checkout AutoWorkflows (sparse)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository }}
           # github.sha (run 触发 commit) 而非 github.ref (可变分支名): plan 等待
