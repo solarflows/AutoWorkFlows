@@ -2,7 +2,7 @@
 """AutoWorkflows 工作流验证脚本（可复用，git 追踪）。
 
 用法:
-    python .github/scripts/validate-workflows.py                 # 全部 6 个活跃 workflow
+    python .github/scripts/validate-workflows.py                 # 全部 7 个活跃 workflow
     python .github/scripts/validate-workflows.py a.yml b.yml     # 指定文件
     python .github/scripts/validate-workflows.py --no-semantics  # 跳过指纹语义回归
 
@@ -44,6 +44,7 @@ DEFAULT_WORKFLOWS = [
     "custom-feed.yml",
     "upstream-sync.yml",
     "geodata-updater.yml",
+    "workflow-lint.yml",
 ]
 
 # 旧 lock 逐包指纹机制的标识符: 该机制已于 2026-09-26 重构为 tree SHA 真值锁,

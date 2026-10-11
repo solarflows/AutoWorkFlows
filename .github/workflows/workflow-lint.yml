@@ -1,0 +1,38 @@
+# Workflow 语法与语义回归检查 (CI 化)
+# 背景: 2026-10-11 unified 构建编排停用后, 本仓库对 workflow 的职责只剩
+# 语法检查。GitHub 平台只在 workflow 触发运行时才解析 YAML (禁用的
+# workflow 永不触发 = 语法坏了永远发现不了), 故将本地 validate-workflows.py
+# 挂成 push/PR CI 左移拦截。
+# 覆盖: PyYAML 解析 + bash -n + 21000 字符上限告警 + 指纹管道语义回归。
+name: Workflow Lint
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+      - '.github/scripts/validate-workflows.py'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/scripts/validate-workflows.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+
+      - name: Run validate-workflows.py
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python3 .github/scripts/validate-workflows.py

@@ -1,0 +1,20 @@
+# Dependabot: 自动维护 workflow 中 uses: 的 action 版本
+# 每周一扫描 (避开周末 feed 类 cron 高峰), 全部 action 合并为单个 PR 减少噪音。
+# 提出的 PR 会触发 workflow-lint CI (pull_request paths 匹配), 版本升级
+# 不破坏语法才可合并 —— 与语法检查形成闭环。
+# 刻意不配置 auto-merge: 仅提 PR 供人工审查, 不自动改动分支。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Shanghai
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(ci)"
+      prefix-development: "chore(ci)"
+    open-pull-requests-limit: 5
