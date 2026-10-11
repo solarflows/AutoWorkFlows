@@ -204,7 +204,9 @@ jobs:
           # ── 版本号解析: 显式 version 优先; 空则按 version_prefix 自动生成 ──
           # version 进 release tag 与产物文件名, 白名单校验防注入;
           # prefix 同规则 (空 = 纯日期版本), 非法降级默认 'V' 并告警。
-          VERSION_INPUT="${{ env.RESOLVED_VERSION }}"
+          # 注意: 此处必须读 inputs.version —— RESOLVED_VERSION 由本步骤末尾
+          # 写入 GITHUB_ENV, 此时尚不存在 (自引用恒空 = 显式 version 被静默丢弃)
+          VERSION_INPUT="${{ inputs.version }}"
           VERSION_PREFIX="${{ inputs.version_prefix }}"
           case "$VERSION_PREFIX" in
             *[!A-Za-z0-9._-]*)

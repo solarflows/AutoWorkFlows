@@ -209,6 +209,44 @@ def check_run_block_size(files: list[Path], rep: Report) -> None:
         print(f"  (全部 run 块 ≤ {RUN_BLOCK_WARN} 字符)")
 
 
+def check_env_self_reference(files: list[Path], rep: Report) -> None:
+    """2c. 同一 run: 块内自引用 GITHUB_ENV 变量检测。
+
+    `echo "X=..." >> "$GITHUB_ENV"` 写入的变量要到**本步骤结束后**才对后续
+    步骤可见; 同一步骤内的 `${{ env.X }}` 恒为空字符串 (C16 教训: 批量替换
+    inputs.version → env.RESOLVED_VERSION 时误伤解析入口赋值行, 显式
+    version 被静默丢弃, 外部 caller 传参无效)。
+    """
+    print("== 2c. 同步骤 GITHUB_ENV 自引用 ==")
+    # 写入模式: echo "X=..." >> "$GITHUB_ENV" (容忍引号/空格变体)
+    env_write = re.compile(
+        r"""echo\s+["']?([A-Za-z_][A-Za-z0-9_]*)=.*?>>\s*["']?\$GITHUB_ENV["']?"""
+    )
+    found_any = False
+    for f in files:
+        try:
+            doc = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue  # YAML 失败已由检查 1 报告
+        for jname, sname, run, _shell in iter_run_blocks(doc):
+            defined = set(env_write.findall(run))
+            if not defined:
+                continue
+            # 块内引用了本块定义的 env 变量 → 自引用 bug
+            self_refs = sorted(
+                v for v in defined if re.search(r"\$\{\{\s*env\." + re.escape(v) + r"\s*\}\}", run)
+            )
+            if self_refs:
+                found_any = True
+                rep.fail(
+                    f"{f.name} / {jname} / {sname}: 步骤内自引用 GITHUB_ENV 变量 "
+                    f"{self_refs} —— 该变量本步骤结束前不存在, 表达式恒为空; "
+                    f"入口赋值应读 inputs.* (C16 教训)"
+                )
+    if not found_any:
+        rep.ok("无自引用 (所有 env.* 引用均在定义步骤之后)")
+
+
 def check_residual(files: list[Path], rep: Report) -> None:
     print("== 3. 旧 lock 指纹残留标识符 ==")
     for f in files:
@@ -522,6 +560,7 @@ def main() -> int:
     check_yaml(files, rep)
     check_bash_n(files, bash, rep)
     check_run_block_size(files, rep)
+    check_env_self_reference(files, rep)
     check_residual(files, rep)
     if not args.no_semantics:
         check_semantics(bash, files, rep)
