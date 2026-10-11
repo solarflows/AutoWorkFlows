@@ -2,6 +2,39 @@
 # 使用自建 SDK 编译指定的软件包列表 (替代 v1 的 compile-passwall + compile-packages)
 # 由 firmware-build-unified.yml 调用
 # seed/sdk.config 配置默认取自 caller 仓库 (github.repository)，可用 config_repo 覆盖
+#
+# ══════════ 外部调用速查 (免调试) ══════════
+# 前置: 需已有一轮 compile-firmware 发布的 SDK/IB (matrix_artifacts_release_repo/tag
+# 指向该 Release; SDK 增量路径必需, 无 SDK 会硬失败)。
+# 最小调用 (SDK 编译变更包 + IB 组装固件, seed 取 caller 的 configs/<target>):
+#
+#   jobs:
+#     build:
+#       uses: solarflows/AutoWorkFlows/.github/workflows/compile-packages.yml@main
+#       with:
+#         matrix_target: 'ipq807x'                    # 必填: seed 目录名 = target 名
+#         matrix_packages_branch: 'qualcommax'        # 必填: solarflows/openwrt-packages 分支
+#         matrix_artifacts_release_repo: '<owner>/<repo>'  # 必填: SDK/IB 所在 Release 仓库
+#         matrix_artifacts_release_tag:  'artifacts-ipq807x'
+#         matrix_sdk_packages: 'luci-app-passwall'    # 编译包清单 (空格分隔; 空 = 跳过编译)
+#         config_path:  'configs'                     # caller 仓库 seed 根目录
+#       secrets:
+#         ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#
+# 常用可选参数:
+#   version / version_prefix   版本号二选一: 显式 version 优先; 空 = <prefix><YYMMDD> (prefix 默认 V)
+#   matrix_build_sdk_ib        true = IB 组装固件 (默认 false 只编译包)
+#   matrix_release_repo        IB 固件 Release 目标 (空 = 不发布)
+#   matrix_passwall_repo/tag   软件包 Release 目标 (空 = 不发布)
+#   ib_packages / ib_profiles  IB 组装包清单与设备 profile (空 = 回退 seed 提取)
+#   upload_artifacts           IB 固件大工件上传开关 (默认 true)
+#   config_repo/ref            seed 来源仓库 (空 = caller 仓库 @ 触发 commit)
+#
+# 产物去向: 软件包 → Release (matrix_passwall_repo 指定时); IB 固件 → Release
+#           (matrix_release_repo 指定时); 兜底 CI artifact (7 天)
+# 签名 secrets (可选): APK_BUILD_KEY / USIGN_KEY (同 compile-firmware)
+# 行为要点: kmod 冻结防内核重编 (G2); IB 两阶段包选择 (缺失自动剔除, G12);
+#           feed 追平为纯远端对比; CRLF seed 自动转换并告警
 name: Compile Packages
 
 on:
@@ -52,7 +85,14 @@ on:
       config_ref:   { required: false, type: string, default: '' }
       config_path:  { required: false, type: string, default: 'openwrt-configs/immortalwrt' }
       # ── 全局上下文 ──
-      version:                   { required: true, type: string }
+      # version 与 version_prefix 二选一: 显式 version 优先 (向后兼容);
+      # version 空 → 按 version_prefix 自动生成 <prefix><YYMMDD> (上海时区)。
+      # prefix 白名单 [A-Za-z0-9._-] (空 = 纯日期版本), 非法字符降级 'V'。
+      version:                   { required: false, type: string, default: '' }
+      version_prefix:            { required: false, type: string, default: 'V' }
+      # ── 工件上传开关: IB 组装固件归档体积大 (上传下载耗时), 可关;
+      #    published-state (状态回写依赖) / build-info / 包工件不受控 ──
+      upload_artifacts:          { required: false, type: boolean, default: true }
       clean_cache:               { required: false, type: boolean, default: false }
       # 跳过编译后的 custom-feed 追平重编 (与 unified 的 skip_upstream 语义对齐)
       skip_feed_catchup:        { required: false, type: boolean, default: false }
@@ -111,7 +151,6 @@ jobs:
           # ── 非空校验 (required 穿透空字符串的兜底) ──
           [ -n "${{ inputs.matrix_target }}" ] || fail "matrix_target 为空"
           [ -n "${{ inputs.matrix_packages_branch }}" ] || fail "matrix_packages_branch 为空"
-          [ -n "${{ inputs.version }}" ] || fail "version 为空"
           # SDK 增量路径必需 (resolve 步骤从该 release 下载 SDK), 保持 required: true
           [ -n "${{ inputs.matrix_artifacts_release_repo }}" ] || fail "matrix_artifacts_release_repo 为空 (SDK 增量路径必需)"
           [ -n "${{ inputs.matrix_artifacts_release_tag }}" ] || fail "matrix_artifacts_release_tag 为空 (SDK 增量路径必需)"
@@ -147,6 +186,32 @@ jobs:
             echo "::error::参数校验失败 (${#ERRORS[@]} 项), 构建未开始即终止"
             exit 1
           fi
+
+          # ── 版本号解析: 显式 version 优先; 空则按 version_prefix 自动生成 ──
+          # version 进 release tag 与产物文件名, 白名单校验防注入;
+          # prefix 同规则 (空 = 纯日期版本), 非法降级默认 'V' 并告警。
+          VERSION_INPUT="${{ env.RESOLVED_VERSION }}"
+          VERSION_PREFIX="${{ inputs.version_prefix }}"
+          case "$VERSION_PREFIX" in
+            *[!A-Za-z0-9._-]*)
+              echo "::warning::version_prefix 含非法字符: '${VERSION_PREFIX}', 降级为默认 'V'"
+              VERSION_PREFIX="V"
+              ;;
+          esac
+          if [ -n "$VERSION_INPUT" ]; then
+            case "$VERSION_INPUT" in
+              *[!A-Za-z0-9._-]*)
+                echo "::error::version 含非法字符: '${VERSION_INPUT}'"
+                exit 1
+                ;;
+            esac
+            RESOLVED_VERSION="$VERSION_INPUT"
+            echo "ℹ️ 使用传入版本号: ${RESOLVED_VERSION}"
+          else
+            RESOLVED_VERSION="${VERSION_PREFIX}$(TZ=${{ env.TZ }} date +'%y%m%d')"
+            echo "ℹ️ version 未传入, 自动生成: ${RESOLVED_VERSION} (前缀 '${VERSION_PREFIX}')"
+          fi
+          echo "RESOLVED_VERSION=${RESOLVED_VERSION}" >> "$GITHUB_ENV"
           echo "✅ 参数校验通过"
 
       - name: Checkout defaults repo
@@ -767,8 +832,6 @@ jobs:
       - name: 🔄 Rebuild on feed update
         if: success() && inputs.skip_feed_catchup != 'true' && steps.compile.outcome == 'success'
         id: feed-rebuild
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           FEED_BRANCH="${{ inputs.matrix_packages_branch }}"
@@ -776,45 +839,11 @@ jobs:
           BEFORE_TREES=$(git -C pkgs-feed ls-tree HEAD)
           echo "📌 构建时 feed 版本: ${BEFORE_SHA:0:7} (${FEED_BRANCH})"
 
-          # ── 触发 custom-feed 更新本分支 (非受管分支跳过触发, 仅做远端对比) ──
-          case "$FEED_BRANCH" in
-            main|qt6|mt798x|qualcommax)
-              BEFORE_TS=$(date +%s)
-              if ! gh workflow run custom-feed.yml \
-                  --repo "${{ github.repository }}" \
-                  --ref "${{ github.ref_name }}" \
-                  -f targets="${FEED_BRANCH}"; then
-                echo "::warning::触发 custom-feed 失败, 跳过追平重编"
-                exit 0
-              fi
-              # gh workflow run 不返回 run ID: 记录触发前时间戳再轮询 (同 plan 模式)
-              RUN_ID=""
-              for i in $(seq 1 10); do
-                if ! RUN_ID=$(gh run list --repo "${{ github.repository }}" --workflow custom-feed.yml --limit 20 \
-                  --json databaseId,createdAt,headBranch,event \
-                  --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE_TS} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
-                  echo "::warning::查询 custom-feed run 失败, 跳过追平重编"
-                  exit 0
-                fi
-                [ -n "$RUN_ID" ] && break
-                sleep 3
-              done
-              if [ -z "$RUN_ID" ]; then
-                echo "::warning::30s 内未发现 custom-feed run, 跳过追平重编"
-                exit 0
-              fi
-              echo "⏳ 等待 custom-feed run ${RUN_ID} 完成..."
-              if ! timeout 2400 gh run watch "$RUN_ID" --repo "${{ github.repository }}" --interval 10 --exit-status; then
-                echo "::warning::custom-feed run 失败或超时, 跳过追平重编 (远端分支未变, 首轮产物仍有效)"
-                exit 0
-              fi
-              ;;
-            *)
-              echo "ℹ️ 分支 ${FEED_BRANCH} 非 custom-feed 受管分支, 仅做远端对比"
-              ;;
-          esac
-
-          # ── 对比远端分支 HEAD (同 plan 的 ls-remote 模式) ──
+          # ── 纯远端对比: 不触发 custom-feed CI (外部调用时 caller 仓库无该
+          #    workflow, gh workflow run 404 连远端对比都被跳过; 自身调用时
+          #    plan 已触发并等待 custom-feed 完成, 此处触发冗余)。feed 更新
+          #    由 AutoWorkFlows 侧维护 (cron custom-feed.yml), 本步骤只被动
+          #    检测远端变化并追平 ──
           AFTER_SHA=$(git ls-remote "https://github.com/${{ inputs.packages_feed_repo }}.git" "${FEED_BRANCH}" 2>/dev/null | cut -f1 | head -1)
           if [ -z "$AFTER_SHA" ]; then
             echo "::warning::读取远端 feed 分支 HEAD 失败, 跳过追平重编"
@@ -1065,7 +1094,7 @@ jobs:
             echo "### 📌 SDK artifact 版本"
             echo "| 项目 | 版本/文件 |"
             echo "|---|---|"
-            echo "| 计划版本 | \`${{ inputs.version }}\` |"
+            echo "| 计划版本 | \`${{ env.RESOLVED_VERSION }}\` |"
             echo "| 实际 SDK artifact | \`${SDK_ARTIFACT_VERSION}\` |"
             echo "| SDK 文件 | \`${SDK_ARTIFACT_FILE}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -1234,9 +1263,9 @@ jobs:
             PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
             PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
             PKG_FORMAT="${{ steps.signing_key.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
-            FIRMWARE_RELEASE_TAG="${{ inputs.version }}"
+            FIRMWARE_RELEASE_TAG="${{ env.RESOLVED_VERSION }}"
             if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
-              FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+              FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
             fi
             cat > build-info.json <<JSONEOF
           {
@@ -1257,7 +1286,7 @@ jobs:
             "standard_packages_sha": "",
             "packages_format": "${PKG_FORMAT}",
             "sdk_version": "${{ steps.resolve.outputs.sdk_version }}",
-            "plan_version": "${{ inputs.version }}",
+            "plan_version": "${{ env.RESOLVED_VERSION }}",
             "sdk_file": "${{ steps.resolve.outputs.sdk_file }}",
             "build_mode": "repack",
             "release_tag": "${FIRMWARE_RELEASE_TAG}",
@@ -1276,9 +1305,9 @@ jobs:
           PKG_COMMIT=$(git -C pkgs-feed rev-parse --short HEAD)
           PKG_COMMIT_FULL=$(git -C pkgs-feed rev-parse HEAD)
           PKG_FORMAT="${{ steps.signing_key.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
-          FIRMWARE_RELEASE_TAG="${{ inputs.version }}"
+          FIRMWARE_RELEASE_TAG="${{ env.RESOLVED_VERSION }}"
           if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
-            FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+            FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
           fi
 
           # config_sha 仅 sdk-ib 模式（发布固件）允许回写：纯 packages 模式若回写新值，
@@ -1368,7 +1397,7 @@ jobs:
             "standard_packages_sha": "${{ steps.compile.outputs.standard_packages_sha }}",
             "packages_format": "${PKG_FORMAT}",
             "sdk_version": "${{ steps.resolve.outputs.sdk_version }}",
-            "plan_version": "${{ inputs.version }}",
+            "plan_version": "${{ env.RESOLVED_VERSION }}",
             "sdk_file": "${{ steps.resolve.outputs.sdk_file }}",
             "build_mode": "${{ inputs.matrix_build_sdk_ib == 'true' && 'sdk-ib' || 'sdk' }}",
             "release_tag": "${FIRMWARE_RELEASE_TAG}",
@@ -1625,7 +1654,9 @@ jobs:
           }
 
       - name: Upload combined firmware artifact
-        if: success() && inputs.matrix_build_sdk_ib == true && (steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true)
+        # IB 组装固件体积大; 发布到 Release 成功时 artifact 仅作兜底,
+        # 可经 upload_artifacts=false 关闭
+        if: success() && inputs.upload_artifacts && inputs.matrix_build_sdk_ib == true && (steps.artifacts.outputs.package_count > 0 || inputs.matrix_repack_mode == true)
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.matrix_target }}-sdk-ib-firmware
@@ -1653,15 +1684,15 @@ jobs:
           ## 📦 ${{ inputs.matrix_target }} 固件 (IB 增量构建)
 
           - **构建类型**: ⚡ ImageBuilder 重打包 (SDK 增量编译插件 + IB 固件组装)
-          - **软件版本**: ${{ inputs.version }}
+          - **软件版本**: ${{ env.RESOLVED_VERSION }}
           - **IB 基线版本**: ${{ steps.resolve-ib.outputs.ib_version }}
           - **软件包 Feed**: \`${{ inputs.matrix_packages_branch }}\` @ $(git -C pkgs-feed rev-parse --short HEAD)
           - **已打包插件数量**: ${{ steps.artifacts.outputs.package_count }} 个
           ${SIGN_LINE}
           EOF
-          TAG="${{ inputs.version }}"
+          TAG="${{ env.RESOLVED_VERSION }}"
           if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
-            TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+            TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
           fi
           REPO="${{ inputs.matrix_release_repo }}"
 

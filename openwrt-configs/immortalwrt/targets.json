@@ -9,7 +9,8 @@
       "standard_packages_repo": "solarflows/packages",
       "standard_packages_branch": "hanwckf",
       "passwall_tag": "packages-mt798x",
-      "sdk_container": "aarch64_cortex-a53-21.02.7"
+      "sdk_container": "aarch64_cortex-a53-21.02.7",
+      "collect_packages": "luci-app-passwall luci-app-passwall2 luci-i18n-passwall-zh-cn luci-i18n-passwall2-zh-cn chinadns-ng dns2socks geoview haproxy hysteria ipt2socks microsocks naiveproxy shadowsocks-rust-sslocal shadowsocksr-libev simple-obfs shadow-tls sing-box tcping tuic-client v2ray-geoip v2ray-geosite v2ray-plugin xray-core"
     },
     {
       "target": "ipq60xx",
@@ -20,7 +21,8 @@
       "standard_packages_branch": "qualcommax",
       "firmware_release_tag_prefix": "ipq60xx",
       "passwall_tag": "packages-ipq60xx",
-      "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
+      "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
+      "collect_packages": "luci-app-passwall luci-app-passwall2 luci-i18n-passwall-zh-cn luci-i18n-passwall2-zh-cn chinadns-ng dns2socks geoview haproxy hysteria ipt2socks microsocks naiveproxy shadowsocks-rust-sslocal shadowsocksr-libev simple-obfs shadow-tls sing-box tcping tuic-client v2ray-geoip v2ray-geosite v2ray-plugin xray-core"
     },
     {
       "target": "ipq807x",
@@ -31,7 +33,8 @@
       "standard_packages_branch": "qualcommax",
       "firmware_release_tag_prefix": "ipq807x",
       "passwall_tag": "packages-ipq807x",
-      "sdk_container": "aarch64_cortex-a53-SNAPSHOT"
+      "sdk_container": "aarch64_cortex-a53-SNAPSHOT",
+      "collect_packages": "luci-app-passwall luci-app-passwall2 luci-i18n-passwall-zh-cn luci-i18n-passwall2-zh-cn chinadns-ng dns2socks geoview haproxy hysteria ipt2socks microsocks naiveproxy shadowsocks-rust-sslocal shadowsocksr-libev simple-obfs shadow-tls sing-box tcping tuic-client v2ray-geoip v2ray-geosite v2ray-plugin xray-core"
     }
   ]
 }

@@ -2,6 +2,39 @@
 # 全量编译 ImmortalWrt 固件 + 产出 SDK / ImageBuilder tarball 上传到 Release
 # 由 firmware-build-unified.yml (plan job) 调用，workflow_call 触发
 # seed/sdk.config 配置默认取自 caller 仓库 (github.repository)，可用 config_repo 覆盖
+#
+# ══════════ 外部调用速查 (免调试) ══════════
+# 最小调用 (固件发布到 caller 仓库, seed 取 caller 的 configs/<target>/*.seed):
+#
+#   jobs:
+#     build:
+#       uses: solarflows/AutoWorkFlows/.github/workflows/compile-firmware.yml@main
+#       with:
+#         matrix_target: 'ipq807x'                    # 必填: seed 目录名 = target 名
+#         matrix_repo:   '<owner>/<firmware-source>'  # 必填: ImmortalWrt 源码仓库
+#         matrix_ref:    '<branch>'                   # 必填: 源码分支
+#         matrix_packages_branch: 'qualcommax'        # 必填: solarflows/openwrt-packages 分支
+#         config_path:  'configs'                     # caller 仓库 seed 根目录 (默认 openwrt-configs/immortalwrt)
+#       secrets:
+#         ACCESS_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 发布/探测用; 跨仓库发布需 PAT
+#
+# 常用可选参数:
+#   version / version_prefix   版本号二选一: 显式 version 优先; 空 = <prefix><YYMMDD> (prefix 默认 V)
+#   matrix_release_repo        固件 Release 目标 (空 = 不发布, 产物仅 CI artifact)
+#   matrix_passwall_repo/tag   软件包 Release 目标 (空 = 不发布)
+#   collect_packages           软件包打包清单 (空格分隔; 空 = 默认单包 luci-app-passwall; 缺包仅告警)
+#   upload_artifacts           固件/SDK-IB 大工件上传开关 (默认 true; 关闭省上传耗时)
+#   standard_packages_branch   标准 packages feed 分支 (空 = 回退 targets.json 编排元数据)
+#   config_repo/ref            seed 来源仓库 (空 = caller 仓库 @ 触发 commit)
+#   clean_cache / free_disk_space / publish_sdk_ib / skip_feed_catchup
+#
+# 产物去向: 固件+软件包 → Release (matrix_release_repo/matrix_passwall_repo 指定时)
+#           SDK/IB → artifacts Release (matrix_artifacts_release_repo 指定时)
+#           兜底 CI artifact (7 天): 固件 tarball / 软件包 / build-info
+# 签名 secrets (可选): APK_BUILD_KEY (PEM ECDSA/RSA) / USIGN_KEY (usign 私钥)
+# 行为要点: 构建系统选项 (DEVEL/CCACHE/BUILD_LOG) 自动检测补齐, 无需写进 seed;
+#           feed 追平为纯远端对比 (不触发 CI); CRLF seed 自动转换并告警;
+#           Re-run with debug → RUNNER_DEBUG=1 → 构建加 V=s 实时输出
 name: Compile Firmware
 
 on:
@@ -41,7 +74,18 @@ on:
       config_ref:   { required: false, type: string, default: '' }
       config_path:  { required: false, type: string, default: 'openwrt-configs/immortalwrt' }
       # ── 全局上下文 ──
-      version:              { required: true, type: string }
+      # version 与 version_prefix 二选一: 显式 version 优先 (向后兼容);
+      # version 空 → 按 version_prefix 自动生成 <prefix><YYMMDD> (上海时区)。
+      # prefix 白名单 [A-Za-z0-9._-] (空 = 纯日期版本), 非法字符降级 'V'。
+      version:              { required: false, type: string, default: '' }
+      version_prefix:       { required: false, type: string, default: 'V' }
+      # ── 软件包打包 (release/passwall 工件与 Passwall Packages Release) ──
+      # 空格分隔包名; 空 = 默认单包 luci-app-passwall。前缀匹配覆盖子包与
+      # 变体 (ssr-local / geoip-full 等); 缺包仅告警不报错 (未启用/未编译)。
+      collect_packages:     { required: false, type: string, default: '' }
+      # ── 工件上传开关: 固件 tarball 与 SDK/IB 归档体积大 (上传下载耗时),
+      #    可关; published-state (状态回写依赖) 与 build-info 不受控 ──
+      upload_artifacts:     { required: false, type: boolean, default: true }
       clean_cache:          { required: false, type: boolean, default: false }
       free_disk_space:      { required: false, type: boolean, default: false }
       publish_sdk_ib:       { required: false, type: boolean, default: true }
@@ -103,7 +147,6 @@ jobs:
           [ -n "${{ inputs.matrix_repo }}" ] || fail "matrix_repo 为空"
           [ -n "${{ inputs.matrix_ref }}" ] || fail "matrix_ref 为空"
           [ -n "${{ inputs.matrix_packages_branch }}" ] || fail "matrix_packages_branch 为空"
-          [ -n "${{ inputs.version }}" ] || fail "version 为空"
 
           # ── 格式校验 ──
           validate_name "${{ inputs.matrix_target }}" "matrix_target"
@@ -148,6 +191,32 @@ jobs:
             echo "::error::参数校验失败 (${#ERRORS[@]} 项), 构建未开始即终止"
             exit 1
           fi
+
+          # ── 版本号解析: 显式 version 优先; 空则按 version_prefix 自动生成 ──
+          # version 进 release tag 与产物文件名, 白名单校验防注入;
+          # prefix 同规则 (空 = 纯日期版本), 非法降级默认 'V' 并告警。
+          VERSION_INPUT="${{ env.RESOLVED_VERSION }}"
+          VERSION_PREFIX="${{ inputs.version_prefix }}"
+          case "$VERSION_PREFIX" in
+            *[!A-Za-z0-9._-]*)
+              echo "::warning::version_prefix 含非法字符: '${VERSION_PREFIX}', 降级为默认 'V'"
+              VERSION_PREFIX="V"
+              ;;
+          esac
+          if [ -n "$VERSION_INPUT" ]; then
+            case "$VERSION_INPUT" in
+              *[!A-Za-z0-9._-]*)
+                echo "::error::version 含非法字符: '${VERSION_INPUT}'"
+                exit 1
+                ;;
+            esac
+            RESOLVED_VERSION="$VERSION_INPUT"
+            echo "ℹ️ 使用传入版本号: ${RESOLVED_VERSION}"
+          else
+            RESOLVED_VERSION="${VERSION_PREFIX}$(TZ=${{ env.TZ }} date +'%y%m%d')"
+            echo "ℹ️ version 未传入, 自动生成: ${RESOLVED_VERSION} (前缀 '${VERSION_PREFIX}')"
+          fi
+          echo "RESOLVED_VERSION=${RESOLVED_VERSION}" >> "$GITHUB_ENV"
           echo "✅ 参数校验通过"
 
       - name: Checkout defaults repo (AutoWorkflows)
@@ -489,6 +558,24 @@ jobs:
           done > .config
           sed -i 's/\r$//; s/\xef\xbb\xbf//g' .config
           echo "✅ 已生成 .config ($(wc -l < .config) 行)"
+
+          # ── 构建系统基础选项检测补齐 (不依赖 caller seed 声明) ──
+          # 逐项检测缺失才追加 (不重复追加已有项, 防 make 校验变严后重复定义报错);
+          # CONFIG_DEVEL=y 必须先于 CCACHE/BUILD_LOG (Kconfig "if DEVEL" 可见性,
+          # 缺 DEVEL 时 defconfig 会把后两者当未知符号丢弃)。
+          AUTO_FIXED=""
+          for OPT in CONFIG_DEVEL CONFIG_CCACHE CONFIG_BUILD_LOG; do
+            if ! grep -q "^${OPT}=y$" .config; then
+              printf '%s=y\n' "$OPT" >> .config
+              AUTO_FIXED="${AUTO_FIXED} ${OPT}=y"
+            fi
+          done
+          if [ -n "$AUTO_FIXED" ]; then
+            echo "::warning::seed 缺少构建系统基础选项, 已自动补齐:${AUTO_FIXED} (建议在 seed 中显式声明)"
+          else
+            echo "✅ 构建系统基础选项齐备 (DEVEL/CCACHE/BUILD_LOG)"
+          fi
+
           echo "📋 ======== 种子配置 (.config) ========"
           cat .config
           echo "🔧 运行 make defconfig (超时 5 分钟)..."
@@ -508,7 +595,7 @@ jobs:
           #         ② version.mk 首行字面量 (无 $ 表达式)
           #         ③ $(if ...,...,<fallback>) 的兜底字面量 (如 21.02-SNAPSHOT)
           #         ④ 兜底 SNAPSHOT
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ env.RESOLVED_VERSION }}"
           ORIG_VER=$(grep -m1 '^CONFIG_VERSION_NUMBER=' .config 2>/dev/null | cut -d'"' -f2 | tr -d '[:space:]' || true)
           if [ -z "$ORIG_VER" ]; then
             LITERAL=$(sed -n 's/^VERSION_NUMBER:=//p' include/version.mk | head -1 | tr -d '[:space:]')
@@ -860,9 +947,13 @@ jobs:
           MAKE_EXIT=1
           echo "make_exit=${MAKE_EXIT}" >> $GITHUB_OUTPUT
           START_TIME=$(date +%s)
+          # RUNNER_DEBUG=1 (Re-run with debug) 时加 V=s: 终端实时输出每条
+          # 编译命令 (logs/ 文件不受影响, BUILD_LOG=1 恒开), 便于交互式排查
+          DEBUG_VERBOSE=""
+          [ "${RUNNER_DEBUG:-0}" = "1" ] && DEBUG_VERBOSE="V=s"
           set +o pipefail
           # BUILD_LOG=1: 显式声明每包详细日志 (logs/<pkg>/*.txt), 不依赖 .config 的 CONFIG_BUILD_LOG
-          make BUILD_LOG=1 -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
+          make BUILD_LOG=1 ${DEBUG_VERBOSE} -j$(($(nproc) + 1)) -k 2>&1 | tee build.log
           MAKE_EXIT=${PIPESTATUS[0]}
           set -o pipefail
           END_TIME=$(date +%s)
@@ -948,8 +1039,6 @@ jobs:
       - name: 🔄 Rebuild on feed update
         if: success() && inputs.skip_feed_catchup != 'true'
         id: feed-rebuild
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           cd openwrt
@@ -959,45 +1048,12 @@ jobs:
           BEFORE_TREES=$(git -C "$FEED_DIR" ls-tree HEAD)
           echo "📌 构建时 feed 版本: ${BEFORE_SHA:0:7} (${FEED_BRANCH})"
 
-          # ── 触发 custom-feed 更新本分支 (非受管分支跳过触发, 仅做远端对比) ──
-          case "$FEED_BRANCH" in
-            main|qt6|mt798x|qualcommax)
-              BEFORE_TS=$(date +%s)
-              if ! gh workflow run custom-feed.yml \
-                  --repo "${{ github.repository }}" \
-                  --ref "${{ github.ref_name }}" \
-                  -f targets="${FEED_BRANCH}"; then
-                echo "::warning::触发 custom-feed 失败, 跳过追平重编"
-                exit 0
-              fi
-              # gh workflow run 不返回 run ID: 记录触发前时间戳再轮询 (同 plan 模式)
-              RUN_ID=""
-              for i in $(seq 1 10); do
-                if ! RUN_ID=$(gh run list --repo "${{ github.repository }}" --workflow custom-feed.yml --limit 20 \
-                  --json databaseId,createdAt,headBranch,event \
-                  --jq "[.[] | select((.createdAt | fromdateiso8601) >= ${BEFORE_TS} and .headBranch == \"${{ github.ref_name }}\" and .event == \"workflow_dispatch\")] | .[0].databaseId // empty"); then
-                  echo "::warning::查询 custom-feed run 失败, 跳过追平重编"
-                  exit 0
-                fi
-                [ -n "$RUN_ID" ] && break
-                sleep 3
-              done
-              if [ -z "$RUN_ID" ]; then
-                echo "::warning::30s 内未发现 custom-feed run, 跳过追平重编"
-                exit 0
-              fi
-              echo "⏳ 等待 custom-feed run ${RUN_ID} 完成..."
-              if ! timeout 2400 gh run watch "$RUN_ID" --repo "${{ github.repository }}" --interval 10 --exit-status; then
-                echo "::warning::custom-feed run 失败或超时, 跳过追平重编 (远端分支未变, 首轮产物仍有效)"
-                exit 0
-              fi
-              ;;
-            *)
-              echo "ℹ️ 分支 ${FEED_BRANCH} 非 custom-feed 受管分支, 仅做远端对比"
-              ;;
-          esac
-
-          # ── 对比远端分支 HEAD (同 plan 的 ls-remote 模式) ──
+          # ── 纯远端对比: 不触发 custom-feed CI (外部调用时 caller 仓库无该
+          #    workflow, gh workflow run 404 连远端对比都被跳过; 自身调用时
+          #    plan 已触发并等待 custom-feed 完成, 此处触发冗余)。feed 更新
+          #    由 AutoWorkFlows 侧维护 (cron custom-feed.yml), 本步骤只被动
+          #    检测远端变化并追平: ls-remote 对比 → fetch+reset → tree diff
+          #    → 变更包目录非空才原地重编 ──
           AFTER_SHA=$(git ls-remote "https://github.com/${{ inputs.packages_feed_repo }}.git" "${FEED_BRANCH}" 2>/dev/null | cut -f1 | head -1)
           if [ -z "$AFTER_SHA" ]; then
             echo "::warning::读取远端 feed 分支 HEAD 失败, 跳过追平重编"
@@ -1077,8 +1133,11 @@ jobs:
           cp build.log build.2.log || echo "⚠️ 备份 build.log 失败: $?"
           START_TIME=$(date +%s)
           REBUILD_EXIT=1
+          # RUNNER_DEBUG=1 (Re-run with debug) 时加 V=s (同主构建)
+          DEBUG_VERBOSE=""
+          [ "${RUNNER_DEBUG:-0}" = "1" ] && DEBUG_VERBOSE="V=s"
           set +o pipefail
-          make BUILD_LOG=1 -j$(nproc) -k package/compile package/install package/index 2>&1 | tee build.log
+          make BUILD_LOG=1 ${DEBUG_VERBOSE} -j$(nproc) -k package/compile package/install package/index 2>&1 | tee build.log
           REBUILD_EXIT=${PIPESTATUS[0]}
           set -o pipefail
           END_TIME=$(date +%s)
@@ -1689,13 +1748,27 @@ jobs:
             -not -name "*-imagebuilder-*" \
             -exec cp {} release/firmware/ \; 2>/dev/null || true
           mkdir -p release/passwall
-          find bin/packages \( -name "*passwall*.ipk" -o -name "*passwall*.apk" \) -exec cp {} release/passwall/ \; 2>/dev/null || true
-          DEPS=(chinadns-ng dns2socks geoview haproxy hysteria ipt2socks microsocks naiveproxy \
-                shadowsocks-rust-sslocal shadowsocksr-libev simple-obfs shadow-tls sing-box \
-                tcping tuic-client v2ray-geoip v2ray-geosite v2ray-plugin xray-core)
-          for dep in "${DEPS[@]}"; do
-            find bin/packages \( -name "*${dep}*.ipk" -o -name "*${dep}*.apk" \) -exec cp {} release/passwall/ \; 2>/dev/null || true
+          # ── 软件包打包: collect_packages 指定清单 (空 = 默认单包 luci-app-passwall) ──
+          # 前缀匹配 "<pkg>-*" / "<pkg>_*" 覆盖 apk/ipk 两种命名 (apk 无 arch 后缀,
+          # ipk 带 _arch), 天然覆盖子包与变体 (ssr-local / geoip-full 等);
+          # 缺包仅告警不报错 (包未被 seed 启用或产物名不匹配, 由调用方决定是否关注)。
+          COLLECT_PKGS="${{ inputs.collect_packages }}"
+          [ -n "$COLLECT_PKGS" ] || COLLECT_PKGS="luci-app-passwall"
+          echo "📦 软件包打包清单: ${COLLECT_PKGS}"
+          MISSING_PKGS=""
+          for pkg in $COLLECT_PKGS; do
+            FOUND=$(find bin/packages -type f \
+              \( -name "${pkg}-*.ipk" -o -name "${pkg}-*.apk" -o -name "${pkg}_*.ipk" -o -name "${pkg}_*.apk" \) \
+              2>/dev/null || true)
+            if [ -z "$FOUND" ]; then
+              MISSING_PKGS="${MISSING_PKGS} ${pkg}"
+              continue
+            fi
+            printf '%s\n' "$FOUND" | xargs -r -I{} cp {} release/passwall/
           done
+          if [ -n "$MISSING_PKGS" ]; then
+            echo "::warning::以下指定包未找到产物 (未启用/未编译/名字不匹配), 已跳过:${MISSING_PKGS}"
+          fi
           if [ -f public-key.pem ]; then
             cp public-key.pem release/passwall/solarflows-apk-public.pem
           elif [ -f key-build.pub ]; then
@@ -1723,9 +1796,9 @@ jobs:
         run: |
           set -euo pipefail
           PKG_FORMAT="${{ steps.apply_config.outputs.use_apk == 'true' && 'apk' || 'ipk' }}"
-          FIRMWARE_RELEASE_TAG="${{ inputs.version }}"
+          FIRMWARE_RELEASE_TAG="${{ env.RESOLVED_VERSION }}"
           if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
-            FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+            FIRMWARE_RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
           fi
 
           # ── 从编译产物 feeds.buildinfo 提取各 feed 版本 (恢复 v1 功能) ──
@@ -1747,7 +1820,8 @@ jobs:
                 printf "| [%s](%s/tree/%s) | `%s` |\n", $2, url, hash, hash
               }' "$FW_FEEDS_FILE")
               # 手动附加 solarflows 软件包行 (printf 生成真实换行, 避免 YAML 块多行字面量)
-              SOLARFLOWS_ROW="| [solarflows](${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}\` |"
+              # 绝对链接: 相对链接在 caller 仓库的 Release 页面会解析到错误路径 (404)
+              SOLARFLOWS_ROW="| [solarflows](https://github.com/${{ inputs.packages_feed_repo }}/tree/${{ inputs.matrix_packages_branch }}) | \`${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}\` |"
               if [ -n "$FEEDS_MD_RAW" ]; then
                 FEEDS_MD_RAW=$(printf '%s\n%s' "$FEEDS_MD_RAW" "$SOLARFLOWS_ROW")
               else
@@ -1944,7 +2018,9 @@ jobs:
           } > release-body.md
 
       - name: Upload firmware artifact
-        if: success()
+        # 固件 tarball 体积大 (300MB+), 上传下载耗时; 发布到 Release 成功时
+        # artifact 仅作兜底, 可经 upload_artifacts=false 关闭
+        if: success() && inputs.upload_artifacts
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-release
@@ -1976,9 +2052,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
-          RELEASE_TAG="${{ inputs.version }}"
+          RELEASE_TAG="${{ env.RESOLVED_VERSION }}"
           if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
-            RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ inputs.version }}"
+            RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
           fi
           RELEASE_REPO="${{ inputs.matrix_release_repo }}"
           FIRMWARE_DIR="openwrt/release/firmware"
@@ -2234,7 +2310,9 @@ jobs:
       # 降级为 CI artifact (retention 7 天) 供手动取回; sdk-index.json/ib-index.json
       # 不维护, compile-packages SDK 增量路径不可用。
       - name: Upload SDK/IB artifact
-        if: success() && inputs.publish_sdk_ib == true && (steps.sdk_ib.outputs.sdk_primary != '' || steps.sdk_ib.outputs.ib_primary != '')
+        # SDK/IB 归档体积大, release 目标未指定时才走 artifact (兜底取回),
+        # 可经 upload_artifacts=false 关闭
+        if: success() && inputs.upload_artifacts && inputs.publish_sdk_ib == true && (steps.sdk_ib.outputs.sdk_primary != '' || steps.sdk_ib.outputs.ib_primary != '')
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-sdk-ib-tarballs
