@@ -1,4 +1,4 @@
-﻿diff --git a/luci-app-dnsfilter/Makefile b/luci-app-dnsfilter/Makefile
+diff --git a/luci-app-dnsfilter/Makefile b/luci-app-dnsfilter/Makefile
 index 4080a42a4d..0ecec61413 100644
 --- a/luci-app-dnsfilter/Makefile
 +++ b/luci-app-dnsfilter/Makefile

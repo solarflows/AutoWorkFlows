@@ -1,4 +1,4 @@
-﻿diff --git a/smartdns/Makefile b/smartdns/Makefile
+diff --git a/smartdns/Makefile b/smartdns/Makefile
 index 4ce1c9c6e6..fd01457285 100644
 --- a/smartdns/Makefile
 +++ b/smartdns/Makefile

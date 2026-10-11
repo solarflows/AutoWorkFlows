@@ -1,4 +1,4 @@
-﻿diff --git a/tailscale/Makefile b/tailscale/Makefile
+diff --git a/tailscale/Makefile b/tailscale/Makefile
 index 9039a085..4411a953 100644
 --- a/tailscale/Makefile
 +++ b/tailscale/Makefile

@@ -1,4 +1,4 @@
-﻿diff --git a/net/frp/Makefile b/net/frp/Makefile
+diff --git a/net/frp/Makefile b/net/frp/Makefile
 index 19e1be4..d3f93cf 100644
 --- a/net/frp/Makefile
 +++ b/net/frp/Makefile

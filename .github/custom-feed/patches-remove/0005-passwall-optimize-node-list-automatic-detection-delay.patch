@@ -1,4 +1,4 @@
-﻿From 0e0d730938c1cd22251929509488f8ac76e1745f Mon Sep 17 00:00:00 2001
+From 0e0d730938c1cd22251929509488f8ac76e1745f Mon Sep 17 00:00:00 2001
 From: lwb1978 <86697442+lwb1978@users.noreply.github.com>
 Date: Sun, 13 Apr 2025 01:57:40 +0800
 Subject: [PATCH] luci: optimize node list automatic detection delay

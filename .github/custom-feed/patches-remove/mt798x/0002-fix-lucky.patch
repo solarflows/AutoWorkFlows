@@ -1,4 +1,4 @@
-﻿diff --git a/luci-app-lucky/Makefile b/luci-app-lucky/Makefile
+diff --git a/luci-app-lucky/Makefile b/luci-app-lucky/Makefile
 index 8ee4d30..c0bb4d7 100644
 --- a/luci-app-lucky/Makefile
 +++ b/luci-app-lucky/Makefile

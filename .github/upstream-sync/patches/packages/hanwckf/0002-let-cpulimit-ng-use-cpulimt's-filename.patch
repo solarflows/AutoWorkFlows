@@ -1,4 +1,4 @@
-﻿diff --git a/utils/cpulimit-ng/Makefile b/utils/cpulimit-ng/Makefile
+diff --git a/utils/cpulimit-ng/Makefile b/utils/cpulimit-ng/Makefile
 index ae1b27e..c236ef2 100644
 --- a/utils/cpulimit-ng/Makefile
 +++ b/utils/cpulimit-ng/Makefile

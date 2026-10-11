@@ -1,4 +1,4 @@
-﻿# 使用Ubuntu LTS基础镜像
+# 使用Ubuntu LTS基础镜像
 FROM ubuntu:22.04
 
 # 设置可配置参数

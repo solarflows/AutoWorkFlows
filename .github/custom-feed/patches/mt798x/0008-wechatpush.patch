@@ -1,4 +1,4 @@
-﻿diff --git a/luci-app-wechatpush/Makefile b/luci-app-wechatpush/Makefile
+diff --git a/luci-app-wechatpush/Makefile b/luci-app-wechatpush/Makefile
 index e9689eac..fc98f5e4 100755
 --- a/luci-app-wechatpush/Makefile
 +++ b/luci-app-wechatpush/Makefile

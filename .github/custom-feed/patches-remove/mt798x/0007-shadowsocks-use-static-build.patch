@@ -1,4 +1,4 @@
-﻿diff --git a/shadowsocks-rust/Makefile b/shadowsocks-rust/Makefile
+diff --git a/shadowsocks-rust/Makefile b/shadowsocks-rust/Makefile
 index 212a716..7a2d5d4 100644
 --- a/shadowsocks-rust/Makefile
 +++ b/shadowsocks-rust/Makefile

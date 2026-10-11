@@ -1,4 +1,4 @@
-﻿diff --git a/themes/luci-theme-bootstrap-mod/Makefile b/themes/luci-theme-bootstrap-mod/Makefile
+diff --git a/themes/luci-theme-bootstrap-mod/Makefile b/themes/luci-theme-bootstrap-mod/Makefile
 index 3920bcb..00997f5 100644
 --- a/themes/luci-theme-bootstrap-mod/Makefile
 +++ b/themes/luci-theme-bootstrap-mod/Makefile

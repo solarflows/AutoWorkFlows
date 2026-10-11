@@ -1,4 +1,4 @@
-﻿# ImmortalWrt Builder — 配置说明
+# ImmortalWrt Builder — 配置说明
 
 本目录下的 `targets.json` 是 `firmware-build-unified.yml` 工作流（及一组 reusable workflow）的 **target 控制文件**。
 

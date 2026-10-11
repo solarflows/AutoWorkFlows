@@ -1,4 +1,4 @@
-﻿diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
+diff --git a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
 index 9937c496..66ce3dee 100644
 --- a/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua
 +++ b/luci-app-passwall/root/usr/share/passwall/helper_smartdns_add.lua

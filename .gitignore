@@ -1,5 +1,4 @@
-﻿# BOM/encoding — seed files must be LF, no BOM
-*.seed text eol=lf working-tree-encoding=UTF-8
+# seed 文件 LF/编码规则已移至 .gitattributes (gitignore 不支持属性语法, 原行无效)
 
 # Build artifacts
 *.log

@@ -1,4 +1,4 @@
-﻿diff --git a/modules/luci-mod-dashboard/htdocs/luci-static/resources/view/dashboard/include/30_wifi.js b/modules/luci-mod-dashboard/htdocs/luci-static/resources/view/dashboard/include/30_wifi.js
+diff --git a/modules/luci-mod-dashboard/htdocs/luci-static/resources/view/dashboard/include/30_wifi.js b/modules/luci-mod-dashboard/htdocs/luci-static/resources/view/dashboard/include/30_wifi.js
 index f48622f..982a998 100644
 --- a/modules/luci-mod-dashboard/htdocs/luci-static/resources/view/dashboard/include/30_wifi.js
 +++ b/modules/luci-mod-dashboard/htdocs/luci-static/resources/view/dashboard/include/30_wifi.js

@@ -1,4 +1,4 @@
-﻿diff --git a/cdnspeedtest/Makefile b/cdnspeedtest/Makefile
+diff --git a/cdnspeedtest/Makefile b/cdnspeedtest/Makefile
 index 7313805..48761be 100644
 --- a/cdnspeedtest/Makefile
 +++ b/cdnspeedtest/Makefile
