@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 */12 * * *'  # 每12小时运行一次
   push:
+    # 仅 main: 支撑类 workflow 在触发分支上运行并可能推送 (custom-feed 会把
+    # 分支状态推到真实 feed 仓库); 无限定时任何分支 push (含 dependabot 分支)
+    # 都会误触发 (run 38104921900: dependabot 分支上跑失败; geodata-updater
+    # 同理把杂散提交推进 PR 分支)
+    branches: [main]
     paths:
       - '.github/workflows/custom-feed.yml'
       - '.github/custom-feed/**'

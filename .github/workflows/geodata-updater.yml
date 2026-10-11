@@ -11,6 +11,10 @@ on:
   schedule:
     - cron: '6 6 * * 6'
   push:
+    # 仅 main: updater 推送目标 = GITHUB_REF_NAME (运行分支), 无限定时任何
+    # 分支 push (含 dependabot 分支) 都会触发并把杂散提交推进 PR 分支
+    # (run 38104921888: dependabot 分支上跑成功, geodata 提交 3a010d8a 混入 PR #1)
+    branches: [main]
     paths:
       - '.github/workflows/geodata-updater.yml'
       - '.github/custom-feed/overlay/global/v2ray-geodata/Makefile'

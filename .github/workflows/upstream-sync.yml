@@ -12,6 +12,9 @@ on:
   schedule:
     - cron: '0 */12 * * *'  # 每12小时运行一次
   push:
+      # 仅 main: 支撑类 workflow 不应在 feature/dependabot 分支上运行
+      # (run 38104921930: dependabot 分支 push 误触发后失败)
+      branches: [main]
       paths:
         - '.github/workflows/upstream-sync.yml'
         - '.github/upstream-sync/**'
