@@ -22,7 +22,7 @@
 #   version / version_prefix   版本号二选一: 显式 version 优先; 空 = <prefix><YYMMDD> (prefix 默认 V)
 #   matrix_release_repo        固件 Release 目标 (空 = 不发布, 产物仅 CI artifact)
 #   matrix_passwall_repo/tag   软件包 Release 目标 (空 = 不发布)
-#   collect_packages           软件包打包清单 (空格分隔; 空 = 默认单包 luci-app-passwall; 缺包仅告警)
+#   collect_packages           软件包打包清单 (逗号分隔; 空 = 默认单包 luci-app-passwall; 缺包仅告警)
 #   upload_artifacts           固件/SDK-IB 大工件上传开关 (默认 true; 关闭省上传耗时)
 #   standard_packages_branch   标准 packages feed 分支 (空 = 回退 targets.json 编排元数据)
 #   config_repo/ref            seed 来源仓库 (空 = caller 仓库 @ 触发 commit)
@@ -80,7 +80,7 @@ on:
       version:              { required: false, type: string, default: '' }
       version_prefix:       { required: false, type: string, default: 'V' }
       # ── 软件包打包 (release/passwall 工件与 Passwall Packages Release) ──
-      # 空格分隔包名; 空 = 默认单包 luci-app-passwall。前缀匹配覆盖子包与
+      # 逗号分隔包名; 空 = 默认单包 luci-app-passwall。前缀匹配覆盖子包与
       # 变体 (ssr-local / geoip-full 等); 缺包仅告警不报错 (未启用/未编译)。
       collect_packages:     { required: false, type: string, default: '' }
       # ── 工件上传开关: 固件 tarball 与 SDK/IB 归档体积大 (上传下载耗时),
@@ -162,6 +162,15 @@ jobs:
           case "${{ inputs.config_path }}" in
             /*|*..*) fail "config_path 非法: '${{ inputs.config_path }}' (禁止绝对路径与 ..)" ;;
           esac
+          # collect_packages: 逗号分隔包名, 逐 token 白名单 (拦拼错/夹带 shell 元字符)
+          COLLECT_INPUT="${{ inputs.collect_packages }}"
+          if [ -n "$COLLECT_INPUT" ]; then
+            for token in $(printf '%s' "$COLLECT_INPUT" | tr ',' ' '); do
+              case "$token" in
+                ''|*[!A-Za-z0-9+._-]*) fail "collect_packages 含非法包名: '${token}' (逗号分隔, 包名字符集 [A-Za-z0-9+._-])" ;;
+              esac
+            done
+          fi
           KEEP_V="${{ inputs.matrix_artifacts_keep_versions }}"
           case "$KEEP_V" in
             ''|*[!0-9]*) fail "matrix_artifacts_keep_versions 非数字: '${KEEP_V}'" ;;
@@ -1748,11 +1757,12 @@ jobs:
             -not -name "*-imagebuilder-*" \
             -exec cp {} release/firmware/ \; 2>/dev/null || true
           mkdir -p release/passwall
-          # ── 软件包打包: collect_packages 指定清单 (空 = 默认单包 luci-app-passwall) ──
+          # ── 软件包打包: collect_packages 指定清单 (逗号分隔; 空 = 默认单包 luci-app-passwall) ──
+          # 逗号归一为空格 + xargs 折叠多余空白 (容忍 "a, b , c" 混合写法);
           # 前缀匹配 "<pkg>-*" / "<pkg>_*" 覆盖 apk/ipk 两种命名 (apk 无 arch 后缀,
           # ipk 带 _arch), 天然覆盖子包与变体 (ssr-local / geoip-full 等);
           # 缺包仅告警不报错 (包未被 seed 启用或产物名不匹配, 由调用方决定是否关注)。
-          COLLECT_PKGS="${{ inputs.collect_packages }}"
+          COLLECT_PKGS=$(printf '%s' "${{ inputs.collect_packages }}" | tr ',' ' ' | xargs)
           [ -n "$COLLECT_PKGS" ] || COLLECT_PKGS="luci-app-passwall"
           echo "📦 软件包打包清单: ${COLLECT_PKGS}"
           MISSING_PKGS=""

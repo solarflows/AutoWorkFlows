@@ -84,6 +84,7 @@ target 可在 `targets.json` 中用同名 key 覆盖其中任意一项（如 `ar
 | `firmware_release_tag_prefix` | `""` | 固件 Release tag 前缀；用于同一仓库内按 target 隔离固件 Release |
 | `passwall_repo` | `${{ env.PACKAGES_FEED_REPO }}` | Passwall 包发布到的仓库（默认复用软件包仓库） |
 | `passwall_tag` | `"packages"` | Passwall 固定 Release 的 Tag 名。同名文件替换，不同名文件保留 |
+| `collect_packages` | `luci-app-passwall` | 软件包打包清单（**逗号分隔**包名，经 `collect_packages` input 下传 executor）；空 = 默认单包。前缀匹配覆盖子包与变体（`shadowsocksr-libev` 带上 `ssr-local` 等），缺包仅告警不报错 |
 
 > **签名机制自动探测**：包格式（APK vs IPK）与签名方式不再由 target 静态配置，而是从实际构建配置自动判断。全量构建读取 `.config` 的 `CONFIG_USE_APK`，SDK 增量构建读取 SDK 的 `Config-build.in`。APK 使用 `APK_BUILD_KEY`（PEM），IPK 使用 `USIGN_KEY`（usign 私钥）。
 
