@@ -4,6 +4,14 @@
 # compile-packages.yml (SDK-only 或 SDK 编译 + IB 重打包).
 # 默认值统一在本文件 env + 各 reusable workflow 的 inputs.default 中定义;
 # targets.json 仅保存每个 target 的差异化配置.
+#
+# ⛔ 已停用 (2026-10-11): 构建职责已下放至各固件仓库, 由其直接调用
+# compile-firmware.yml / compile-packages.yml (reusable)。本仓库不再运行
+# 构建编排 (平台层 gh workflow disable, schedule 与 dispatch 均不触发),
+# 仅保留本文件供 validate-workflows.py 语法与语义回归检查。
+# 支撑链不受影响: custom-feed / upstream-sync / geodata-updater 均有独立
+# cron, 继续为外部 caller 维护 feed 与 fork。
+# 恢复方式: gh workflow enable firmware-build-unified.yml --repo <repo>
 # ════════════════════════════════════════════════════════════════════════
 name: ImmortalWrt Builder - Unified SDK Firmware
 
