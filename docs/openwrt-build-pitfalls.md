@@ -651,3 +651,29 @@ jq 对**多行 filter 字面量**（`'{a:$x,\n b:$y}'`）会**保留换行形态
 ### Diagnostic Notes
 
 排障时日志里 `##[group]Run ...` 段显示的脚本原文正常、`set +e` 吞掉落盘 jq 的成功状态、错误在**下一个 step** 才爆发——三重延迟让人误以为读取端有问题。本地装 jq（`winget install jqlang.jq`）跑同款命令是最快复现路径。
+
+## GCC 版本串含 $(REVISION) 导致 ccache 命中率崩塌
+
+### Symptom
+
+toolchain 冷重编（快照被配额驱逐或 tools/toolchain 变更）后的那次 run，目标代码 ccache 命中率显著劣化；SDK 路径与全量路径的共享条目互相 miss。累计 stats（无 `ccache -z`）会掩盖单 run 劣化幅度。
+
+### Verified Root Cause
+
+`toolchain/gcc/common.mk` 的 `PKGVERSION=OpenWrt GCC $(PKG_VERSION) $(REVISION)` 把**整仓 HEAD** 写进 GCC 版本串，进入每个目标文件的 `.comment` 段与内核 `CONFIG_CC_VERSION_TEXT`。上游同步推进 REVISION 后，任何一次 GCC 重编（触发源与 REVISION 无关：配额驱逐、tools/ 变更）产出的编译器都与旧条目不匹配，ccache 编译器 hash 全量失效。
+
+证据链（run 37561912572, 2026-10-07, ipq807x）：
+
+- `Restore toolchain cache`：`Cache not found for input keys: immwrt-v2-toolchain-ipq807x-d9b5507b..., immwrt-v2-toolchain-ipq807x-`（prefix 也 miss，10-03 的 `3e580c88` 快照已被配额驱逐）
+- `make[3] -C toolchain/gcc/initial compile`、`make[3] -C toolchain/gcc/final compile`（GCC 冷重编，嵌入当次 REVISION）
+- 两次构建的 `tools/`+`toolchain/` tree hash 比对：`toolchain` 子树相同、`tools` 子树不同（`b437e5f3` → `f117a7c3`），即重编由 tools 侧变更+驱逐共同触发，与 REVISION 无因果
+
+注意：OpenWrt `rules.mk` 只设 `CCACHE_NOCOMPRESS/CCACHE_BASEDIR/CCACHE_DIR`，不设 `compiler_check`，ccache 默认按编译器 **mtime** 计算 hash——即使版本串修复，重编产出的相同内容 GCC 仍会 miss，需配套 `compiler_check=content` 才能跨重编保住命中率。
+
+### Fix (mt798x 已落地)
+
+上游修复 openwrt/openwrt f866c69e9b98（PR #25362）：版本串改为 `toolchain/` 全目录内容 hash（惰性求值，首次展开时 `$(MKHASH)` 已由 tools 阶段构建），仅 toolchain 真实变更时才改变。适配 21.02 血统后直接提交到 `solarflows/immortalwrt-mt798x@test`（commit ddfd4618，该 fork 不在 upstream-sync 管辖）。QualcommAX 由用户手动处理。
+
+### Verification
+
+下次 mt798x 构建：`staging_dir/toolchain-*/bin/*-gcc --version` 应显示 `toolchain-<10位hash>` 而非 git revision；toolchain 缓存 key 因 `toolchain/` tree 变化而一次性更换（预期内的一次重编）；此后同步推进 REVISION 不再影响编译器身份。`compiler_check=content` 尚未落地（编译 CI 当前禁用），落地前跨重编命中率收益不完整。
