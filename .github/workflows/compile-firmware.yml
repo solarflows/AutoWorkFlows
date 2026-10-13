@@ -90,6 +90,9 @@ on:
       # hostpkg 快照是否包含 build_dir 门禁 stamp (rust/golang host-compile
       # 缓存闭环的必要组成; 关闭 = 退回纯 staging 快照, host 自举每轮重编)
       hostpkg_stamp_cache:  { required: false, type: boolean, default: true }
+      # Summary 详细程度: auto = 外部 caller 完整 / 自身仓库调用 (编排方有
+      # plan 上下文) 简洁; full/compact 显式覆盖。采集失败一律降级不阻断构建。
+      summary_mode:         { required: false, type: string, default: 'auto' }
       free_disk_space:      { required: false, type: boolean, default: false }
       publish_sdk_ib:       { required: false, type: boolean, default: true }
       # 跳过编译后约 custom-feed 追平重编 (与 unified 的 skip_upstream 语义对齐)
@@ -260,6 +263,30 @@ jobs:
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
           fi
+          # ── Summary 模式判定: 外部 caller 直调 = full (run 页无 plan 上下文,
+          #     executor summary 是唯一报告); 自身仓库调用 (编排方 summary 已有
+          #     触发/目标/版本/路由决策) = compact 去重。显式 full/compact 覆盖。
+          #     非法值降级 auto 并告警 (不阻断: summary 是增强功能)。
+          SUMMARY_COMPACT=false
+          case "${{ inputs.summary_mode }}" in
+            full) ;;
+            compact) SUMMARY_COMPACT=true ;;
+            auto|'')
+              if [ "${{ github.repository }}" = "solarflows/AutoWorkflows" ]; then
+                SUMMARY_COMPACT=true
+              fi
+              ;;
+            *)
+              echo "::warning::summary_mode 非法: '${{ inputs.summary_mode }}' (auto/full/compact), 降级 auto"
+              if [ "${{ github.repository }}" = "solarflows/AutoWorkflows" ]; then
+                SUMMARY_COMPACT=true
+              fi
+              ;;
+          esac
+          echo "summary_compact=${SUMMARY_COMPACT}" >> "$GITHUB_OUTPUT"
+          echo "SUMMARY_COMPACT=${SUMMARY_COMPACT}" >> "$GITHUB_ENV"
+          echo "ℹ️ Summary 模式: ${SUMMARY_COMPACT} (mode=${{ inputs.summary_mode }}, caller=${{ github.repository }})"
+
           echo "✅ 参数校验通过"
 
       - name: Checkout defaults repo (AutoWorkflows)
@@ -1238,14 +1265,16 @@ jobs:
           END_TIME=$(date +%s)
           echo "rebuild_duration=$((END_TIME - START_TIME))" >> "$GITHUB_OUTPUT"
           echo "⏱️ 追平重编耗时: $((END_TIME - START_TIME))s"
-          {
-            echo ""
-            echo "### 🔄 Feed 追平重编"
-            echo ""
-            echo "- **feed**: \`${FEED_BRANCH}\` ${BEFORE_SHA:0:7} → ${NEW_SHA:0:7}"
-            echo "- **变更目录**: $(printf '%s ' $CHANGED_DIRS)"
-            echo "- **耗时**: $((END_TIME - START_TIME))s"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${SUMMARY_COMPACT:-false}" != "true" ]; then
+            {
+              echo ""
+              echo "### 🔄 Feed 追平重编"
+              echo ""
+              echo "- **feed**: \`${FEED_BRANCH}\` ${BEFORE_SHA:0:7} → ${NEW_SHA:0:7}"
+              echo "- **变更目录**: $(printf '%s ' $CHANGED_DIRS)"
+              echo "- **耗时**: $((END_TIME - START_TIME))s"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "$REBUILD_EXIT" -ne 0 ]; then
             echo "::error::feed 追平重编失败 (bin/ 已混入新旧产物, 不可发布), 请查看 build.log 与 logs/"
             exit 1
@@ -1286,16 +1315,18 @@ jobs:
           DELTA_3_4=$((D4_USED - D3_USED))
           fmt_delta() { local d=$1; if [ "$d" -ge 0 ]; then echo "+${d}G"; else echo "${d}G"; fi; }
 
-          {
-            echo ""
-            echo "### 💽 磁盘空间变化"
-            echo "| 阶段 | 总容量 | 已用 | 已用% | 阶段消耗 |"
-            echo "|------|--------|------|-------|----------|"
-            echo "| ① 初始 | ${TOTAL_GB}G | ${D1_USED}G | ${{ steps.disk-1.outputs.used_pct || 'N/A' }}% | — |"
-            echo "| ② 环境准备后 | ${TOTAL_GB}G | ${D2_USED}G | ${{ steps.disk-2.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_1_2) |"
-            echo "| ③ 编译前 | ${TOTAL_GB}G | ${D3_USED}G | ${{ steps.disk-3.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_2_3) |"
-            echo "| ④ 编译后 | ${TOTAL_GB}G | ${D4_USED}G | ${USED_PCT}% | $(fmt_delta $DELTA_3_4) |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${SUMMARY_COMPACT:-false}" != "true" ]; then
+            {
+              echo ""
+              echo "### 💽 磁盘空间变化"
+              echo "| 阶段 | 总容量 | 已用 | 已用% | 阶段消耗 |"
+              echo "|------|--------|------|-------|----------|"
+              echo "| ① 初始 | ${TOTAL_GB}G | ${D1_USED}G | ${{ steps.disk-1.outputs.used_pct || 'N/A' }}% | — |"
+              echo "| ② 环境准备后 | ${TOTAL_GB}G | ${D2_USED}G | ${{ steps.disk-2.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_1_2) |"
+              echo "| ③ 编译前 | ${TOTAL_GB}G | ${D3_USED}G | ${{ steps.disk-3.outputs.used_pct || 'N/A' }}% | $(fmt_delta $DELTA_2_3) |"
+              echo "| ④ 编译后 | ${TOTAL_GB}G | ${D4_USED}G | ${USED_PCT}% | $(fmt_delta $DELTA_3_4) |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # ───────── 总耗时汇总 ─────────
       - name: ⏱️ Total Build Duration
@@ -1309,6 +1340,34 @@ jobs:
           echo "duration=${TOTAL_SEC}" >> $GITHUB_OUTPUT
           echo "duration_fmt=$(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60)))" >> $GITHUB_OUTPUT
           echo "⏱️ 总编译耗时: $(printf '%dh %dm %ds' $((TOTAL_SEC/3600)) $(((TOTAL_SEC%3600)/60)) $((TOTAL_SEC%60))) (并行 ${BUILD_DUR}s + 重试 ${RETRY_DUR}s + 追平重编 ${REBUILD_DUR}s)"
+
+      # ───────── 构建概览 (外部 caller 视角的 summary 头块) ─────────
+      # 刻意设计: summary 采集是增强功能, continue-on-error + 块内降级,
+      # 任何采集失败只 warning 不阻断构建 (数据源均为 inputs/outputs, 失败
+      # 面极小; duration 缺失显示 N/A)。compact 模式同样输出 (核心块)。
+      - name: 🏗️ Build Overview
+        id: build-overview
+        if: always() && !cancelled()
+        continue-on-error: true
+        run: |
+          CONFIG_REPO="${{ inputs.config_repo || github.repository }}"
+          CONFIG_REF="${{ inputs.config_repo == '' && github.sha || inputs.config_ref }}"
+          [ -n "$CONFIG_REF" ] || CONFIG_REF="(default branch)"
+          DURATION_FMT="${{ steps.total_duration.outputs.duration_fmt || 'N/A' }}"
+          {
+            echo ""
+            echo "## 🏗️ ${IMMWRT_TARGET} 构建概览"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 构建模式 | 🔨 全量固件编译 |"
+            echo "| 版本 | \`${{ env.RESOLVED_VERSION }}\` |"
+            echo "| 源码 | [\`$(echo '${{ steps.clone_packages.outputs.sha_full }}' | cut -c1-8)\`](https://github.com/${{ inputs.matrix_repo }}/commit/${{ steps.clone_packages.outputs.sha_full }}) @ ${{ inputs.matrix_ref }} |"
+            echo "| 配置来源 | \`${CONFIG_REPO}\` @ \`${CONFIG_REF}\` (\`${{ inputs.config_path }}\`) |"
+            echo "| 标准包 feed | [\`${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}\`](https://github.com/${{ inputs.standard_packages_repo }}/tree/${{ inputs.standard_packages_branch }}) |"
+            echo "| 编译耗时 | ${DURATION_FMT} |"
+            echo "| 触发 | [\`${{ github.repository }}\`](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) (\`${{ github.event_name }}\`) |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # ───────── 编译日志统计（仅成功时运行）─────────
       # 刻意设计: 统计工具是必要的分析手段(v1 遗产), 统计每个包的编译耗时,
@@ -1341,22 +1400,27 @@ jobs:
 
           # 按真实墙钟 ($4, time.pl 第 4 字段) 降序 Top 10; $2/$3 是 User/Sys
           # CPU 核时 (旧代码 real=$2 实为 User CPU, 多核编译下严重失真)。
-          # 同名 target 多条记录按列分别累加。
-          # Summary 只保留 Top 10
-          {
-            echo ""
-            echo "### 📊 编译耗时 Top 10 (按真实墙钟排序)"
-            echo '```text'
-            printf "%-12s  %-12s  %-12s  %s\n" "Real(墙钟)" "User CPU" "Sys CPU" "Target"
-            awk -F'#' '{
-              t = $1; sub(/^time: /, "", t);
-              user[t] += $2; sys[t] += $3; real[t] += $4;
-            } END {
-              for (t in real)
-                printf "%10.2fs  %10.2fs  %10.2fs  %s\n", real[t], user[t], sys[t], t
-            }' build_time_clean.log 2>/dev/null | sort -rn 2>/dev/null | head -10 || true
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # 同名 target 多条记录按列分别累加。终端恒输出; compact 模式跳过
+          # summary 写入 (编排方 summary 不重复耗时细节)。
+          TOP10=$(awk -F'#' '{
+            t = $1; sub(/^time: /, "", t);
+            user[t] += $2; sys[t] += $3; real[t] += $4;
+          } END {
+            for (t in real)
+              printf "%10.2fs  %10.2fs  %10.2fs  %s\n", real[t], user[t], sys[t], t
+          }' build_time_clean.log 2>/dev/null | sort -rn 2>/dev/null | head -10 || true)
+          printf "%-12s  %-12s  %-12s  %s\n" "Real(墙钟)" "User CPU" "Sys CPU" "Target"
+          echo "$TOP10"
+          if [ "${SUMMARY_COMPACT:-false}" != "true" ]; then
+            {
+              echo ""
+              echo "### 📊 编译耗时 Top 10 (按真实墙钟排序)"
+              echo '```text'
+              printf "%-12s  %-12s  %-12s  %s\n" "Real(墙钟)" "User CPU" "Sys CPU" "Target"
+              echo "$TOP10"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # ───────── ccache 统计与清理（独立步骤，不受构建成败影响）─────────
       # 刻意设计: ccache 命中率/压缩比是判断"缓存是否有效"的关键指标
@@ -1424,14 +1488,22 @@ jobs:
             # ── Summary ──
             TC_HIT_LABEL=$([ "${{ steps.cache-refresh.outputs.toolchain_restored || 'false' }}" = "true" ] && echo "✅ 命中" || echo "🔨 重编")
             TC_DISK=$(du -sh openwrt/staging_dir 2>/dev/null | cut -f1 || echo "N/A")
-            {
-              echo ""
-              echo "### 📈 ccache 统计"
-              echo "| 项 | 命中率 | Direct hits | Preprocessed | Misses | 缓存大小 | 压缩后 |"
-              echo "|---|---|---|---|---|---|---|"
-              echo "| **ccache** | ${HIT_RATE} | ${HITS_DIRECT} | ${HITS_PREP} | ${MISSES} | ${CACHE_SIZE_LABEL} | ~${CC_ZSTD_HUMAN} |"
-              echo "| **工具链** | — | ${TC_HIT_LABEL} | — | — | ${TC_DISK} | — |"
-            } | tee -a "$GITHUB_STEP_SUMMARY"
+            HP_RESTORE_STATE="${{ steps.cache-hostpkg-restore.outcome || 'skipped' }}"
+            [ "$HP_RESTORE_STATE" = "success" ] || HP_RESTORE_STATE="跳过/失败"
+            [ "${{ steps.cache-hostpkg-restore.outputs.cache-hit || 'false' }}" = "true" ] && HP_RESTORE_STATE="${HP_RESTORE_STATE} (exact hit)"
+            HP_SAVE_STATE=$([ "${{ steps.cache-sdk-hostpkg-save.outcome || 'skipped' }}" = "success" ] && echo "✅ 已保存" || echo "未保存")
+            echo "📈 hostpkg 快照: 恢复 ${HP_RESTORE_STATE}, 保存 ${HP_SAVE_STATE}"
+            if [ "${SUMMARY_COMPACT:-false}" != "true" ]; then
+              {
+                echo ""
+                echo "### 📈 ccache 统计"
+                echo "| 项 | 命中率 | Direct hits | Preprocessed | Misses | 缓存大小 | 压缩后 |"
+                echo "|---|---|---|---|---|---|---|"
+                echo "| **ccache** | ${HIT_RATE} | ${HITS_DIRECT} | ${HITS_PREP} | ${MISSES} | ${CACHE_SIZE_LABEL} | ~${CC_ZSTD_HUMAN} |"
+                echo "| **工具链** | — | ${TC_HIT_LABEL} | — | — | ${TC_DISK} | — |"
+                echo "| **hostpkg (rust/go)** | — | 恢复: ${HP_RESTORE_STATE} | — | — | 保存: ${HP_SAVE_STATE} | — |"
+              } | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
             if [ "$CCACHE_STATS_AVAILABLE" = false ]; then
               echo "::warning title=ccache statistics::无法从 ccache -s 解析编译统计，Summary 已显示 N/A"
               printf '%s\n' '- ccache 统计输出缺少可识别的命中/未命中字段，Summary 使用 `N/A`。' >> .ci-annotations.md
@@ -1450,7 +1522,6 @@ jobs:
       - name: 🔍 Build Error Diagnostics
         if: failure()
         run: |
-          echo "> 👈 触发/目标/版本等整体计划见 **Plan job Summary**" >> "$GITHUB_STEP_SUMMARY"
           cd openwrt
           FAILED_PKGS=""
           PKG_COUNT=0
@@ -1605,17 +1676,26 @@ jobs:
             echo "> 📎 初始构建日志（更新仓库前）已保存至 artifact: \`build.1.log\`" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "### 📋 logs/ 概览" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          TOTAL_COMPILE=$(find logs logs.1 -name 'compile.txt' -type f 2>/dev/null | wc -l)
-          TOTAL_DOWNLOAD=$(find logs logs.1 -name 'download.txt' -type f 2>/dev/null | wc -l)
-          EMPTY_COMPILE=$(find logs logs.1 -name 'compile.txt' -type f -size 0 2>/dev/null | wc -l)
-          EMPTY_DOWNLOAD=$(find logs logs.1 -name 'download.txt' -type f -size 0 2>/dev/null | wc -l)
-          echo "编译日志: ${TOTAL_COMPILE} (空: ${EMPTY_COMPILE})"
-          echo "下载日志: ${TOTAL_DOWNLOAD} (空: ${EMPTY_DOWNLOAD})"
-          echo "失败包:   ${PKG_COUNT}"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # ── 求助指引: 外部 caller 不一定知道日志 artifact 与反馈渠道 ──
+          {
+            echo ""
+            echo "> 📎 完整构建日志 (logs/ 与 logs.1/ 分包日志): 本 run 页面 **Artifacts** 区 \`${IMMWRT_TARGET}-build-log\`"
+            echo "> 🐛 构建基础设施问题反馈: [solarflows/AutoWorkflows](https://github.com/solarflows/AutoWorkflows/issues)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${SUMMARY_COMPACT:-false}" != "true" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### 📋 logs/ 概览" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            TOTAL_COMPILE=$(find logs logs.1 -name 'compile.txt' -type f 2>/dev/null | wc -l)
+            TOTAL_DOWNLOAD=$(find logs logs.1 -name 'download.txt' -type f 2>/dev/null | wc -l)
+            EMPTY_COMPILE=$(find logs logs.1 -name 'compile.txt' -type f -size 0 2>/dev/null | wc -l)
+            EMPTY_DOWNLOAD=$(find logs logs.1 -name 'download.txt' -type f -size 0 2>/dev/null | wc -l)
+            echo "编译日志: ${TOTAL_COMPILE} (空: ${EMPTY_COMPILE})"
+            echo "下载日志: ${TOTAL_DOWNLOAD} (空: ${EMPTY_DOWNLOAD})"
+            echo "失败包:   ${PKG_COUNT}"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload build log on failure
         if: failure()
@@ -2740,6 +2820,63 @@ jobs:
           name: ${{ env.IMMWRT_TARGET }}-published-state
           path: build-info.json
           retention-days: 7
+
+      # ───────── 产物与去向 (外部 caller 视角: 产物在哪、怎么下载核验) ─────────
+      # 刻意设计: summary 采集是增强功能, continue-on-error + gh 查询失败降级
+      # 文案, 绝不阻断构建。发布状态以远端 Release 实际查询为准 (发布步骤
+      # 成功与否的权威视图), 查询失败显示「状态未知」并 warning。
+      - name: 📦 Deliverables
+        id: deliverables
+        if: always() && !cancelled()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          release_line() {
+            local repo="$1" tag="$2" label="$3"
+            [ -n "$repo" ] || return 0
+            local json url assets
+            if json=$(gh release view "$tag" --repo "$repo" --json url,assets 2>/dev/null); then
+              url=$(printf '%s' "$json" | jq -r '.url // empty')
+              assets=$(printf '%s' "$json" | jq -r '.assets | length')
+              echo "| ${label} | [${tag}](${url}) (${assets} 个资产) |"
+            else
+              echo "::warning title=deliverables::查询 ${label} Release 失败 (${repo}@${tag}), 显示状态未知"
+              echo "| ${label} | 状态未知 (\`${repo}\` @ \`${tag}\`) |"
+            fi
+          }
+
+          FIRMWARE_TAG="${{ env.RESOLVED_VERSION }}"
+          [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ] && FIRMWARE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
+          SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
+
+          {
+            echo ""
+            echo "## 📦 产物与去向"
+            echo ""
+            echo "| 产物 | 去向 |"
+            echo "|---|---|"
+            release_line "${{ inputs.matrix_release_repo }}" "$FIRMWARE_TAG" "固件 Release"
+            release_line "${{ inputs.matrix_passwall_repo }}" "${{ inputs.matrix_passwall_tag }}" "Passwall 包 Release"
+            release_line "${{ inputs.matrix_artifacts_release_repo }}" "${{ inputs.matrix_artifacts_release_tag }}" "SDK / IB Release"
+            if [ -z "${{ inputs.matrix_release_repo }}" ]; then
+              echo "| 固件 | 仅 CI artifact \`${IMMWRT_TARGET}-release\` (7 天, 未配置 release 目标) |"
+            fi
+            echo "| 构建元数据 | \`${IMMWRT_TARGET}-published-state\` artifact + Release 附带 \`build-info.json\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ── 下载/核验指引 (发布成功才有核验对象) ──
+          if [ -n "${{ inputs.matrix_release_repo }}" ] && gh release view "$FIRMWARE_TAG" --repo "${{ inputs.matrix_release_repo }}" >/dev/null 2>&1; then
+            {
+              echo ""
+              echo "> 🔽 固件下载: 上表固件 Release 页资产; 校验: 同目录 \`sha256sums\`"
+              if [ "$SIGN_MODE" = "usign" ]; then
+                echo "> 🔐 签名核验: \`usign -V -P solarflows-usign-public.pub -m sha256sums\` (公钥随 Passwall Packages Release 发布)"
+              elif [ "$SIGN_MODE" = "apk" ]; then
+                echo "> 🔐 APK 签名公钥: \`solarflows-apk-public.pem\` (随 Passwall Packages Release 发布)"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: 📝 Annotations
         if: always()

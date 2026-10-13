@@ -219,6 +219,34 @@ flowchart TD
 
 > `compile.txt` 末行 `time:` **不能**判定失败（`scripts/time.pl` 无论成败都打印），仅作为日志被中断（OOM）的兜底信号。
 
+### 3.4 Summary 输出（外部 caller 视角）
+
+两个 executor 的 step summary 按「概览 → 产物 → 效率 → 诊断」层级组织，读者默认是**外部 caller 仓库的维护者**（C19 后构建下放，run 页面无 plan 上下文）。
+
+**模式控制**（`summary_mode` input，两 executor 同构）：
+
+| 值 | 行为 |
+|---|---|
+| `auto`（默认） | 外部 caller 直调 → **full**；`github.repository == solarflows/AutoWorkflows`（编排方 summary 已有触发/目标/版本/路由）→ **compact** |
+| `full` | 完整输出（概览/产物/耗时 Top 10/缓存/追平/磁盘/logs 概览/ccache 统计/诊断/Annotations） |
+| `compact` | 保留：构建概览、产物与去向、缓存命中表、逐包报表（SDK 路径）、错误详情、求助指引、Annotations；砍掉：耗时 Top 10、Feed 追平、磁盘空间、logs 概览、ccache 统计、SDK/IB artifact 版本（概览块已含） |
+
+**块结构**（追加顺序即呈现顺序）：
+
+| 块 | 步骤 | compact | 说明 |
+|---|---|---|---|
+| 🏗️ 构建概览 | `Build Overview` | 保留 | 构建模式/版本/源码 commit/配置来源（G16 `config_repo@ref`）/编译耗时/触发上下文 |
+| 📊 逐包报表 | `Build packages via SDK`（compile-packages） | 保留 | SDK 增量路径核心产出（编排方只有变更包清单没有结果） |
+| 📦 产物与去向 | `Deliverables` | 保留 | Release 链接（`gh release view` 实查）+ 资产数 + artifact 兜底名 + 下载/核验指引 |
+| 📦 缓存命中 | `Build Log Analysis`（compile-packages）/ `ccache Stats`（compile-firmware） | 保留 | ccache/hostpkg/toolchain 恢复与保存状态（判断下次构建速度） |
+| 📊 耗时 Top 10 | `Build Log Analysis` | 砍 | 按真实墙钟（`time.pl` 第 4 字段）排序，4 列采集 |
+| 🔄 Feed 追平 / 💽 磁盘 / 📋 logs 概览 / 📈 ccache 统计 | 各自步骤 | 砍 | 诊断细节 |
+| ❌ 错误详情 + 求助指引 | `Build Error Diagnostics` / `SDK Build Diagnostics` | 保留 | 失败包 + 日志摘录 + artifact 指引 + issue 反馈链接 |
+
+**容错语义（强制）**：summary 采集是增强功能，**任何采集失败只降级不阻断构建**——独立采集步骤（`Build Overview` / `Deliverables`）一律 `continue-on-error: true`；`gh release view` 查询失败显示「状态未知」+ `::warning::`；数据源缺失显示 `N/A`。诊断类块（耗时/缓存/追平）内的采集命令失败走 `|| true` + warning 降级（与 ccache Stats 既有模式一致）。
+
+**已移除**：`> 👈 触发/目标/版本等整体计划见 Plan job Summary` 断链引用（unified 停用后外部 caller 直调无 plan job，构建概览块取代其职能）。
+
 ---
 
 ## 4. 增量路径：`compile-packages.yml`
