@@ -1081,15 +1081,21 @@ jobs:
       # ── 保存前预算预演 (体积守卫, 与 compile-firmware 同构) ──
       # ① du 逐路径报告; ② stamp 目录守卫 (>200MB 强制剔除非 stamp 文件,
       # 防 AUTOREMOVE 失效时 rust build 目录 8~15GB 爆炸); ③ tar+zstd 压缩
-      # 预演 (与 GitHub cache 后端同口径, 预演值 ≈ 实际存储值上界); ④ 超软预算
-      # 2048MB 按重建成本升序牺牲: dl/cargo (可重新下载) → 照常保存 (删 staging
-      # 等于放弃缓存闭环, 让平台 LRU 兜底)。预演失败降级 du 口径并告警。
+      # 预演 (与 GitHub cache 后端同口径, run 38413137090 实证偏差 5%); ④ 超软预算
+      # 3072MB (实测锚定: ipq807x 首代快照 546MB, 3072 ≈ 5.6 倍, 吸收 rust/go
+      # 版本升级的编译器体积增长与 crate 依赖增长; 预算过紧会在体积正常波动时
+      # 误删 dl/cargo, crate 缓存永远积累不起来。多轮 purge 失败的旧代残留由
+      # 平台 LRU 驱逐兜底, 每轮 restore 刷新 last-access 保护在用快照)
+      # 按重建成本升序牺牲:
+      # dl/cargo (可重新下载) → 照常保存 (删 staging 等于放弃缓存闭环, 让平台
+      # LRU 兜底)。预演失败降级 du 口径并告警。
       - name: 🧹 Pre-save cache budget rehearsal
         id: cache-budget-rehearsal
         if: always() && !cancelled() && steps.compile.outcome == 'success' && steps.feed-rebuild.outcome != 'failure'
         run: |
           set -euo pipefail
           cd openwrt
+          SOFT_BUDGET_MB=3072
 
           echo "📦 hostpkg 快照路径体量 (du 口径 = 磁盘占用, 非 GitHub 压缩存储口径):"
           for CACHE_GLOB in staging_dir/hostpkg staging_dir/target-*/host \
@@ -1136,9 +1142,9 @@ jobs:
               SNAPSHOT_BYTES=$(du -sb $REHEARSAL_PATHS 2>/dev/null | awk '{s+=$1} END {print s+0}')
             fi
             SNAPSHOT_MB=$((SNAPSHOT_BYTES / 1024 / 1024))
-            echo "📦 hostpkg 快照压缩预演: ${SNAPSHOT_MB}MB (软预算 2048MB)"
+            echo "📦 hostpkg 快照压缩预演: ${SNAPSHOT_MB}MB (软预算 ${SOFT_BUDGET_MB}MB)"
 
-            if [ "$SNAPSHOT_MB" -gt 2048 ]; then
+            if [ "$SNAPSHOT_MB" -gt "$SOFT_BUDGET_MB" ]; then
               if [ -e dl/cargo ]; then
                 echo "::warning::预演 ${SNAPSHOT_MB}MB 超软预算, 删除 dl/cargo (可重新下载, 分钟级损失)"
                 rm -rf dl/cargo
@@ -1148,7 +1154,7 @@ jobs:
                 SNAPSHOT_MB=$((SNAPSHOT_BYTES / 1024 / 1024))
                 echo "📦 删除 dl/cargo 后预演: ${SNAPSHOT_MB}MB"
               fi
-              if [ "$SNAPSHOT_MB" -gt 2048 ]; then
+              if [ "$SNAPSHOT_MB" -gt "$SOFT_BUDGET_MB" ]; then
                 echo "::warning::预演仍超软预算 (${SNAPSHOT_MB}MB), 照常保存由平台 LRU 驱逐兜底, 请人工核查体积来源"
               fi
             fi

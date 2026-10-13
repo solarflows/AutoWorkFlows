@@ -1793,7 +1793,13 @@ jobs:
       # (KB 级), 超 200MB 说明 AUTOREMOVE 未生效或清理失败, 强制剔除非 stamp
       # 文件防快照体积爆炸 (rust build 目录实测可达 8~15GB); ③ 压缩预演:
       # tar+zstd 与 GitHub cache 后端同口径, 预演值 ≈ 实际存储值上界;
-      # ④ 超软预算 2048MB (裁剪后预期 ~1.5GB + 余量) 按重建成本升序牺牲:
+      # ④ 超软预算 3072MB (实测锚定: run 38413137090 ipq807x 首代快照 546MB,
+      # zstd 预演 519MB 与 GitHub 存储口径偏差 5%; 3072 ≈ 实测 5.6 倍, 吸收
+      # rust/go 版本升级的编译器体积增长与 crate 依赖增长; 预算过紧会在体积
+      # 正常波动时误删 dl/cargo, crate 缓存永远积累不起来 = 闭环效果打折。
+      # 多轮 purge 失败的旧代残留由平台 LRU 驱逐兜底, 每轮 restore 刷新
+      # last-access 保护在用快照, 预演不感知远端配额只守本轮快照体积)
+      # 按重建成本升序牺牲:
       # dl/cargo (可重新下载, 分钟级) → 照常保存 (删 staging 等于放弃缓存闭环,
       # 不如让平台 LRU 驱逐兜底, C5 已实证驱逐语义可接受)。
       # 预演失败 (timeout/工具缺失) 降级 du 口径并告警, 不阻塞 save —— 预演
@@ -1804,6 +1810,7 @@ jobs:
         run: |
           set -euo pipefail
           cd openwrt
+          SOFT_BUDGET_MB=3072
 
           echo "📦 hostpkg 快照路径体量 (du 口径 = 磁盘占用, 非 GitHub 压缩存储口径):"
           for CACHE_GLOB in staging_dir/hostpkg staging_dir/target-*/host \
@@ -1850,9 +1857,9 @@ jobs:
               SNAPSHOT_BYTES=$(du -sb $REHEARSAL_PATHS 2>/dev/null | awk '{s+=$1} END {print s+0}')
             fi
             SNAPSHOT_MB=$((SNAPSHOT_BYTES / 1024 / 1024))
-            echo "📦 hostpkg 快照压缩预演: ${SNAPSHOT_MB}MB (软预算 2048MB)"
+            echo "📦 hostpkg 快照压缩预演: ${SNAPSHOT_MB}MB (软预算 ${SOFT_BUDGET_MB}MB)"
 
-            if [ "$SNAPSHOT_MB" -gt 2048 ]; then
+            if [ "$SNAPSHOT_MB" -gt "$SOFT_BUDGET_MB" ]; then
               if [ -e dl/cargo ]; then
                 echo "::warning::预演 ${SNAPSHOT_MB}MB 超软预算, 删除 dl/cargo (可重新下载, 分钟级损失)"
                 rm -rf dl/cargo
@@ -1862,7 +1869,7 @@ jobs:
                 SNAPSHOT_MB=$((SNAPSHOT_BYTES / 1024 / 1024))
                 echo "📦 删除 dl/cargo 后预演: ${SNAPSHOT_MB}MB"
               fi
-              if [ "$SNAPSHOT_MB" -gt 2048 ]; then
+              if [ "$SNAPSHOT_MB" -gt "$SOFT_BUDGET_MB" ]; then
                 echo "::warning::预演仍超软预算 (${SNAPSHOT_MB}MB), 照常保存由平台 LRU 驱逐兜底, 请人工核查体积来源"
               fi
             fi
