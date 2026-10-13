@@ -243,7 +243,13 @@ flowchart TD
 | 🔄 Feed 追平 / 💽 磁盘 / 📋 logs 概览 / 📈 ccache 统计 | 各自步骤 | 砍 | 诊断细节 |
 | ❌ 错误详情 + 求助指引 | `Build Error Diagnostics` / `SDK Build Diagnostics` | 保留 | 失败包 + 日志摘录 + artifact 指引 + issue 反馈链接 |
 
-**容错语义（强制）**：summary 采集是增强功能，**任何采集失败只降级不阻断构建**——独立采集步骤（`Build Overview` / `Deliverables`）一律 `continue-on-error: true`；`gh release view` 查询失败显示「状态未知」+ `::warning::`；数据源缺失显示 `N/A`。诊断类块（耗时/缓存/追平）内的采集命令失败走 `|| true` + warning 降级（与 ccache Stats 既有模式一致）。
+**容错语义（强制，2026-10-13 全量审阅落地）**：summary/日志采集是增强功能，**任何采集失败只降级不阻断构建**。三层防线：
+
+1. **纯采集步骤**一律 `continue-on-error: true`：`Build Overview`、`Deliverables`、`Build Log Analysis`（两 executor）、`ccache Stats`（两 executor）、`Total Build Duration`、`Disk space · 1~4`、`Annotations`、`Build Error Diagnostics` / `SDK Build Diagnostics`（诊断自身失败不掩盖原始构建错误）。outputs 缺失时消费方均有 `|| 0` / `|| 'N/A'` 兜底。
+2. **关键步骤内的 summary 块**加块内兜底（不能给整步骤加 COE——产物是发布链一环）：`Generate build info` 的 Feed 版本表、`Build packages via SDK` 的逐包报表、`Rebuild on feed update` 的追平报表——`jq` 解析失败降级 `::warning::` + 占位行，不杀宿主步骤。
+3. **采集命令级兜底**：`gh release view` 查询失败显示「状态未知」；数据源缺失显示 `N/A`；`du`/`ccache -s` 解析失败走既有 `|| echo N/A` 模式。
+
+**刻意不加 COE 的步骤**（失败语义即正确）：`Rebuild on feed update`（追平重编失败 = bin/ 已混入新旧产物，必须硬失败）、`Resolve IB file`（IB 配对校验失败该失败）、`Publish *`（发布失败该失败）、`Generate build info` / `Generate release notes`（产物缺失会破坏发布链）。
 
 **已移除**：`> 👈 触发/目标/版本等整体计划见 Plan job Summary` 断链引用（unified 停用后外部 caller 直调无 plan job，构建概览块取代其职能）。
 

@@ -400,6 +400,8 @@ jobs:
       # 刻意设计: 4 阶段磁盘监控用于诊断空间不足/缓存膨胀, 数据写入 outputs 供最后汇总表
       - name: 💽 Disk space · Initial
         id: disk-1
+        # 采集类步骤: 失败只降级不阻断 (outputs 缺失时消费方有 || 0 兜底)
+        continue-on-error: true
         run: |
           echo "📊 初始磁盘空间（克隆后，环境准备前）"
           df -h / | awk 'NR==1{print} NR==2{print}'
@@ -498,6 +500,8 @@ jobs:
       # ───────── 磁盘空间监控（第 2 阶段：环境准备后）─────────
       - name: 💽 Disk space · After env prep
         id: disk-2
+        # 采集类步骤: 失败只降级不阻断 (outputs 缺失时消费方有 || 0 兜底)
+        continue-on-error: true
         run: |
           echo "📊 环境准备后磁盘空间"
           df -h / | awk 'NR==1{print} NR==2{print}'
@@ -860,6 +864,8 @@ jobs:
       # ───────── 磁盘空间监控（第 3 阶段：编译前）─────────
       - name: 💽 Disk space · Before build
         id: disk-3
+        # 采集类步骤: 失败只降级不阻断 (outputs 缺失时消费方有 || 0 兜底)
+        continue-on-error: true
         run: |
           echo "📊 编译前磁盘空间"
           df -h / | awk 'NR==1{print} NR==2{print}'
@@ -1282,8 +1288,10 @@ jobs:
           echo "✅ 追平重编完成, 产物已对齐 feed ${NEW_SHA:0:7}"
 
       # ───────── 磁盘空间监控（第 4 阶段：编译后 + 4 阶段汇总表）─────────
+      # 采集类步骤: 失败只降级不阻断 (outputs 缺失时消费方有 || 0 兜底)
       - name: 💽 Disk space · After build
         if: always()
+        continue-on-error: true
         id: disk-4
         run: |
           echo "📊 编译后磁盘空间"
@@ -1331,6 +1339,8 @@ jobs:
       # ───────── 总耗时汇总 ─────────
       - name: ⏱️ Total Build Duration
         if: always()
+        # 采集类步骤: 失败只降级不阻断 (outputs 缺失时概览块显示 N/A)
+        continue-on-error: true
         id: total_duration
         run: |
           BUILD_DUR="${{ steps.build.outputs.duration || '0' }}"
@@ -1371,9 +1381,11 @@ jobs:
 
       # ───────── 编译日志统计（仅成功时运行）─────────
       # 刻意设计: 统计工具是必要的分析手段(v1 遗产), 统计每个包的编译耗时,
-      # 用于定位最耗时的编译瓶颈。Top5 写入 Summary。
+      # 用于定位最耗时的编译瓶颈。Top10 写入 Summary。
+      # 采集类步骤: 失败只降级不阻断 (summary 是增强功能)。
       - name: 📊 Build Log Analysis
         if: success()
+        continue-on-error: true
         run: |
           cd openwrt
 
@@ -1426,6 +1438,7 @@ jobs:
       # 刻意设计: ccache 命中率/压缩比是判断"缓存是否有效"的关键指标
       - name: 📈 ccache Stats & Cleanup
         if: always()
+        continue-on-error: true
         run: |
           echo "╔══════════════════════════════════════╗"
           echo "║  📈 ccache 统计与压缩测量             ║"
@@ -1521,6 +1534,8 @@ jobs:
       # 故 compile.txt 末行是否 time: 不能判定失败; 仅保留该检测作为日志被中断(如 OOM)时的兜底。
       - name: 🔍 Build Error Diagnostics
         if: failure()
+        # 诊断类步骤: 自身失败不掩盖原始构建错误 (降级为红叉但不改变 job 结论)
+        continue-on-error: true
         run: |
           cd openwrt
           FAILED_PKGS=""
@@ -2219,14 +2234,19 @@ jobs:
           }
           JSONEOF
 
-          # ── Summary Feed 版本 ──
+          # ── Summary Feed 版本 (采集兜底: jq 解析失败降级告警, 不杀本步骤——
+          #     build-info.json 是发布链关键产物, 不能被 summary 采集拖垮) ──
+          if ! FEEDS_MD_ROWS=$(printf '%s\n' "$FEEDS_MD_JSON" | jq -r '.'); then
+            echo "::warning::Feed 版本表 jq 解析失败, Summary 跳过该表 (build-info.json 不受影响)"
+            FEEDS_MD_ROWS=""
+          fi
           {
             echo ""
             echo "### 📌 Feed 版本"
             echo ""
             echo "| Feed | 版本 |"
             echo "|------|------|"
-            printf '%s\n' "$FEEDS_MD_JSON" | jq -r '.'
+            [ -n "$FEEDS_MD_ROWS" ] && printf '%s\n' "$FEEDS_MD_ROWS"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate release notes

@@ -915,14 +915,20 @@ jobs:
           echo "duration_fmt=$(printf '%dh %dm %ds' $(((COMPILE_T1 - COMPILE_T0)/3600)) $((((COMPILE_T1 - COMPILE_T0)%3600)/60)) $(((COMPILE_T1 - COMPILE_T0)%60)))" >> "$GITHUB_OUTPUT"
 
           # ── 逐包报表 (Markdown 表格写入 Summary; compact 模式保留: 编译结果是
-          #     SDK 增量路径的核心产出, 编排方 summary 只有变更包清单没有结果) ──
+          #     SDK 增量路径的核心产出, 编排方 summary 只有变更包清单没有结果)。
+          #     采集兜底: jq 解析失败降级告警, 不杀编译步骤 (产物已生成, 发布链
+          #     不应被 summary 采集拖垮) ──
+          if ! REPORT_ROWS=$(echo "$PACKAGES_REPORT" | jq -r '.[] | "| `\(.pkg)` | \(if .exit == 0 then "✅" else "❌" end) | \(.wall_sec)s | \(.version // "—") | \(.artifacts // "—") |"'); then
+            echo "::warning::逐包报表 jq 解析失败, Summary 表格降级为原始 JSON"
+            REPORT_ROWS=$(echo "$PACKAGES_REPORT" | jq -c '.' 2>/dev/null || echo '(报表生成失败)')
+          fi
           {
             echo ""
             echo "### 📊 逐包编译报表 (SDK)"
             echo ""
             echo "| 包 | 结果 | 墙钟耗时 | 版本 | 产物 |"
             echo "|---|---|---|---|---|"
-            echo "$PACKAGES_REPORT" | jq -r '.[] | "| `\(.pkg)` | \(if .exit == 0 then "✅" else "❌" end) | \(.wall_sec)s | \(.version // "—") | \(.artifacts // "—") |"'
+            printf '%s\n' "$REPORT_ROWS"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1042,13 +1048,18 @@ jobs:
               '. + [{pkg:$pkg, exit:$rc, wall_sec:$wall}]')
           done
           if [ "${SUMMARY_COMPACT:-false}" != "true" ]; then
+            # 采集兜底: jq 解析失败降级, 不杀追平重编步骤 (重编失败判定在下方, 不受影响)
+            if ! REBUILD_ROWS=$(echo "$REBUILD_REPORT" | jq -r '.[] | "| `\(.pkg)` | \(if .exit == 0 then "✅" else "❌" end) | \(.wall_sec)s |"'); then
+              echo "::warning::追平重编报表 jq 解析失败, Summary 表格降级"
+              REBUILD_ROWS="(报表生成失败)"
+            fi
             {
               echo ""
               echo "### 🔄 Feed 追平重编报表"
               echo ""
               echo "| 包 | 结果 | 墙钟耗时 |"
               echo "|---|---|---|"
-              echo "$REBUILD_REPORT" | jq -r '.[] | "| `\(.pkg)` | \(if .exit == 0 then "✅" else "❌" end) | \(.wall_sec)s |"'
+              printf '%s\n' "$REBUILD_ROWS"
               echo ""
               echo "- **feed**: \`${FEED_BRANCH}\` ${BEFORE_SHA:0:7} → ${NEW_SHA:0:7}"
             } >> "$GITHUB_STEP_SUMMARY"
@@ -1298,6 +1309,9 @@ jobs:
       - name: 📊 Build Log Analysis
         id: build-log-analysis
         if: always() && steps.compile.outcome == 'success'
+        # 采集类步骤: 失败只降级不阻断 (summary 是增强功能; 后续 ccache Stats
+        # 消费本步骤 outputs, 缺失时其引用处均有 || 兜底)
+        continue-on-error: true
         run: |
           cd openwrt
           # 覆盖 compile / host-compile / install 三类阶段日志: host-compile 是
@@ -1410,6 +1424,8 @@ jobs:
       # summary note 只放提炼后的整洁指标表 (含命中率/恢复来源/保存 key)。
       - name: 📈 ccache Stats
         if: always() && steps.compile.outputs.ccache_enabled == 'true'
+        # 采集类步骤: 失败只降级不阻断 (summary 是增强功能)
+        continue-on-error: true
         run: |
           cd openwrt
           export CCACHE_DIR="$(pwd)/.ccache"
@@ -2098,6 +2114,8 @@ jobs:
 
       - name: SDK Build Diagnostics
         if: failure()
+        # 诊断类步骤: 自身失败不掩盖原始构建错误 (降级为红叉但不改变 job 结论)
+        continue-on-error: true
         run: |
           echo "## ❌ SDK 软件包构建失败" >> "$GITHUB_STEP_SUMMARY"
           # 权威失败源: error.txt (make ERROR 宏写入 "ERROR: <pkg> failed to build.")
