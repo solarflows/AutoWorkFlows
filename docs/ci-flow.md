@@ -183,6 +183,11 @@ flowchart TD
 
 ### 3.1 缓存策略矩阵
 
+**关键设计**：
+
+- custom feed（`solarflows/openwrt-packages`）clone 到 `package/solarflows` 作为 **core package overlay**（非 feeds.conf 注册）：core 优先级由构造保证（`scripts/feeds` 的 `install_src` 对 core 包默认不覆盖，无需依赖 feeds.conf 行序），指纹基线与 SDK 路径（`cp -rlf` 同构）稳定。曾评估改为 feeds.conf.default 注册（`src-git solarflows <url>;<branch>`，行序须在 packages 之前——`install_src` 同名包先 install 者赢），因覆盖语义退化为行序依赖 + input_trees 指纹基线重建 + SDK 路径分叉而**保留现状**（2026-10-13 决策，方案与机制验证详见 todo B9）。
+- 设备端软件源现状：qualcommax fork 的 `PER_FEED_REPO` 已从 Config 树移除（`Config-build.in` 全 40 个 config 无此定义）→ `CONFIG_FEED_*` 选项不可见恒未设 → distfeeds 恒只有官方 core 行（`%U/targets/%S/packages`），**无 404 风险**。设备自有软件源（customfeeds.list 注入 + 源服务器）为 B9 储备方案，待源服务器就绪后实施。
+
 | 策略 | toolchain restore | ccache restore | save | purge | 路由 |
 |---|:--:|:--:|:--:|:--:|---|
 | `smart` | ✅ | ✅ | ✅ | ✅ | 正常决策 |
