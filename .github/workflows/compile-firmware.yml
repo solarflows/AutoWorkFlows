@@ -87,6 +87,9 @@ on:
       #    可关; published-state (状态回写依赖) 与 build-info 不受控 ──
       upload_artifacts:     { required: false, type: boolean, default: true }
       clean_cache:          { required: false, type: boolean, default: false }
+      # hostpkg 快照是否包含 build_dir 门禁 stamp (rust/golang host-compile
+      # 缓存闭环的必要组成; 关闭 = 退回纯 staging 快照, host 自举每轮重编)
+      hostpkg_stamp_cache:  { required: false, type: boolean, default: true }
       free_disk_space:      { required: false, type: boolean, default: false }
       publish_sdk_ib:       { required: false, type: boolean, default: true }
       # 跳过编译后约 custom-feed 追平重编 (与 unified 的 skip_upstream 语义对齐)
@@ -120,6 +123,7 @@ jobs:
       #    拦住 required 穿透的空字符串 / 格式非法 / repo 不可达 (拼错或无权限),
       #    避免构建数小时后发布步骤才失败。
       - name: Validate inputs
+        id: validate-inputs
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -228,6 +232,34 @@ jobs:
             echo "ℹ️ version 未传入, 自动生成: ${RESOLVED_VERSION} (前缀 '${VERSION_PREFIX}')"
           fi
           echo "RESOLVED_VERSION=${RESOLVED_VERSION}" >> "$GITHUB_ENV"
+
+          # ── hostpkg 快照 path 列表拼装 (单一事实来源) ──
+          # restore/save 四处统一引用本输出, 构造上保证 path 一致性 (cache
+          # version hash 对 path 列表敏感, 手抄多处易漂移致快照永不命中)。
+          # hostpkg_stamp_cache=false 剔除 build_dir 两根 (退回纯 staging 快照,
+          # rust/golang host-compile 每轮重编, 快照体积回到裁剪基线)。
+          # rust 的 HOST_BUILD_DIR 被包 Makefile 覆盖到 build_dir/target-*/host/
+          # (golang 用默认 build_dir/hostpkg/), 两根都必须覆盖。
+          # 注意: EOF 块内路径行必须顶格 —— toolkit getInput 会 trim 首尾空白。
+          if [ "${{ inputs.hostpkg_stamp_cache }}" = "true" ]; then
+            {
+              echo "hostpkg_cache_paths<<EOF"
+              echo "openwrt/staging_dir/hostpkg"
+              echo "openwrt/staging_dir/target-*/host"
+              echo "openwrt/build_dir/hostpkg"
+              echo "openwrt/build_dir/target-*/host"
+              echo "openwrt/dl/cargo"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "hostpkg_cache_paths<<EOF"
+              echo "openwrt/staging_dir/hostpkg"
+              echo "openwrt/staging_dir/target-*/host"
+              echo "openwrt/dl/cargo"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
           echo "✅ 参数校验通过"
 
       - name: Checkout defaults repo (AutoWorkflows)
@@ -526,6 +558,24 @@ jobs:
           fi
           echo "ccache_restored=${CCACHE_RESTORED}" >> $GITHUB_OUTPUT
 
+      # ───────── SDK hostpkg 缓存恢复 (rust/golang host-compile 闭环) ─────────
+      # 修复断点 A: 此前该 namespace 只存不取。恢复 staging 侧编译器产物 +
+      # build_dir 门禁 stamp (.prepared/.configured/.built), 配合 Prepare
+      # toolchain 的拓扑 touch 使 host-compile 秒级跳过。
+      # 位置在 Verify 之后: 避免 staging_dir/hostpkg/stamp 污染
+      # TOOLCHAIN_RESTORED 检测 (toolchain miss + hostpkg hit 时误报)。
+      # path 引用 validate-inputs 拼装输出, 与 save 端严格同源。
+      - name: Restore SDK hostpkg cache
+        id: cache-hostpkg-restore
+        if: inputs.clean_cache != true
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          restore-keys: |
+            immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-
+          path: ${{ steps.validate-inputs.outputs.hostpkg_cache_paths }}
+
       # ───────── 更新 feeds（源码 + 软件包索引）─────────
       - name: Update Feeds & Packages
         id: update-feeds
@@ -574,10 +624,15 @@ jobs:
           # 逐项检测缺失才追加 (不重复追加已有项, 防 make 校验变严后重复定义报错);
           # CONFIG_DEVEL=y 必须先于 CCACHE/BUILD_LOG (Kconfig "if DEVEL" 可见性,
           # 缺 DEVEL 时 defconfig 会把后两者当未知符号丢弃)。
+          # CONFIG_AUTOREMOVE: .prepared stamp 文件名寻址模式切换 ——
+          # include/depends.mk 中 AUTOREMOVE=y → find_md5_reproducible (纯内容
+          # 哈希, feed 同 commit 跨 run 稳定); 未设 → find_md5 (含源码 mtime,
+          # CI 每轮全新 clone feed → 哈希必变 → stamp 文件名不匹配 → host-compile
+          # 每轮 rm -rf 重编)。是 build_dir 门禁 stamp 缓存闭环的必要条件。
           # 匹配容忍尾随空白/行内注释 (caller seed 常见 "CONFIG_X=y  # 注释" 格式,
           # 严格 $ 行尾匹配会误报缺失并重复追加 — run 38112393097 实证)。
           AUTO_FIXED=""
-          for OPT in CONFIG_DEVEL CONFIG_CCACHE CONFIG_BUILD_LOG; do
+          for OPT in CONFIG_DEVEL CONFIG_CCACHE CONFIG_BUILD_LOG CONFIG_AUTOREMOVE; do
             if ! grep -qE "^${OPT}=y([[:space:]#]|$)" .config; then
               printf '%s=y\n' "$OPT" >> .config
               AUTO_FIXED="${AUTO_FIXED} ${OPT}=y"
@@ -823,14 +878,41 @@ jobs:
           # 关键修复: make defconfig 在此步骤前执行，其更新的 .config 时间戳晚于早期解压的 stamp。
           # 若工具链缓存已恢复，必须在 defconfig 后刷新 stamp 与 tmp/.build 时间戳，
           # 确保 stamp 比 .config 更晚，使 OpenWrt 能真正命中缓存并跳过已完成的工具与工具链。
-          if [ "$TOOLCHAIN_RESTORED" = "true" ] \
-             && [ -d staging_dir ] \
-             && [ "$(find staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | head -1)" ]; then
-            echo "🔄 在 defconfig 后刷新工具链 stamp 时间戳以确保缓存命中生效..."
+          # 刷新条件扩展: toolchain 或 hostpkg 任一恢复即需刷新 —— feeds update
+          # 在 restore 之后全新 clone, feed mtime 晚于缓存内 stamp, 不刷新则
+          # rdep (timestamp.pl) 判定源码更新触发重编 (断点 C)。
+          HOSTPKG_RESTORED=false
+          if [ -d build_dir/hostpkg ] || ls -d build_dir/target-*/host >/dev/null 2>&1; then
+            HOSTPKG_RESTORED=true
+          fi
+          if { [ "$TOOLCHAIN_RESTORED" = "true" ] || [ "$HOSTPKG_RESTORED" = "true" ]; } \
+             && [ -d staging_dir ]; then
+            echo "🔄 在 defconfig 与 feeds update 后刷新工具链及 hostpkg stamp 时间戳..."
             mkdir -p tmp && echo "1" > tmp/.build && touch tmp/.build
-            find staging_dir -type d -name stamp -not -path '*target*' 2>/dev/null | while read -r d; do
+
+            # 1. build_dir 门禁 stamp 按依赖链拓扑顺序刷新:
+            #    .prepared* → .configured → .built (make 要求后置 stamp 更晚;
+            #    glob '.prepared*' 同时命中 rdep 的 .prepared_*_check 文件)。
+            #    rust 的 HOST_BUILD_DIR 被包 Makefile 覆盖到 build_dir/target-*/host/
+            #    (golang 用默认 build_dir/hostpkg/), 两根都必须覆盖。
+            HOSTPKG_STAMP_ROOTS=""
+            [ -d build_dir/hostpkg ] && HOSTPKG_STAMP_ROOTS="build_dir/hostpkg"
+            for d in build_dir/target-*/host; do
+              [ -d "$d" ] && HOSTPKG_STAMP_ROOTS="${HOSTPKG_STAMP_ROOTS:+$HOSTPKG_STAMP_ROOTS }$d"
+            done
+            if [ -n "$HOSTPKG_STAMP_ROOTS" ]; then
+              for stamp in '.prepared*' '.configured*' '.built*'; do
+                find $HOSTPKG_STAMP_ROOTS -maxdepth 2 -type f -name "$stamp" -exec touch {} + 2>/dev/null || true
+              done
+            fi
+
+            # 2. staging_dir 下 host 工具与工具链 stamp 刷新 (精确匹配 host*/stamp
+            #    与 toolchain*/stamp: 覆盖 staging_dir/hostpkg/stamp 与
+            #    staging_dir/target-*/host/stamp, 绝不触碰 target 根下的目标包 stamp)
+            find staging_dir \( -path '*/host*/stamp' -o -path '*/toolchain*/stamp' \) -type d 2>/dev/null | while read -r d; do
               find "$d" -type f -exec touch {} +
             done
+
             if ccache_is_usable; then
               for cmd in gcc g++ cc c++; do
                 ln -sf ccache "staging_dir/host/bin/$cmd" 2>/dev/null || true
@@ -1236,30 +1318,44 @@ jobs:
         run: |
           cd openwrt
 
-          # 一次性提取所有 compile.txt 末行，再用 awk 分流统计
-          TAIL_ALL=$(find logs -name 'compile.txt' -print0 | xargs -0 tail -qn1 2>/dev/null || true)
+          # 覆盖 compile / host-compile / install 三类阶段日志: host-compile 是
+          # rust/golang 等宿主自举的真实耗时大头 (57min/32min), install 是 ipk
+          # 打包阶段, 只看 compile.txt 会系统性漏掉它们。
+          # find -print0 + mapfile 避免路径 word splitting; /dev/null 兜底保证
+          # grep 恒有文件参数 (TOTAL=0 时不挂起读 stdin, -l 不会输出它)。
+          mapfile -d '' LOG_FILES < <(find logs \
+            \( -name 'compile.txt' -o -name 'host-compile.txt' -o -name 'install.txt' \) \
+            -print0 2>/dev/null)
+          TOTAL=${#LOG_FILES[@]}
+          EMPTY=$(find logs \
+            \( -name 'compile.txt' -o -name 'host-compile.txt' -o -name 'install.txt' \) \
+            -size 0 2>/dev/null | wc -l)
 
-          TOTAL=$(find logs -name 'compile.txt' 2>/dev/null | wc -l)
-          INCOMPLETE=$((TOTAL - $(echo "$TAIL_ALL" | grep -c '^time: ' || true)))
-          EMPTY=$(find logs -name 'compile.txt' -size 0 2>/dev/null | wc -l)
+          # 提取全部 time: 行 (scripts/time.pl 输出: time: <target>#<user>#<sys>#<real>)。
+          # 不再 tail -qn1: 同一日志内同名阶段多次调用需全部累加。
+          grep -h '^time: ' "${LOG_FILES[@]}" /dev/null 2>/dev/null | awk -F'#' 'NF==4' > build_time_clean.log || true
+          COMPLETED_FILES=$(grep -l '^time: ' "${LOG_FILES[@]}" /dev/null 2>/dev/null | wc -l || true)
+          INCOMPLETE=$((TOTAL - COMPLETED_FILES))
 
-          # 耗时提取
-          echo "$TAIL_ALL" | grep '^time: ' | awk -F'#' 'NF==4' > build_time_clean.log || true
+          echo "📊 构建日志: 总计 ${TOTAL}, 未完成 ${INCOMPLETE}, 空 ${EMPTY}"
 
-          # 统计输出到终端日志
-          echo "📊 compile.txt: 总计 ${TOTAL}, 未完成 ${INCOMPLETE}, 空 ${EMPTY}"
-
-          # Summary 只保留 Top 5
+          # 按真实墙钟 ($4, time.pl 第 4 字段) 降序 Top 10; $2/$3 是 User/Sys
+          # CPU 核时 (旧代码 real=$2 实为 User CPU, 多核编译下严重失真)。
+          # 同名 target 多条记录按列分别累加。
+          # Summary 只保留 Top 10
           {
             echo ""
-            echo "### 📊 编译耗时 Top 5"
-            echo "\`\`\`"
+            echo "### 📊 编译耗时 Top 10 (按真实墙钟排序)"
+            echo '```text'
+            printf "%-12s  %-12s  %-12s  %s\n" "Real(墙钟)" "User CPU" "Sys CPU" "Target"
             awk -F'#' '{
-              pkg=$1; sub(/^time: /, "", pkg); sub(/\/compile$/, "", pkg);
-              real=$2;
-              printf "%8.2fs  %s\n", real, pkg
-            }' build_time_clean.log 2>/dev/null | sort -rn 2>/dev/null | head -5 || true
-            echo "\`\`\`"
+              t = $1; sub(/^time: /, "", t);
+              user[t] += $2; sys[t] += $3; real[t] += $4;
+            } END {
+              for (t in real)
+                printf "%10.2fs  %10.2fs  %10.2fs  %s\n", real[t], user[t], sys[t], t
+            }' build_time_clean.log 2>/dev/null | sort -rn 2>/dev/null | head -10 || true
+            echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ───────── ccache 统计与清理（独立步骤，不受构建成败影响）─────────
@@ -1280,10 +1376,12 @@ jobs:
             # ── 磁盘用量 + 压缩大小 ──
             DISK_USAGE_HUMAN=$(du -sh "openwrt/.ccache" 2>/dev/null | cut -f1)
             DISK_USAGE_BYTES=$(du -sb "openwrt/.ccache" 2>/dev/null | awk '{print $1}')
-            CC_GZIP_BYTES=$(timeout 60 tar cf - openwrt/.ccache 2>/dev/null | gzip -1 -c | wc -c 2>/dev/null || echo 0)
-            CC_GZIP_HUMAN=""
-            if [ -n "$CC_GZIP_BYTES" ] && [ "$CC_GZIP_BYTES" -gt 0 ] && [ -n "$DISK_USAGE_BYTES" ] && [ "$DISK_USAGE_BYTES" -gt 0 ]; then
-              CC_GZIP_HUMAN=$(numfmt --to=iec "$CC_GZIP_BYTES" 2>/dev/null || echo "${CC_GZIP_BYTES} B")
+            # zstd -3 与 GitHub cache 后端同口径 (tar+zstd); 旧 gzip -1 压缩率
+            # 偏差 ~15%, 与配额计量 (压缩后体积) 口径不一致
+            CC_ZSTD_BYTES=$(timeout 60 tar cf - openwrt/.ccache 2>/dev/null | zstd -3 -c 2>/dev/null | wc -c 2>/dev/null || echo 0)
+            CC_ZSTD_HUMAN=""
+            if [ -n "$CC_ZSTD_BYTES" ] && [ "$CC_ZSTD_BYTES" -gt 0 ] && [ -n "$DISK_USAGE_BYTES" ] && [ "$DISK_USAGE_BYTES" -gt 0 ]; then
+              CC_ZSTD_HUMAN=$(numfmt --to=iec "$CC_ZSTD_BYTES" 2>/dev/null || echo "${CC_ZSTD_BYTES} B")
             fi
 
             # ── 解析关键指标（兼容 ccache 3.x 旧格式 + 4.x/6.x 新格式）──
@@ -1297,7 +1395,7 @@ jobs:
             CACHE_SIZE_LABEL="$CACHE_SIZE"
             [ "$CACHE_SIZE" = "N/A" ] || CACHE_SIZE_LABEL="${CACHE_SIZE}G"
             DISK_USAGE_HUMAN="${DISK_USAGE_HUMAN:-N/A}"
-            CC_GZIP_HUMAN="${CC_GZIP_HUMAN:-N/A}"
+            CC_ZSTD_HUMAN="${CC_ZSTD_HUMAN:-N/A}"
 
             # ── 终端日志 ──
             echo "📈 ccache 统计:"
@@ -1305,17 +1403,18 @@ jobs:
             echo "  Preprocessed:  ${HITS_PREP}"
             echo "  Misses:        ${MISSES}"
             echo "  Hit rate:      ${HIT_RATE}"
-            echo "  Cache size:    ${CACHE_SIZE_LABEL} (disk ${DISK_USAGE_HUMAN}, gzip ~${CC_GZIP_HUMAN})"
+            echo "  Cache size:    ${CACHE_SIZE_LABEL} (disk ${DISK_USAGE_HUMAN}, zstd ~${CC_ZSTD_HUMAN})"
 
             # ── 可缓存路径体量（配额核算依据; 仅写日志, 不改 Summary 表格式）──
             # 仓库 Actions Cache 配额 10GB，三类快照的新旧两代会短暂共存（save 先于
-            # purge），故各路径体量必须留出足够余量。这里逐个报体量，便于判断是否
-            # 需要缩小某类快照的保存范围（如 dl/rustc 可重新解压、dl/cargo 可重新
-            # 下载，属于可裁剪项）。
-            echo "📦 可缓存路径体量 (Actions Cache 配额核算):"
+            # purge），故各路径体量必须留出足够余量。hostpkg 快照已裁剪 dl/rustc
+            # 与 tmp/go-build（命中场景永不读取，见 C7），新增 build_dir 门禁
+            # stamp 两根（KB 级）。du 为磁盘占用口径，压缩存储口径见
+            # Pre-save cache budget rehearsal 步骤。
+            echo "📦 可缓存路径体量 (Actions Cache 配额核算, du 口径):"
             for CACHE_GLOB in openwrt/.ccache openwrt/staging_dir/host openwrt/staging_dir/hostpkg \
-                              openwrt/staging_dir/target-*/host openwrt/dl/cargo openwrt/dl/rustc \
-                              openwrt/tmp/go-build; do
+                              openwrt/staging_dir/target-*/host openwrt/build_dir/hostpkg \
+                              openwrt/build_dir/target-*/host openwrt/dl/cargo; do
               for MATCH in $CACHE_GLOB; do
                 [ -e "$MATCH" ] || continue
                 printf '  %-44s %s\n' "$MATCH" "$(du -sh "$MATCH" 2>/dev/null | cut -f1)"
@@ -1330,7 +1429,7 @@ jobs:
               echo "### 📈 ccache 统计"
               echo "| 项 | 命中率 | Direct hits | Preprocessed | Misses | 缓存大小 | 压缩后 |"
               echo "|---|---|---|---|---|---|---|"
-              echo "| **ccache** | ${HIT_RATE} | ${HITS_DIRECT} | ${HITS_PREP} | ${MISSES} | ${CACHE_SIZE_LABEL} | ~${CC_GZIP_HUMAN} |"
+              echo "| **ccache** | ${HIT_RATE} | ${HITS_DIRECT} | ${HITS_PREP} | ${MISSES} | ${CACHE_SIZE_LABEL} | ~${CC_ZSTD_HUMAN} |"
               echo "| **工具链** | — | ${TC_HIT_LABEL} | — | — | ${TC_DISK} | — |"
             } | tee -a "$GITHUB_STEP_SUMMARY"
             if [ "$CCACHE_STATS_AVAILABLE" = false ]; then
@@ -1594,6 +1693,88 @@ jobs:
           key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
           path: openwrt/.ccache
 
+      # ───────── 保存前预算预演 (hostpkg 快照体积守卫) ─────────
+      # ① du 逐路径报告 (C6 诊断); ② stamp 目录守卫: 正常仅 0 字节隐藏 stamp
+      # (KB 级), 超 200MB 说明 AUTOREMOVE 未生效或清理失败, 强制剔除非 stamp
+      # 文件防快照体积爆炸 (rust build 目录实测可达 8~15GB); ③ 压缩预演:
+      # tar+zstd 与 GitHub cache 后端同口径, 预演值 ≈ 实际存储值上界;
+      # ④ 超软预算 2048MB (裁剪后预期 ~1.5GB + 余量) 按重建成本升序牺牲:
+      # dl/cargo (可重新下载, 分钟级) → 照常保存 (删 staging 等于放弃缓存闭环,
+      # 不如让平台 LRU 驱逐兜底, C5 已实证驱逐语义可接受)。
+      # 预演失败 (timeout/工具缺失) 降级 du 口径并告警, 不阻塞 save —— 预演
+      # 是防御性诊断, 降级语义显式声明。
+      - name: 🧹 Pre-save cache budget rehearsal
+        id: cache-budget-rehearsal
+        if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
+        run: |
+          set -euo pipefail
+          cd openwrt
+
+          echo "📦 hostpkg 快照路径体量 (du 口径 = 磁盘占用, 非 GitHub 压缩存储口径):"
+          for CACHE_GLOB in staging_dir/hostpkg staging_dir/target-*/host \
+                            build_dir/hostpkg build_dir/target-*/host dl/cargo; do
+            for MATCH in $CACHE_GLOB; do
+              [ -e "$MATCH" ] || continue
+              printf '  %-40s %s\n' "$MATCH" "$(du -sh "$MATCH" 2>/dev/null | cut -f1)"
+            done
+          done
+
+          # ── stamp 目录守卫 ──
+          HOSTPKG_STAMP_ROOTS=""
+          [ -d build_dir/hostpkg ] && HOSTPKG_STAMP_ROOTS="build_dir/hostpkg"
+          for d in build_dir/target-*/host; do
+            [ -d "$d" ] && HOSTPKG_STAMP_ROOTS="${HOSTPKG_STAMP_ROOTS:+$HOSTPKG_STAMP_ROOTS }$d"
+          done
+          if [ -n "$HOSTPKG_STAMP_ROOTS" ]; then
+            STAMP_MB=$(du -sm $HOSTPKG_STAMP_ROOTS 2>/dev/null | awk '{s+=$1} END {print s+0}')
+            if [ "${STAMP_MB:-0}" -gt 200 ]; then
+              echo "::warning::hostpkg stamp 目录 ${STAMP_MB}MB 超阈值 200MB (正常 <1MB), 强制清理非 stamp 文件"
+              find $HOSTPKG_STAMP_ROOTS -mindepth 2 -maxdepth 2 \
+                -not \( -type f -name '.*' -size 0 \) -exec rm -rf {} + 2>/dev/null || true
+            fi
+          fi
+
+          # ── 压缩预演 + 预算决策 ──
+          REHEARSAL_PATHS=""
+          for p in staging_dir/hostpkg staging_dir/target-*/host \
+                   build_dir/hostpkg build_dir/target-*/host dl/cargo; do
+            [ -e "$p" ] && REHEARSAL_PATHS="${REHEARSAL_PATHS:+$REHEARSAL_PATHS }$p"
+          done
+          if [ -n "$REHEARSAL_PATHS" ]; then
+            if command -v zstd >/dev/null 2>&1; then
+              set +e
+              SNAPSHOT_BYTES=$(timeout 90 tar cf - $REHEARSAL_PATHS 2>/dev/null | zstd -3 -c 2>/dev/null | wc -c)
+              REHEARSAL_RC=$?
+              set -e
+            else
+              REHEARSAL_RC=127
+              SNAPSHOT_BYTES=""
+            fi
+            if [ "${REHEARSAL_RC:-1}" -ne 0 ] || [ -z "${SNAPSHOT_BYTES:-}" ]; then
+              echo "::warning::压缩预演失败 (rc=${REHEARSAL_RC:-1}), 降级 du 字节口径"
+              SNAPSHOT_BYTES=$(du -sb $REHEARSAL_PATHS 2>/dev/null | awk '{s+=$1} END {print s+0}')
+            fi
+            SNAPSHOT_MB=$((SNAPSHOT_BYTES / 1024 / 1024))
+            echo "📦 hostpkg 快照压缩预演: ${SNAPSHOT_MB}MB (软预算 2048MB)"
+
+            if [ "$SNAPSHOT_MB" -gt 2048 ]; then
+              if [ -e dl/cargo ]; then
+                echo "::warning::预演 ${SNAPSHOT_MB}MB 超软预算, 删除 dl/cargo (可重新下载, 分钟级损失)"
+                rm -rf dl/cargo
+                set +e
+                SNAPSHOT_BYTES=$(timeout 90 tar cf - $REHEARSAL_PATHS 2>/dev/null | zstd -3 -c 2>/dev/null | wc -c)
+                set -e
+                SNAPSHOT_MB=$((SNAPSHOT_BYTES / 1024 / 1024))
+                echo "📦 删除 dl/cargo 后预演: ${SNAPSHOT_MB}MB"
+              fi
+              if [ "$SNAPSHOT_MB" -gt 2048 ]; then
+                echo "::warning::预演仍超软预算 (${SNAPSHOT_MB}MB), 照常保存由平台 LRU 驱逐兜底, 请人工核查体积来源"
+              fi
+            fi
+          else
+            echo "ℹ️ 无可缓存路径, 跳过预演"
+          fi
+
       - name: Save SDK hostpkg cache
         if: always() && !cancelled() && steps.prepare_toolchain.outcome == 'success' && (steps.build.outputs.make_exit == '0' || steps.retry.outcome == 'success') && steps.feed-rebuild.outcome != 'failure'
         id: cache-sdk-hostpkg-save
@@ -1601,12 +1782,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
-          path: |
-            openwrt/staging_dir/hostpkg
-            openwrt/staging_dir/target-*/host
-            openwrt/dl/cargo
-            openwrt/dl/rustc
-            openwrt/tmp/go-build
+          path: ${{ steps.validate-inputs.outputs.hostpkg_cache_paths }}
 
       # ───────── 清理远端工具链缓存（独立维护）─────────
       # 当前 key 已先保存，清理时明确排除它；清理失败只会暂时多留旧 cache,
