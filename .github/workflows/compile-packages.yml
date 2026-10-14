@@ -93,6 +93,9 @@ on:
       # ── 工件上传开关: IB 组装固件归档体积大 (上传下载耗时), 可关;
       #    published-state (状态回写依赖) / build-info / 包工件不受控 ──
       upload_artifacts:          { required: false, type: boolean, default: true }
+      # 构建日志 artifact (logs/ 分包日志): 失败恒上传 (诊断需要);
+      # 成功时也上传 (默认, 供 stamp 判定/耗时分析), 可关省 artifact 存储
+      upload_build_log:          { required: false, type: boolean, default: true }
       clean_cache:               { required: false, type: boolean, default: false }
       # hostpkg 快照是否包含 build_dir 门禁 stamp (rust/golang host-compile
       # 缓存闭环的必要组成; 关闭 = 退回纯 staging 快照, host 自举每轮重编)
@@ -855,6 +858,11 @@ jobs:
             find staging_dir \( -path '*/host*/stamp' -o -path '*/toolchain*/stamp' \) -type d 2>/dev/null | while read -r d; do
               find "$d" -type f -exec touch {} +
             done
+            # ── hostpkg stamp 状态探针 (C24 残余排查, 与 compile-firmware 同构) ──
+            echo "📋 hostpkg stamp 实况 (restore+touch 后):"
+            find build_dir/hostpkg build_dir/target-*/host -maxdepth 2 -type f \
+              -name '.*' -printf '%T+ %p\n' 2>/dev/null | LC_ALL=C sort || \
+              echo "  (无 stamp 文件或目录不存在)"
           fi
 
           FAILED_PACKAGES=""
@@ -2106,8 +2114,11 @@ jobs:
       # ───────── 失败日志归档（与全量 compile-firmware 同款, 补齐 SDK 路径缺口）─────────
       # 诊断步骤的 "完整内容见 artifact" 必须真正有 artifact 可查:
       # openwrt/logs/** (BUILD_LOG=1 各包 compile/error/download) + .config + IB 构建日志。
-      - name: Upload build log on failure
-        if: failure()
+      # ───────── 构建日志 artifact ─────────
+      # 失败恒上传 (诊断需要); 成功时受 upload_build_log 控制 (默认开,
+      # 与 compile-firmware 同语义)。
+      - name: Upload build log
+        if: always() && !cancelled() && (failure() || inputs.upload_build_log)
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-sdk-build-log
@@ -2226,6 +2237,9 @@ jobs:
             fi
             echo "| 软件包产物 | \`${{ env.IMMWRT_TARGET }}-sdk-packages\` artifact (7 天) |"
             echo "| 构建元数据 | \`${{ env.IMMWRT_TARGET }}-published-state\` artifact + Release 附带 \`build-info.json\` |"
+            if [ "${{ inputs.upload_build_log }}" = "true" ]; then
+              echo "| 构建日志 | \`${{ env.IMMWRT_TARGET }}-sdk-build-log\` artifact (分包日志 + check-* 判定输出) |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 📝 Annotations

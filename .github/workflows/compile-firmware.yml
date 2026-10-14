@@ -86,6 +86,9 @@ on:
       # ── 工件上传开关: 固件 tarball 与 SDK/IB 归档体积大 (上传下载耗时),
       #    可关; published-state (状态回写依赖) 与 build-info 不受控 ──
       upload_artifacts:     { required: false, type: boolean, default: true }
+      # 构建日志 artifact (logs/ 分包日志 + build.log): 失败恒上传 (诊断需要);
+      # 成功时也上传 (默认, 供 stamp 判定/耗时分析), 可关省 artifact 存储
+      upload_build_log:     { required: false, type: boolean, default: true }
       clean_cache:          { required: false, type: boolean, default: false }
       # hostpkg 快照是否包含 build_dir 门禁 stamp (rust/golang host-compile
       # 缓存闭环的必要组成; 关闭 = 退回纯 staging 快照, host 自举每轮重编)
@@ -953,6 +956,16 @@ jobs:
             fi
           fi
 
+          # ── hostpkg stamp 状态探针 (C24 残余排查: golang 系 make -q 判定差异) ──
+          # 列出 restore+touch 后的 stamp 文件名 (含内容寻址哈希) 与 mtime 顺序,
+          # 供与 make 实际求值行为对比 (rebuild_check 的 make -q 判定输出在
+          # logs/<pkg>/check-*.txt, 仅 build-log artifact 可见)。
+          # 采集类探针: 失败只告警不阻断。
+          echo "📋 hostpkg stamp 实况 (restore+touch 后):"
+          find build_dir/hostpkg build_dir/target-*/host -maxdepth 2 -type f \
+            -name '.*' -printf '%T+ %p\n' 2>/dev/null | LC_ALL=C sort || \
+            echo "  (无 stamp 文件或目录不存在)"
+
           # 关键优化: 若 ccache 已可用且工具链缓存已恢复，跳过预编译直接进入固件构建，
           # 依赖顶层 Makefile 目标 world 的 stamp 机制秒级跳过工具链。
           if ccache_is_usable && [ "$TOOLCHAIN_RESTORED" = "true" ]; then
@@ -1712,8 +1725,12 @@ jobs:
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Upload build log on failure
-        if: failure()
+      # ───────── 构建日志 artifact ─────────
+      # 失败恒上传 (诊断需要); 成功时受 upload_build_log 控制 (默认开:
+      # logs/ 分包日志含 rebuild_check 的 check-*.txt 判定输出, 是 stamp
+      # 命中分析与耗时分布的一手数据; 关 = 省 artifact 存储)。
+      - name: Upload build log
+        if: always() && !cancelled() && (failure() || inputs.upload_build_log)
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.IMMWRT_TARGET }}-build-log
@@ -2890,6 +2907,9 @@ jobs:
               echo "| 固件 | 仅 CI artifact \`${IMMWRT_TARGET}-release\` (7 天, 未配置 release 目标) |"
             fi
             echo "| 构建元数据 | \`${IMMWRT_TARGET}-published-state\` artifact + Release 附带 \`build-info.json\` |"
+            if [ "${{ inputs.upload_build_log }}" = "true" ]; then
+              echo "| 构建日志 | \`${IMMWRT_TARGET}-build-log\` artifact (分包日志 + check-* 判定输出) |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           # ── 下载/核验指引 (发布成功才有核验对象) ──
