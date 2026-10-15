@@ -1,0 +1,357 @@
+diff --git a/src/dns_client/client_http3.c b/src/dns_client/client_http3.c
+index 06fc123f..5dbb7853 100644
+--- a/src/dns_client/client_http3.c
++++ b/src/dns_client/client_http3.c
+@@ -80,7 +80,7 @@ errout:
+ #else
+ 	tlog(TLOG_ERROR, "http3 is not supported.");
+ #endif
+-	return 0;
++	return -1;
+ }
+ 
+ #if defined(OSSL_QUIC1_VERSION) && !defined (OPENSSL_NO_QUIC)
+@@ -92,10 +92,14 @@ int _dns_client_process_recv_http3(struct dns_server_info *server_info, struct d
+ 	int pkg_len = 0;
+ 	int has_content_length = 0;
+ 
+-	http_head = http_head_init(4096, HTTP_VERSION_3_0);
+-	if (http_head == NULL) {
+-		goto errout;
++	if (conn_stream->http_head == NULL) {
++		conn_stream->http_head = http_head_init(4096, HTTP_VERSION_3_0);
++		if (conn_stream->http_head == NULL) {
++			goto errout;
++		}
+ 	}
++	http_head = conn_stream->http_head;
++	http_head_reset(http_head, HTTP_VERSION_3_0);
+ 
+ 	ret = http_head_parse(http_head, conn_stream->recv_buff.data, conn_stream->recv_buff.len);
+ 	if (ret < 0) {
+@@ -150,14 +154,8 @@ int _dns_client_process_recv_http3(struct dns_server_info *server_info, struct d
+ 	}
+ 	ret = 0;
+ out:
+-	http_head_destroy(http_head);
+ 	return ret;
+ errout:
+-
+-	if (http_head) {
+-		http_head_destroy(http_head);
+-	}
+-
+ 	return -1;
+ }
+ #endif
+diff --git a/src/dns_client/client_tls.c b/src/dns_client/client_tls.c
+index 1f8c44a3..5e862a40 100644
+--- a/src/dns_client/client_tls.c
++++ b/src/dns_client/client_tls.c
+@@ -42,11 +42,10 @@
+ static ssize_t _ssl_read_ext(struct dns_server_info *server, SSL *ssl, void *buff, int num)
+ {
+ 	ssize_t ret = 0;
+-	pthread_mutex_lock(&server->lock);
+ 	if (server == NULL || buff == NULL || ssl == NULL) {
+-		pthread_mutex_unlock(&server->lock);
+ 		return SSL_ERROR_SYSCALL;
+ 	}
++	pthread_mutex_lock(&server->lock);
+ 	ret = SSL_read(ssl, buff, num);
+ 	pthread_mutex_unlock(&server->lock);
+ 	return ret;
+@@ -56,11 +55,10 @@ static ssize_t _ssl_write_ext2(struct dns_server_info *server, SSL *ssl, const v
+ {
+ 	ssize_t ret = 0;
+ 	size_t written = 0;
+-	pthread_mutex_lock(&server->lock);
+ 	if (server == NULL || buff == NULL || ssl == NULL) {
+-		pthread_mutex_unlock(&server->lock);
+ 		return SSL_ERROR_SYSCALL;
+ 	}
++	pthread_mutex_lock(&server->lock);
+ 
+ #if defined(OSSL_QUIC1_VERSION) && !defined(OPENSSL_NO_QUIC)
+ 	ret = SSL_write_ex2(ssl, buff, num, flags, &written);
+@@ -82,12 +80,10 @@ static ssize_t _ssl_write_ext2(struct dns_server_info *server, SSL *ssl, const v
+ int _ssl_shutdown(struct dns_server_info *server)
+ {
+ 	int ret = 0;
+-	pthread_mutex_lock(&server->lock);
+ 	if (server == NULL || server->ssl == NULL) {
+-		pthread_mutex_unlock(&server->lock);
+ 		return SSL_ERROR_SYSCALL;
+ 	}
+-
++	pthread_mutex_lock(&server->lock);
+ 	ret = SSL_shutdown(server->ssl);
+ 	pthread_mutex_unlock(&server->lock);
+ 	return ret;
+@@ -96,12 +92,10 @@ int _ssl_shutdown(struct dns_server_info *server)
+ static int _ssl_get_error_ext(struct dns_server_info *server, SSL *ssl, int ret)
+ {
+ 	int err = 0;
+-	pthread_mutex_lock(&server->lock);
+ 	if (server == NULL || ssl == NULL) {
+-		pthread_mutex_unlock(&server->lock);
+ 		return SSL_ERROR_SYSCALL;
+ 	}
+-
++	pthread_mutex_lock(&server->lock);
+ 	err = SSL_get_error(ssl, ret);
+ 	pthread_mutex_unlock(&server->lock);
+ 	return err;
+@@ -115,12 +109,10 @@ static int _ssl_get_error(struct dns_server_info *server, int ret)
+ static int _ssl_do_handshake(struct dns_server_info *server)
+ {
+ 	int err = 0;
+-	pthread_mutex_lock(&server->lock);
+ 	if (server == NULL || server->ssl == NULL) {
+-		pthread_mutex_unlock(&server->lock);
+ 		return SSL_ERROR_SYSCALL;
+ 	}
+-
++	pthread_mutex_lock(&server->lock);
+ 	err = SSL_do_handshake(server->ssl);
+ 	pthread_mutex_unlock(&server->lock);
+ 	return err;
+@@ -129,11 +121,10 @@ static int _ssl_do_handshake(struct dns_server_info *server)
+ int _ssl_do_handevent(struct dns_server_info *server)
+ {
+ 	int err = 0;
+-	pthread_mutex_lock(&server->lock);
+ 	if (server == NULL || server->ssl == NULL) {
+-		pthread_mutex_unlock(&server->lock);
+ 		return SSL_ERROR_SYSCALL;
+ 	}
++	pthread_mutex_lock(&server->lock);
+ #if defined(OSSL_QUIC1_VERSION) && !defined(OPENSSL_NO_QUIC)
+ 	err = SSL_handle_events(server->ssl);
+ #else
+@@ -146,31 +137,15 @@ int _ssl_do_handevent(struct dns_server_info *server)
+ static int _ssl_session_reused(struct dns_server_info *server)
+ {
+ 	int err = 0;
+-	pthread_mutex_lock(&server->lock);
+ 	if (server == NULL || server->ssl == NULL) {
+-		pthread_mutex_unlock(&server->lock);
+ 		return SSL_ERROR_SYSCALL;
+ 	}
+-
++	pthread_mutex_lock(&server->lock);
+ 	err = SSL_session_reused(server->ssl);
+ 	pthread_mutex_unlock(&server->lock);
+ 	return err;
+ }
+ 
+-static SSL_SESSION *_ssl_get1_session(struct dns_server_info *server)
+-{
+-	SSL_SESSION *ret = NULL;
+-	pthread_mutex_lock(&server->lock);
+-	if (server == NULL || server->ssl == NULL) {
+-		pthread_mutex_unlock(&server->lock);
+-		return NULL;
+-	}
+-
+-	ret = SSL_get1_session(server->ssl);
+-	pthread_mutex_unlock(&server->lock);
+-	return ret;
+-}
+-
+ static void _dns_client_tls_clear_session(struct dns_server_info *server_info)
+ {
+ 	pthread_mutex_lock(&server_info->lock);
+@@ -911,18 +886,10 @@ static int _dns_client_verify_common_name(struct dns_server_info *server_info, X
+ 
+ 	tlog(TLOG_DEBUG, "peer CN: %s", peer_CN);
+ 
+-	/* check tls host */
+-	tls_host_verify = _dns_client_server_get_tls_host_verify(server_info);
+-	if (tls_host_verify == NULL) {
++	if (_dns_client_tls_matchName(tls_host_verify, peer_CN, strnlen(peer_CN, DNS_MAX_CNAME_LEN)) == 0) {
+ 		return 0;
+ 	}
+ 
+-	if (tls_host_verify) {
+-		if (_dns_client_tls_matchName(tls_host_verify, peer_CN, strnlen(peer_CN, DNS_MAX_CNAME_LEN)) == 0) {
+-			return 0;
+-		}
+-	}
+-
+ errout:
+ 
+ 	tlog(TLOG_WARN, "server %s CN is invalid, expect CN: %s, Peer CN: %s", server_info->ip, tls_host_verify, peer_CN);
+@@ -950,10 +917,8 @@ static int _dns_client_tls_verify(struct dns_server_info *server_info)
+ 		return -1;
+ 	}
+ 
+-	pthread_mutex_lock(&server_info->lock);
+ 	cert = SSL_get_peer_certificate(server_info->ssl);
+ 	if (cert == NULL) {
+-		pthread_mutex_unlock(&server_info->lock);
+ 		tlog(TLOG_ERROR, "get peer certificate failed.");
+ 		return -1;
+ 	}
+@@ -961,7 +926,6 @@ static int _dns_client_tls_verify(struct dns_server_info *server_info)
+ 	if (server_info->skip_check_cert == 0) {
+ 		long res = SSL_get_verify_result(server_info->ssl);
+ 		if (res != X509_V_OK) {
+-			pthread_mutex_unlock(&server_info->lock);
+ 			tlog(TLOG_WARN, "peer server %s certificate verify failed, %s", server_info->ip,
+ 				 X509_verify_cert_error_string(res));
+ 			goto errout;
+@@ -969,7 +933,6 @@ static int _dns_client_tls_verify(struct dns_server_info *server_info)
+ 
+ 		is_secure = 1;
+ 	}
+-	pthread_mutex_unlock(&server_info->lock);
+ 
+ 	switch (_dns_client_verify_SAN(server_info, cert)) {
+ 	case 0:
+@@ -1122,7 +1085,7 @@ int _dns_client_process_tls(struct dns_server_info *server_info, struct epoll_ev
+ 			}
+ 
+ 			/* save ssl session for next request */
+-			server_info->ssl_session = _ssl_get1_session(server_info);
++			server_info->ssl_session = SSL_get1_session(server_info->ssl);
+ 			pthread_mutex_unlock(&server_info->lock);
+ 		}
+ 
+diff --git a/src/dns_client/conn_stream.c b/src/dns_client/conn_stream.c
+index 57380a83..cbec1591 100644
+--- a/src/dns_client/conn_stream.c
++++ b/src/dns_client/conn_stream.c
+@@ -19,6 +19,7 @@
+ #include "conn_stream.h"
+ 
+ #include "smartdns/util.h"
++#include "smartdns/http_parse.h"
+ 
+ struct dns_conn_stream *_dns_client_conn_stream_new(void)
+ {
+@@ -33,6 +34,7 @@ struct dns_conn_stream *_dns_client_conn_stream_new(void)
+ 	INIT_LIST_HEAD(&stream->query_list);
+ 	stream->quic_stream = NULL;
+ 	stream->http2_stream = NULL;
++	stream->http_head = NULL;
+ 	stream->server_info = NULL;
+ 	stream->query = NULL;
+ 	atomic_set(&stream->refcnt, 1);
+@@ -69,6 +71,11 @@ void _dns_client_conn_stream_put(struct dns_conn_stream *stream)
+ 		stream->server_info = NULL;
+ 	}
+ 
++	if (stream->http_head) {
++		http_head_destroy(stream->http_head);
++		stream->http_head = NULL;
++	}
++
+ 	if (stream->query) {
+ 		pthread_mutex_lock(&stream->query->lock);
+ 		list_del_init(&stream->query_list);
+diff --git a/src/dns_client/dns_client.h b/src/dns_client/dns_client.h
+index 949ef463..2c5291ee 100644
+--- a/src/dns_client/dns_client.h
++++ b/src/dns_client/dns_client.h
+@@ -23,6 +23,7 @@
+ #include "smartdns/dns_conf.h"
+ #include "smartdns/dns_stats.h"
+ #include "smartdns/http2.h"
++#include "smartdns/http_parse.h"
+ #include "smartdns/lib/atomic.h"
+ #include "smartdns/lib/hashtable.h"
+ #include "smartdns/lib/list.h"
+@@ -248,6 +249,7 @@ struct dns_conn_stream {
+ 	SSL *quic_stream;
+ 	struct http2_stream *http2_stream;
+ 	dns_server_type_t type;
++	struct http_head *http_head;
+ };
+ 
+ /* query struct */
+diff --git a/src/dns_server/answer.c b/src/dns_server/answer.c
+index 0986f839..33f92b86 100644
+--- a/src/dns_server/answer.c
++++ b/src/dns_server/answer.c
+@@ -257,6 +257,19 @@ static int _dns_server_process_answer_HTTPS(struct dns_rrs *rrs, struct dns_requ
+ 		return -1;
+ 	}
+ 
++	/* Check for duplicate HTTPS records */
++	struct dns_request_https *existing_https = NULL;
++	list_for_each_entry(existing_https, &request->https_svcb_list, list)
++	{
++		if (strncasecmp(existing_https->domain, name, DNS_MAX_CNAME_LEN) == 0 &&
++			strncasecmp(existing_https->target, target, DNS_MAX_CNAME_LEN) == 0 &&
++			existing_https->priority == priority) {
++			/* Duplicate found, skip */
++			tlog(TLOG_DEBUG, "duplicate HTTPS record: domain: %s target: %s priority: %d", name, target, priority);
++			return -2;
++		}
++	}
++
+ 	https_svcb = zalloc(1, sizeof(*https_svcb));
+ 	if (https_svcb == NULL) {
+ 		return -1;
+diff --git a/src/http_parse/http_parse.c b/src/http_parse/http_parse.c
+index 86815e30..751c1369 100644
+--- a/src/http_parse/http_parse.c
++++ b/src/http_parse/http_parse.c
+@@ -473,6 +473,43 @@ int http_head_serialize(struct http_head *http_head, void *buffer, int buffer_le
+ 	return -2;
+ }
+ 
++void http_head_reset(struct http_head *http_head, HTTP_VERSION version)
++{
++	struct http_head_fields *fields = NULL, *tmp;
++	struct http_params *params = NULL, *tmp_params;
++
++	list_for_each_entry_safe(fields, tmp, &http_head->field_head.list, list)
++	{
++		list_del(&fields->list);
++		free(fields);
++	}
++
++	list_for_each_entry_safe(params, tmp_params, &http_head->params.list, list)
++	{
++		list_del(&params->list);
++		free(params);
++	}
++
++	INIT_LIST_HEAD(&http_head->field_head.list);
++	hash_init(http_head->field_map);
++	INIT_LIST_HEAD(&http_head->params.list);
++	hash_init(http_head->params_map);
++
++	http_head->http_version = version;
++	http_head->head_type = HTTP_HEAD_INVALID;
++	http_head->method = HTTP_METHOD_INVALID;
++	http_head->url = NULL;
++	http_head->version = NULL;
++	http_head->code = 0;
++	http_head->code_msg = NULL;
++	http_head->buff_len = 0;
++	http_head->head_ok = 0;
++	http_head->head_len = 0;
++	http_head->data = NULL;
++	http_head->data_len = 0;
++	http_head->expect_data_len = 0;
++}
++
+ void http_head_destroy(struct http_head *http_head)
+ {
+ 	struct http_head_fields *fields = NULL, *tmp;
+diff --git a/src/include/smartdns/http_parse.h b/src/include/smartdns/http_parse.h
+index e0d94239..f7bc0729 100644
+--- a/src/include/smartdns/http_parse.h
++++ b/src/include/smartdns/http_parse.h
+@@ -113,6 +113,8 @@ int http_head_serialize(struct http_head *http_head, void *buffer, int buffer_le
+ 
+ void http_head_destroy(struct http_head *http_head);
+ 
++void http_head_reset(struct http_head *http_head, HTTP_VERSION version);
++
+ #ifdef __cplusplus
+ }
+ #endif
