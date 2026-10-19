@@ -17,4 +17,5 @@ applyTo: [".github/workflows/compile-firmware.yml", ".github/workflows/compile-p
 - `require_signing=true` 时签名密钥缺失/无效必须硬失败（`Setup Signing Key` 的 `random_fallback`），不得降级 random 后继续发布；默认 false 的"告警 + 构建继续"是刻意设计，保留。
 - 同包版本收敛保留数（`matrix_artifacts_keep_versions` / `passwall_keep_versions`）下限为 1：有界保留是收敛的立项前提（G14），刻意不提供 0/禁用档。
 - workflow 通过 `GH_TOKEN` 环境变量使用 `secrets.ACCESS_TOKEN` 进行 GitHub API 操作。
+- 发布/签名行为实现在 `.github/scripts/release-lib.sh` 与 `signing-lib.sh`（R12 单一事实来源，两 executor source 引用）：新增发布开关/安全行为只改库，不在 executor 里重新内联拷贝；`--clobber` 覆盖、常驻 tag 不传 `--target`、keep 下限 1 均为刻意设计（见库头注释）。
 - 废弃的 workflow 移到 `.github/archive/workflows/` 而不是删除，保留审计轨迹。

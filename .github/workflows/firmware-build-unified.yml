@@ -12,6 +12,11 @@
 # 支撑链不受影响: custom-feed / upstream-sync / geodata-updater 均有独立
 # cron, 继续为外部 caller 维护 feed 与 fork。
 # 恢复方式: gh workflow enable firmware-build-unified.yml --repo <repo>
+#
+# 维护政策 (E3, 2026-10-19 成文): 本文件冻结为 validate 回归 fixture 与
+# 调度器参考实现。executor 契约新增 inputs 时默认同步透传一行 (轻量成本,
+# 避免恢复时欠账更大); 选择性冻结被否决。不再为其单独设计新机制;
+# 若长期不再恢复, 考虑整体归档至 .github/archive/workflows/ 并同步台账。
 # ════════════════════════════════════════════════════════════════════════
 name: ImmortalWrt Builder - Unified SDK Firmware
 
@@ -73,6 +78,11 @@ on:
         required: false
         default: false
         type: boolean
+      cache_variant:
+        description: 'cache 命名空间变体 (空 = 默认; 非空 = 隔离 ccache/hostpkg save 快照, restore 仍跨变体暖启动; 白名单 [a-z0-9-])'
+        required: false
+        default: ''
+        type: string
   schedule:
     - cron: '18 22 * * 0'  # 每周日 22:18 UTC = 北京时间每周一 06:18
 
@@ -1194,6 +1204,8 @@ jobs:
       release_type:              ${{ github.event.inputs.release_type || 'release' }}
       require_signing:           ${{ github.event.inputs.require_signing == 'true' }}
       passwall_keep_versions:    ${{ matrix.passwall_keep_versions }}
+      # C29: 调度器预填充位 (个人使用场景 = 不同发行状态手动隔离; 空 = executor 默认档)
+      cache_variant:             ${{ github.event.inputs.cache_variant }}
       clean_cache:               ${{ needs.plan.outputs.clean_cache == 'true' }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
       publish_sdk_ib:             true
@@ -1255,6 +1267,8 @@ jobs:
       release_type:              ${{ github.event.inputs.release_type || 'release' }}
       require_signing:           ${{ github.event.inputs.require_signing == 'true' }}
       passwall_keep_versions:    ${{ matrix.passwall_keep_versions }}
+      # C29: 调度器预填充位 (与 run-firmware 同源透传; 空 = executor 默认档)
+      cache_variant:             ${{ github.event.inputs.cache_variant }}
       clean_cache:               ${{ needs.plan.outputs.clean_cache == 'true' }}
       skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
     secrets:

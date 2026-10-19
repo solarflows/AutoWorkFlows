@@ -16,6 +16,7 @@ applyTo: [".github/workflows/compile-*.yml", ".github/workflows/firmware-build-u
 - 依赖了被跳过 job 的 job 会被隐式跳过。不要把可能被跳过的 job 放进 `needs`；需要其结果时用 `always()` 加显式 `needs.<job>.result` 判断。
 - 不要导出名为 `TARGET`、`HOST`、`BUILD` 的通用 workflow、job 或 shell 环境变量（详见 [project-constraints.instructions.md](project-constraints.instructions.md) § 环境变量禁令）。使用 `matrix_target` 内联或领域特定命名。
 - 缓存控制是单一布尔输入 `clean_cache`（默认 false = smart 增量路径；true = 跳过全部 restore、toolchain hash 加 force 前缀、强制全量路由并重写快照）。不存在按命名空间分别清理的中间态；`no-cache`（不持久化）模式已移除。
+- cache key 命名空间变体段统一引用 `env.CACHE_MID`（validate-inputs 单点拼装，C29，仿 C7 单源模式）：save key/restore exact key/purge 前缀与锚定正则一律用 `${CACHE_MID}`；restore-keys 前缀刻意不含变体段（跨变体单向暖启动）。禁止在步骤里重新手拼 key 中段。
 - 仅当构建成功后才保存当前 toolchain 与 ccache 快照；失败的构建不得替换已有缓存。先保存当前 key 再清理旧条目，并把当前 key 排除在清理范围外。这样即使保存或清理失败，仍保留可用的旧缓存。
 - 保存成功后，清理当前 target 下 `immwrt-v2-toolchain-<target>-*` 与 `immwrt-v2-ccache-<target>-*` 的所有旧条目。v2 策略为每 target 只保留最新一份；不清理 v1 或无关 workflow 的缓存。
 - 每个缓存命名空间都要有有限的保留上限；绝不能让按 run 滚动的命名空间无界增长。`immwrt-v2-toolchain-<target>-*` 与 `immwrt-v2-ccache-<target>-*` 每 target 只保留最新快照；写入 `immwrt-v2-sdk-hostpkg-<target>-<run_id>` 的一方（全量 executor 或 SDK 路径）必须把该命名空间收敛为当前 target 的最新单份快照，避免只跑全量构建的时期无限增长。GitHub 自身驱逐**不是**原因：超配额时平台先保存新缓存，再按 last-access 从旧到新驱逐——run 35313768877 中被驱逐的恰是上一代、从未被读过的 `sdk-hostpkg` 快照（3.10GB），与 latest-only 策略删除的集合相同。写入方主动清理的意义在于可控性：在我们自己的步骤里释放空间、保留「新快照保存成功后才清理」的兜底，并让驱逐根本无需发生——因为当旧代太小（或 7 天过期后不存在）时，下一个候选就是 toolchain 快照，代价是 40 分钟重建。

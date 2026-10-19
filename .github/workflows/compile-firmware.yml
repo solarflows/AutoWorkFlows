@@ -27,10 +27,17 @@
 #   require_signing            true = 签名密钥缺失/无效即硬失败 (默认 false = 降级 random 继续)
 #   passwall_keep_versions     Passwall 同包版本保留数 (默认 3, 范围 [1,30]; 下限 1 = 有界保留)
 #   collect_packages           软件包打包清单 (逗号分隔; 空 = 默认单包 luci-app-passwall; 缺包仅告警)
+#   cache_variant              cache 命名空间变体 (空 = 默认 immwrt-v2-*; 非空 = save/purge key
+#                              插 <variant>- 段隔离 ccache/hostpkg, restore 前缀仍跨变体暖启动;
+#                              调度器按触发上下文预填充, 外部 caller 显式传 = 唯一入口)
 #   upload_artifacts           固件/SDK-IB 大工件上传开关 (默认 true; 关闭省上传耗时)
 #   standard_packages_branch   标准 packages feed 分支 (空 = 回退 targets.json 编排元数据)
 #   config_repo/ref            seed 来源仓库 (空 = caller 仓库 @ 触发 commit)
 #   clean_cache / free_disk_space / publish_sdk_ib / skip_feed_catchup
+#
+# 基础设施依赖: 发布/签名/统计逻辑来自 defaults_repo (默认 solarflows/AutoWorkflows@main)
+#   的 .github/scripts/{release-lib,signing-lib,parse-ccache-stats}.sh。显式改 defaults_repo
+#   指向自有 fork 时，该仓库必须同步这三个脚本，否则 Setup Signing Key / Publish 步骤失败。
 #
 # 产物去向: 固件+软件包 → Release (matrix_release_repo/matrix_passwall_repo 指定时)
 #           SDK/IB → artifacts Release (matrix_artifacts_release_repo 指定时)
@@ -110,6 +117,13 @@ on:
       # hostpkg 快照是否包含 build_dir 门禁 stamp (rust/golang host-compile
       # 缓存闭环的必要组成; 关闭 = 退回纯 staging 快照, host 自举每轮重编)
       hostpkg_stamp_cache:  { required: false, type: boolean, default: true }
+      # ── cache 命名空间变体 (C29; 2026-10-19) ──
+      # 空 = key 与既往逐字节一致 (默认档)。非空 = toolchain/ccache/hostpkg 三类
+      # save key 与 purge 锚在 <target>- 后插 "<variant>-" 段; restore-keys 保持
+      # 原前缀 → 跨变体单向读暖启动 (试验只写自己命名空间)。
+      # 刻意不做脚本自动派生 (隐式耦合 = C16 型静默陷阱): 调度器预填充,
+      # 外部 caller 显式传。忘传后果温和 (串库只稀释命中率/stamp miss 只重编)。
+      cache_variant:        { required: false, type: string, default: '' }
       # Summary 详细程度: auto = 外部 caller 完整 / 自身仓库调用 (编排方有
       # plan 上下文) 简洁; full/compact 显式覆盖。采集失败一律降级不阻断构建。
       summary_mode:         { required: false, type: string, default: 'auto' }
@@ -223,6 +237,23 @@ jobs:
               fi
               ;;
           esac
+          # cache_variant 白名单: [a-z0-9-] ≤24 (purge 锚定正则的插段, 拦正则
+          # 元字符/大写/超长; 大小写敏感——Actions Cache key 区分大小写, 统一小写)
+          CACHE_VARIANT="${{ inputs.cache_variant }}"
+          if [ "${#CACHE_VARIANT}" -gt 24 ]; then
+            fail "cache_variant 超长 (>24 字符): '${CACHE_VARIANT}'"
+          fi
+          case "$CACHE_VARIANT" in
+            *[!a-z0-9-]*) fail "cache_variant 含非法字符 (仅 [a-z0-9-], 小写): '${CACHE_VARIANT}'" ;;
+          esac
+          # CACHE_MID 单点拼装 (仿 C7 hostpkg_cache_paths 单源模式): 含尾 '-',
+          # 空 = 现状 key。save key / restore exact key / purge 前缀与正则一律
+          # 引用 env.CACHE_MID; restore-keys 前缀刻意不带 (跨变体暖启动, 见 C29)。
+          if [ -n "$CACHE_VARIANT" ]; then
+            echo "CACHE_MID=${CACHE_VARIANT}-" >> "$GITHUB_ENV"
+          else
+            echo "CACHE_MID=" >> "$GITHUB_ENV"
+          fi
 
           # ── 可达性探测 (repo 类参数非空时; 拦住拼错/无权限, 防几小时后发布才失败) ──
           for repo_entry in \
@@ -574,7 +605,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v6
         with:
-          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ env.CACHE_MID }}${{ steps.toolchain_hash.outputs.hash }}
           restore-keys: |
             immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-
           path: |
@@ -587,7 +618,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v6
         with:
-          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ env.CACHE_MID }}${{ github.run_id }}
           restore-keys: |
             immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-
           path: openwrt/.ccache
@@ -638,7 +669,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v6
         with:
-          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ env.CACHE_MID }}${{ github.run_id }}
           restore-keys: |
             immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-
           path: ${{ steps.validate-inputs.outputs.hostpkg_cache_paths }}
@@ -792,100 +823,17 @@ jobs:
         env:
           APK_BUILD_KEY: ${{ secrets.APK_BUILD_KEY }}
           USIGN_KEY:     ${{ secrets.USIGN_KEY }}
+          REQUIRE_SIGNING: ${{ inputs.require_signing }}
         run: |
           set -euo pipefail
           USE_APK="${{ steps.apply_config.outputs.use_apk }}"
 
-          # random 降级兜底 (刻意设计, require_signing=false 默认): 缺钥/坏钥只告警、
-          # 构建继续——试跑或无密钥仓库不应被阻断, 产物由构建系统随机密钥签名,
-          # 设备端需 --allow-untrusted/--force-checksum。require_signing=true 时
-          # 该兜底改为硬失败, 阻止随机密钥/未签名产物进入 Release。
-          random_fallback() {
-            echo "sign_mode=random" >> "$GITHUB_OUTPUT"
-            echo "fingerprint=none" >> "$GITHUB_OUTPUT"
-            if [ "${{ inputs.require_signing }}" = "true" ]; then
-              echo "::error::require_signing=true: 签名密钥缺失或无效, 拒绝继续构建"
-              exit 1
-            fi
-            exit 0
-          }
-
-          if [ "$USE_APK" = "true" ]; then
-            # ════════════ APK 签名 (ECDSA/RSA PEM) ════════════
-            SIGN_MODE="apk"
-            if [ -z "$APK_BUILD_KEY" ]; then
-              echo "::warning::APK_BUILD_KEY secret 未设置 — 构建系统将生成随机密钥, 设备 apk add 需 --allow-untrusted"
-              random_fallback
-            fi
-            # 防泄漏: printf 而非 echo, chmod 600, 只输出字节数/指纹不输出内容。
-            printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > openwrt/private-key.pem
-            chmod 600 openwrt/private-key.pem
-            sed -i 's/\r$//' openwrt/private-key.pem
-            echo "📏 密钥文件: $(wc -c < openwrt/private-key.pem) 字节 (不输出内容)"
-
-            echo "🔍 验证密钥格式..."
-            if openssl ec -in openwrt/private-key.pem -check -noout 2>/dev/null; then
-              echo "✅ ECDSA 私钥格式验证通过"
-            elif openssl rsa -in openwrt/private-key.pem -check -noout 2>/dev/null; then
-              echo "::warning::APK_BUILD_KEY 是 RSA 密钥, ImmortalWrt APK 构建系统默认使用 ECDSA prime256v1"
-              echo "::notice::建议重新生成 ECDSA 密钥: openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem"
-            else
-              KEY_HEADER=$(head -c 50 openwrt/private-key.pem 2>/dev/null)
-              echo "::error::APK_BUILD_KEY 不是有效的 PEM 格式私钥 (需要 ECDSA prime256v1 或 RSA)"
-              echo "::notice::密钥头部(仅 PEM header, 不含密钥): ${KEY_HEADER}"
-              echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续"
-              rm -f openwrt/private-key.pem
-              random_fallback
-            fi
-
-            openssl ec -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem 2>/dev/null || \
-              openssl rsa -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem
-            chmod 644 openwrt/public-key.pem
-            echo "✅ 公钥已派生 → openwrt/public-key.pem"
-            FP=$(openssl sha256 < openwrt/public-key.pem | awk '{print $NF}')
-          else
-            # ════════════ IPK 签名 (usign Ed25519) ════════════
-            SIGN_MODE="usign"
-            # usign 私钥文件 = "untrusted comment: ..." 头 + base64(104 字节 seckey 结构)。
-            # seckey 结构: pkalg[2]+kdfalg[2]+kdfrounds[4]+salt[16]+checksum[8]+fingerprint[8]+seckey[64]。
-            # USIGN_KEY 存完整 key-build 文件内容, 由本地直接导入 (gh secret set USIGN_KEY < key-build)。
-            if [ -z "$USIGN_KEY" ]; then
-              echo "::warning::USIGN_KEY secret 未设置 — 构建系统将生成随机 usign 密钥, 设备 opkg install 需 --force-checksum"
-              random_fallback
-            fi
-            # 防泄漏: printf 而非 echo, chmod 600, 只输出指纹不输出内容。
-            printf '%s\n' "$USIGN_KEY" > openwrt/key-build
-            chmod 600 openwrt/key-build
-            sed -i 's/\r$//' openwrt/key-build
-
-            # 校验 seckey 结构(104 字节)并派生公钥(42 字节)+指纹。
-            # 二进制经文件管道处理, 不经 bash 变量 (bash 变量无法存 NUL 字节)。
-            KEY_B64=$(grep -v '^untrusted comment:' openwrt/key-build | tr -d '\n')
-            printf '%s' "$KEY_B64" | base64 -d > openwrt/.seckey.bin 2>/dev/null
-            KEY_BYTES=$(wc -c < openwrt/.seckey.bin)
-            if [ "$KEY_BYTES" != "104" ]; then
-              echo "::error::USIGN_KEY 不是有效的 usign 私钥 (seckey 结构 ${KEY_BYTES} 字节, 期望 104)"
-              echo "::notice::请导入本地 key-build 文件: gh secret set USIGN_KEY --repo <repo> < key-build"
-              echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续"
-              rm -f openwrt/key-build openwrt/.seckey.bin
-              random_fallback
-            fi
-            # 指纹 = seckey 结构 offset 32..40 (8 字节), 与 usign -F 输出一致。
-            FP=$(dd if=openwrt/.seckey.bin bs=1 skip=32 count=8 2>/dev/null | od -An -tx1 | tr -d ' \n')
-            # 公钥 = "Ed" + fingerprint[8] + pubkey[32] (pubkey 在 offset 72..104), 与 usign -G 输出一致。
-            {
-              printf 'untrusted comment: public key %s\n' "$FP"
-              { printf 'Ed'; dd if=openwrt/.seckey.bin bs=1 skip=32 count=8 2>/dev/null; dd if=openwrt/.seckey.bin bs=1 skip=72 count=32 2>/dev/null; } | base64 -w 0
-              printf '\n'
-            } > openwrt/key-build.pub
-            chmod 644 openwrt/key-build.pub
-            rm -f openwrt/.seckey.bin
-            echo "📏 usign 私钥已注入 (104 字节结构, 不输出内容), 指纹 ${FP}"
-          fi
-
-          echo "sign_mode=${SIGN_MODE}" >> $GITHUB_OUTPUT
-          echo "fingerprint=${FP}" >> $GITHUB_OUTPUT
-          echo "🔑 ${SIGN_MODE} 签名密钥已注入 (指纹: ${FP:0:16}...)"
+          # 逻辑收敛到 signing-lib.sh (R12 单一事实来源, 两 executor 同款行为;
+          # random 降级=刻意设计与 require_signing 硬失败语义见库头注释)。
+          # use_apk 探测属 executor 域知识 (seed CONFIG_USE_APK 由 Apply
+          # Configuration 读取), 不入库。
+          . AutoWorkFlows/.github/scripts/signing-lib.sh
+          apply_signing_key "$USE_APK" "openwrt"
 
       # ───────── 下载源码包（dl/ 目录）─────────
       # 刻意设计: 并行下载失败时降级单线程重试; 清理 <1KB 的残缺文件(下载失败残留)
@@ -1806,7 +1754,7 @@ jobs:
           # 源码修订只对应同一份快照；该 key 已存在时重复 save 必然以
           # "Unable to reserve cache ..." 结束（Actions Cache 不可覆盖），
           # 日志上表现为误导性失败。精确命中时跳过 save，purge 仍按快照可用处理。
-          TC_KEY="immwrt-v2-toolchain-${IMMWRT_TARGET}-${{ steps.toolchain_hash.outputs.hash }}"
+          TC_KEY="immwrt-v2-toolchain-${IMMWRT_TARGET}-${{ env.CACHE_MID }}${{ steps.toolchain_hash.outputs.hash }}"
           set +e
           TC_JSON=$(gh cache list --repo "${{ github.repository }}" --key "$TC_KEY" --limit 100 --json key)
           TC_LOOKUP_RC=$?
@@ -1830,7 +1778,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v6
         with:
-          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ steps.toolchain_hash.outputs.hash }}
+          key: immwrt-v2-toolchain-${{ env.IMMWRT_TARGET }}-${{ env.CACHE_MID }}${{ steps.toolchain_hash.outputs.hash }}
           path: |
             openwrt/staging_dir/host*
             openwrt/staging_dir/tool*
@@ -1841,7 +1789,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v6
         with:
-          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v2-ccache-${{ env.IMMWRT_TARGET }}-${{ env.CACHE_MID }}${{ github.run_id }}
           path: openwrt/.ccache
 
       # ───────── 保存前预算预演 (hostpkg 快照体积守卫) ─────────
@@ -1939,7 +1887,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@v6
         with:
-          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ github.run_id }}
+          key: immwrt-v2-sdk-hostpkg-${{ env.IMMWRT_TARGET }}-${{ env.CACHE_MID }}${{ github.run_id }}
           path: ${{ steps.validate-inputs.outputs.hostpkg_cache_paths }}
 
       # ───────── 清理远端工具链缓存（独立维护）─────────
@@ -1955,9 +1903,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-"
+          TC_PREFIX="immwrt-v2-toolchain-${IMMWRT_TARGET}-${CACHE_MID}"
           TC_CURRENT="${TC_PREFIX}${{ steps.toolchain_hash.outputs.hash }}"
-          TC_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
+          TC_PATTERN="^immwrt-v2-toolchain-${IMMWRT_TARGET}-${CACHE_MID}(force-[0-9a-f]{16}-[0-9]+|[0-9a-f]{16})$"
           set +e
           TC_LIST=$(gh cache list --repo "$REPO" --key "$TC_PREFIX" --limit 100 --json id,key,createdAt)
           TC_RC=$?
@@ -1996,9 +1944,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-"
+          CC_PREFIX="immwrt-v2-ccache-${IMMWRT_TARGET}-${CACHE_MID}"
           CC_CURRENT="${CC_PREFIX}${{ github.run_id }}"
-          CC_PATTERN="^immwrt-v2-ccache-${IMMWRT_TARGET}-[0-9]+$"
+          CC_PATTERN="^immwrt-v2-ccache-${IMMWRT_TARGET}-${CACHE_MID}[0-9]+$"
           set +e
           CC_LIST=$(gh cache list --repo "$REPO" --key "$CC_PREFIX" --limit 100 --json id,key,createdAt)
           CC_RC=$?
@@ -2043,9 +1991,9 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          HP_PREFIX="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-"
+          HP_PREFIX="immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-${CACHE_MID}"
           HP_CURRENT="${HP_PREFIX}${{ github.run_id }}"
-          HP_PATTERN="^immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-[0-9]+$"
+          HP_PATTERN="^immwrt-v2-sdk-hostpkg-${IMMWRT_TARGET}-${CACHE_MID}[0-9]+$"
           set +e
           HP_LIST=$(gh cache list --repo "$REPO" --key "$HP_PREFIX" --limit 100 --json id,key,createdAt)
           HP_RC=$?
@@ -2405,70 +2353,37 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
+          # 发布行为收敛到 release-lib.sh (R12 单一事实来源: type flags 推导 /
+          # R8 降级守卫 / R2 重试上传 / G14 版本收敛, 语义见库头注释与
+          # build-artifacts.instructions.md)。
+          . AutoWorkFlows/.github/scripts/release-lib.sh
           RELEASE_TAG="${{ env.RESOLVED_VERSION }}"
           if [ -n "${{ inputs.matrix_firmware_release_tag_prefix }}" ]; then
             RELEASE_TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
           fi
           RELEASE_REPO="${{ inputs.matrix_release_repo }}"
           FIRMWARE_DIR="openwrt/release/firmware"
-          # ── Release 类型: 运行级开关作用于本次所有 Release (固件/软件包/SDK-IB) ──
-          # create 用追加 flag; edit 显式重置状态, 保证默认 release 能纠正历史
-          # draft/prerelease 状态 (否则 --draft=false 之外的状态不会被清除)。
           RELEASE_TYPE="${{ inputs.release_type }}"
-          CREATE_TYPE_FLAGS=()
-          EDIT_TYPE_FLAGS=()
-          case "$RELEASE_TYPE" in
-            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
-            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
-            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
-          esac
+          resolve_release_type_flags "$RELEASE_TYPE"
           echo "🏷️ Release 类型: ${RELEASE_TYPE}"
           [ -d "$FIRMWARE_DIR" ] && [ -n "$(find "$FIRMWARE_DIR" -maxdepth 1 -type f -print -quit)" ] || {
             echo "::error::固件目录为空，拒绝创建空 Release"
             exit 1
           }
 
-          upload_asset_retry() {
-            local tag="$1"
-            local repo="$2"
-            shift 2
-            local uploaded=false
-            for attempt in 1 2 3; do
-              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
-                uploaded=true
-                break
-              fi
-              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
-              sleep $((attempt * 5))
-            done
-            if [ "$uploaded" != "true" ]; then
-              echo "::error::资产上传失败，已达最大重试次数: $*"
-              return 1
-            fi
-          }
-
           if ! gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
             echo "📦 创建 Release: ${RELEASE_TAG} (repo: ${RELEASE_REPO})"
             # --target 钉本 run 构建的源码 commit (sha_full = matrix_repo@ref 的 HEAD,
-            # 与 release_repo 同源 fork 时有效); 刻意: 共享 tag (passwall/artifacts)
+            # 与 release_repo 同源 fork 时有效, R7); 刻意: 共享 tag (passwall/artifacts)
             # 不传 --target, 落默认分支——它们不是 per-build 产物。
             gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" \
               --target "${{ steps.clone_packages.outputs.sha_full }}" \
               --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md \
               "${CREATE_TYPE_FLAGS[@]}"
           else
-            # ── 防误覆盖 (R6 配套): 非正式 run (prerelease/draft) 复用 tag 时,
-            #    不得把已转正的 Release 降级改写; 反向 (非正式→release) 是有意
-            #    转正, 放行。资产 --clobber 覆盖本身是刻意设计: CI 重跑幂等,
-            #    同名即同版本替换。
-            if [ "$RELEASE_TYPE" != "release" ]; then
-              if [ -n "$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" \
-                  --json draft,prerelease --jq 'select(.draft == false and .prerelease == false) | "formal"' 2>/dev/null)" ]; then
-                echo "::error::tag ${RELEASE_TAG} 已存在正式 Release, 拒绝以 ${RELEASE_TYPE} 类型覆盖 (换 version/tag 重试, 或确需降级请手动处理该 Release)"
-                exit 1
-              fi
-            fi
             echo "📝 更新已有 Release: ${RELEASE_TAG} (repo: ${RELEASE_REPO})"
+            # R8: 非正式 run (prerelease/draft) 不得把已转正的固件 Release 降级改写
+            guard_no_downgrade_formal "$RELEASE_TAG" "$RELEASE_REPO" "$RELEASE_TYPE"
             gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" \
               --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md \
               "${EDIT_TYPE_FLAGS[@]}"
@@ -2494,6 +2409,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
+          . AutoWorkFlows/.github/scripts/release-lib.sh
           PACKAGE_DIR="openwrt/release/passwall"
           mapfile -t PACKAGE_FILES < <(find "$PACKAGE_DIR" -maxdepth 1 -type f \( -name '*.ipk' -o -name '*.apk' -o -name '*.pem' \) 2>/dev/null)
           if [ "${#PACKAGE_FILES[@]}" -eq 0 ]; then
@@ -2503,32 +2419,7 @@ jobs:
           PACKAGE_REPO="${{ inputs.matrix_passwall_repo }}"
           PACKAGE_TAG="${{ inputs.matrix_passwall_tag }}"
           # 与固件 Release 同一运行级类型 (所有 Release 一致)
-          CREATE_TYPE_FLAGS=()
-          EDIT_TYPE_FLAGS=()
-          case "${{ inputs.release_type }}" in
-            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
-            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
-            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
-          esac
-
-          upload_asset_retry() {
-            local tag="$1"
-            local repo="$2"
-            shift 2
-            local uploaded=false
-            for attempt in 1 2 3; do
-              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
-                uploaded=true
-                break
-              fi
-              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
-              sleep $((attempt * 5))
-            done
-            if [ "$uploaded" != "true" ]; then
-              echo "::error::资产上传失败，已达最大重试次数: $*"
-              return 1
-            fi
-          }
+          resolve_release_type_flags "${{ inputs.release_type }}"
 
           if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
             # 刻意 --latest=false: 共享多 target 的 packages tag 不应抢占仓库 Latest;
@@ -2537,7 +2428,8 @@ jobs:
               --notes "Multi-target passwall packages" --latest=false \
               "${CREATE_TYPE_FLAGS[@]}"
           else
-            # 已有 Release: 同步本次运行指定的类型 (默认 release 可纠正历史 draft/prerelease)
+            # 已有 Release: 同步本次运行指定的类型 (默认 release 可纠正历史 draft/prerelease)。
+            # 常驻共享 tag 刻意不加 R8 降级守卫 (正式态是常态, 见库头注释)
             gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" "${EDIT_TYPE_FLAGS[@]}"
           fi
           for file in "${PACKAGE_FILES[@]}"; do
@@ -2545,41 +2437,9 @@ jobs:
             upload_asset_retry "$PACKAGE_TAG" "$PACKAGE_REPO" "$file"
           done
 
-          # ── 同包多版本收敛: 每个包名保留最近 KEEP_PKG_VERSIONS 版 (含 .sha256) ──
-          # 版本号变化 → 文件名不同 → --clobber 不会覆盖, 只会无限累积
-          # (packages-ipq807x 曾出现 luci-app-passwall 3 版共存)。按资产 updated_at
-          # 排序留最新 N 版; 公钥 (.pem/.pub) 与解析失败的文件永不清; 清理失败只
-          # 告警不阻塞发布 (写入方自约束, 与 artifacts keep_versions 同模式)。
-          # 保留数由 passwall_keep_versions 输入控制 (validate-inputs 已限 [1,30])。
-          KEEP_PKG_VERSIONS="${{ inputs.passwall_keep_versions }}"
-          if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json assets \
-            --jq '[.assets[] | select(.name | test("\\.(apk|ipk)$"))]' > /tmp/pkg_assets.json 2>/dev/null; then
-            echo "::warning::软件包资产列表获取失败, 跳过版本收敛"
-          elif [ -s /tmp/pkg_assets.json ] && [ "$(jq 'length' /tmp/pkg_assets.json)" -gt 0 ]; then
-            # 包名提取: apk "pkg-1.2.3-r1.apk" → pkg (去最后两段 ver-rN);
-            # ipk "pkg_1.2.3-1_arch.ipk" → pkg (去 _ver-rev_arch 段)。
-            # 提取失败 (无版本结构) 归 default 组, 永不清。
-            jq -r 'sort_by(.updated_at) | reverse
-                   | group_by(.name | sub("-[^-]+-r[0-9]+\\.apk$";"") | sub("_[^_]+-[^-]+_[^.]+\\.ipk$";"") | if . == "" then "default" else . end)
-                   | .[] | .[ $KEEP_PKG_VERSIONS : ][] | .name' \
-              --argjson KEEP_PKG_VERSIONS "$KEEP_PKG_VERSIONS" /tmp/pkg_assets.json > /tmp/pkg_purge.txt || : > /tmp/pkg_purge.txt
-            if [ -s /tmp/pkg_purge.txt ]; then
-              echo "ℹ️ 软件包版本收敛: 以下 $(wc -l < /tmp/pkg_purge.txt) 个旧版本将被清理 (每包保留 ${KEEP_PKG_VERSIONS} 版)"
-              cat /tmp/pkg_purge.txt
-              while IFS= read -r old; do
-                [ -n "$old" ] || continue
-                gh release delete-asset "$PACKAGE_TAG" "$old" --repo "$PACKAGE_REPO" --yes 2>/dev/null \
-                  || echo "::warning::清理 $old 失败 (保留, 下轮重试)"
-                # 配套 .sha256 同步清理 (存在才清)
-                if gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json assets \
-                  --jq --arg s "${old}.sha256" '[.assets[].name] | index($s) != null' | grep -qx true; then
-                  gh release delete-asset "$PACKAGE_TAG" "${old}.sha256" --repo "$PACKAGE_REPO" --yes 2>/dev/null || true
-                fi
-              done < /tmp/pkg_purge.txt
-            else
-              echo "ℹ️ 软件包版本收敛: 无需清理 (每包 ≤ ${KEEP_PKG_VERSIONS} 版)"
-            fi
-          fi
+          # G14/R10 同包多版本收敛 (每包名保留 passwall_keep_versions 版, 含
+          # .sha256 伴生; 下限 1 = 有界保留刻意设计, 语义见 purge_pkg_versions)
+          purge_pkg_versions "$PACKAGE_TAG" "$PACKAGE_REPO" "${{ inputs.passwall_keep_versions }}"
 
       # ════════ SDK / IB 打包与发布 ════════
       # SDK and IB share one per-target release tag. Their indexes stay separate
@@ -2726,17 +2586,13 @@ jobs:
           set -euo pipefail
           TAG="${{ inputs.matrix_artifacts_release_tag }}"
           REPO="${{ inputs.matrix_artifacts_release_repo }}"
+          # 发布行为收敛到 release-lib.sh (R12; 语义同 Publish firmware release 步骤)。
           # 确保 release 存在; 已存在时同步本次运行指定的发布类型。
           # 注意: draft 会让无权限的公开消费者看不到 SDK/IB, 仅在有意的隔离调试时使用。
           # 刻意: artifacts 共享 tag 不传 --latest/--target — 多版本共存、落默认分支,
           # 真正的版本指针由 sdk-index.json/ib-index.json 承担 (compile-packages 消费)。
-          CREATE_TYPE_FLAGS=()
-          EDIT_TYPE_FLAGS=()
-          case "${{ inputs.release_type }}" in
-            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
-            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
-            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
-          esac
+          . AutoWorkFlows/.github/scripts/release-lib.sh
+          resolve_release_type_flags "${{ inputs.release_type }}"
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" \
               --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false \
@@ -2744,25 +2600,6 @@ jobs:
           else
             gh release edit "$TAG" --repo "$REPO" "${EDIT_TYPE_FLAGS[@]}"
           fi
-
-          upload_asset_retry() {
-            local tag="$1"
-            local repo="$2"
-            shift 2
-            local uploaded=false
-            for attempt in 1 2 3; do
-              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
-                uploaded=true
-                break
-              fi
-              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
-              sleep $((attempt * 5))
-            done
-            if [ "$uploaded" != "true" ]; then
-              echo "::error::资产上传失败，已达最大重试次数: $*"
-              return 1
-            fi
-          }
 
           # ── 当前 target 的 SDK 全量上传 ──
           CURRENT_NAMES=$(cat <<'SDK_NAMES_EOF'
@@ -2852,14 +2689,10 @@ jobs:
           set -euo pipefail
           TAG="${{ inputs.matrix_artifacts_release_tag }}"
           REPO="${{ inputs.matrix_artifacts_release_repo }}"
-          # 与 SDK 同一 artifacts tag, 类型同步 (draft 对公开消费者不可见)
-          CREATE_TYPE_FLAGS=()
-          EDIT_TYPE_FLAGS=()
-          case "${{ inputs.release_type }}" in
-            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
-            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
-            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
-          esac
+          # 与 SDK 同一 artifacts tag, 类型同步 (draft 对公开消费者不可见)。
+          # 发布行为收敛到 release-lib.sh (R12), 刻意项见 Upload SDK to release 注释。
+          . AutoWorkFlows/.github/scripts/release-lib.sh
+          resolve_release_type_flags "${{ inputs.release_type }}"
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" \
               --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false \
@@ -2867,25 +2700,6 @@ jobs:
           else
             gh release edit "$TAG" --repo "$REPO" "${EDIT_TYPE_FLAGS[@]}"
           fi
-
-          upload_asset_retry() {
-            local tag="$1"
-            local repo="$2"
-            shift 2
-            local uploaded=false
-            for attempt in 1 2 3; do
-              if gh release upload "$tag" --repo "$repo" "$@" --clobber; then
-                uploaded=true
-                break
-              fi
-              echo "⚠️ 资产上传失败 [尝试 ${attempt}/3]: $*，等待 $((attempt * 5)) 秒后重试..."
-              sleep $((attempt * 5))
-            done
-            if [ "$uploaded" != "true" ]; then
-              echo "::error::资产上传失败，已达最大重试次数: $*"
-              return 1
-            fi
-          }
 
           # ── 当前 target 的 IB 全量上传 ──
           CURRENT_NAMES=$(cat <<'IB_NAMES_EOF'
