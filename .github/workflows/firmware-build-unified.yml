@@ -59,6 +59,20 @@ on:
         required: false
         default: 'V'
         type: string
+      release_type:
+        description: 'Release 发布类型 (作用于本次全部 Release: 固件/软件包/artifacts)'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - 'release'      # 正式: 非 draft、非 prerelease
+          - 'prerelease'   # 预发布: 显示 Pre-release 标记
+          - 'draft'        # 草稿: 不公开, 需人工 publish
+      require_signing:
+        description: '要求有效签名密钥 (缺钥/坏钥时构建失败, 而非降级 random 密钥继续发布)'
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: '18 22 * * 0'  # 每周日 22:18 UTC = 北京时间每周一 06:18
 
@@ -203,11 +217,17 @@ jobs:
           fi
 
       - name: Purge stale draft releases
+        # release_type=draft 时草稿是有意保留的发布形态, 不得按 stale 清理
+        if: github.event.inputs.release_type != 'draft'
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
+          # 标题格式 "<target> Build <tag>" 由两个 executor 固定生成, 按 "Build "
+          # (带尾空格) 子串匹配: 与 version_prefix 解耦 (旧 test("Build V") 假设
+          # 前缀 V, 自定义前缀后永不命中), 且天然排除 artifacts 的 "<tag> Builds"
+          # (无空格) 与 passwall 的 "Passwall Packages" 标题。
           STALE_IDS=$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
-            --jq '[.[] | select(.draft and (.name | test("Build V")))] | .[].id' 2>/dev/null || true)
+            --jq '[.[] | select(.draft and (.name | contains("Build ")))] | .[].id' 2>/dev/null || true)
           if [ -n "$STALE_IDS" ]; then
             for ID in $STALE_IDS; do
               gh api -X DELETE "repos/${{ github.repository }}/releases/$ID" 2>/dev/null || true
@@ -352,6 +372,8 @@ jobs:
               firmware_release_tag_prefix: (.firmware_release_tag_prefix // .target),
               passwall_repo:     (.passwall_repo     // $pkg_repo),
               passwall_tag:      (.passwall_tag      // "packages"),
+              # 同包版本收敛保留数 (executor input 契约: [1,30], 下限 1 = 有界保留)
+              passwall_keep_versions: (.passwall_keep_versions // 3),
               sdk_packages:      (.sdk_packages      // "*"),
               artifacts_release_repo: (.artifacts_release_repo // $artifacts_repo),
               artifacts_release_tag:  (.artifacts_release_tag  // ("artifacts-" + .target)),
@@ -1109,6 +1131,8 @@ jobs:
             echo ""
             echo "**计划版本**: \`${VER}\`"
             echo ""
+            echo "**Release 类型**: \`${{ github.event.inputs.release_type || 'release' }}\`"
+            echo ""
             echo "**构建目标**: \`${TARGETS}\`"
             echo ""
             echo "| 目标 | 源码 | 插件 feed | 标准 packages | Kernel | SDK | IB | 模式 |"
@@ -1166,6 +1190,10 @@ jobs:
       # 软件包打包清单 (targets.json 编排元数据, 外部直调不传则默认单包)
       collect_packages:          ${{ matrix.collect_packages }}
       version:                   ${{ needs.plan.outputs.version }}
+      # 运行级 Release 类型: 默认 release, 同时作用于固件 / Passwall / SDK-IB 全部 Release
+      release_type:              ${{ github.event.inputs.release_type || 'release' }}
+      require_signing:           ${{ github.event.inputs.require_signing == 'true' }}
+      passwall_keep_versions:    ${{ matrix.passwall_keep_versions }}
       clean_cache:               ${{ needs.plan.outputs.clean_cache == 'true' }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
       publish_sdk_ib:             true
@@ -1223,6 +1251,10 @@ jobs:
       packages_feed_repo:        ${{ matrix.packages_feed_repo }}
       packages_feed_name:        ${{ matrix.packages_feed_name }}
       version:                   ${{ needs.plan.outputs.version }}
+      # 运行级 Release 类型: 默认 release, 同时作用于 IB 固件 / Passwall 软件包 Release
+      release_type:              ${{ github.event.inputs.release_type || 'release' }}
+      require_signing:           ${{ github.event.inputs.require_signing == 'true' }}
+      passwall_keep_versions:    ${{ matrix.passwall_keep_versions }}
       clean_cache:               ${{ needs.plan.outputs.clean_cache == 'true' }}
       skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
     secrets:

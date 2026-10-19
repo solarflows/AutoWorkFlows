@@ -176,7 +176,7 @@ flowchart TD
     R --> S["预检 toolchain 快照是否已存在 → Save toolchain(命中则跳过) / ccache / SDK-hostpkg"]
     S --> T["Purge stale ×3（toolchain / ccache / SDK hostpkg，各自独立，排除当前 key）"]
     T --> U["📦 打包 release/{firmware,passwall}"]
-    U --> V["Publish firmware / Passwall"]
+    U --> V["Publish firmware / Passwall<br/>（release_type: release|prerelease|draft）"]
     V --> W["📦 Package SDK & IB → artifacts-<target>"]
     W --> X["Upload published-state"]
 ```
@@ -399,6 +399,7 @@ sequenceDiagram
 | target 与种子目录一一对应 | ✅ |
 | 缓存前缀互不包含（防串扰） | ✅ |
 | 发布 tag 唯一（fw/passwall/artifacts） | ✅ |
+| 发布类型一致（`release_type` 同时作用于固件/软件包/SDK-IB） | ✅ |
 | 禁用变量 `TARGET`/`HOST`/`BUILD` 未导出 | ✅ |
 | `git diff --check` | ✅ |
 

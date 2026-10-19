@@ -26,6 +26,10 @@
 #   matrix_build_sdk_ib        true = IB 组装固件 (默认 false 只编译包)
 #   matrix_release_repo        IB 固件 Release 目标 (空 = 不发布)
 #   matrix_passwall_repo/tag   软件包 Release 目标 (空 = 不发布)
+#   release_type               Release 发布类型 (release 正式 | prerelease 预发布 | draft 草稿;
+#                              默认 release, 作用于本次构建创建/更新的全部 Release)
+#   require_signing            true = 签名密钥缺失/无效即硬失败 (默认 false = 降级 random 继续)
+#   passwall_keep_versions     Passwall 同包版本保留数 (默认 3, 范围 [1,30]; 下限 1 = 有界保留)
 #   ib_packages / ib_profiles  IB 组装包清单与设备 profile (空 = 回退 seed 提取)
 #   upload_artifacts           IB 固件大工件上传开关 (默认 true)
 #   config_repo/ref            seed 来源仓库 (空 = caller 仓库 @ 触发 commit)
@@ -53,6 +57,19 @@ on:
       matrix_passwall_tag:        { required: false, type: string, default: '' }
       matrix_release_repo:        { required: false, type: string, default: '' }
       matrix_firmware_release_tag_prefix: { required: false, type: string, default: '' }
+      # ── Release 发布类型 (运行级, 作用于本次创建/更新的全部 Release:
+      #    IB 固件 / Passwall 软件包) ──
+      # release = 正式 (默认, 非 draft 非 prerelease)
+      # prerelease = 预发布; draft = 草稿 (发布后需人工 publish)
+      release_type:              { required: false, type: string, default: 'release' }
+      # ── 发布安全开关 ──
+      # require_signing = true 时, 签名密钥缺失/无效直接硬失败, 阻止随机密钥或
+      # 未签名产物发布到 Release; 默认 false = 既有"降级 random + 构建继续"语义
+      # (刻意设计, 见 Setup Signing Key 注释)。
+      require_signing:           { required: false, type: boolean, default: false }
+      # Passwall 包同包版本收敛保留数 (与 artifacts_keep_versions 对称的可控项;
+      # 范围 [1,30], 下限 1 = 有界保留是刻意设计, 不提供"全留"禁用)
+      passwall_keep_versions:    { required: false, type: number, default: 3 }
       matrix_build_sdk_ib:       { required: false, type: boolean, default: false }
       # firmware-repack 纯组装模式: 无变更包 (package_count=0) 时仍走 IB 组装
       matrix_repack_mode:       { required: false, type: boolean, default: false }
@@ -174,6 +191,21 @@ jobs:
           validate_name "${{ inputs.matrix_passwall_tag }}" "matrix_passwall_tag"
           validate_name "${{ inputs.matrix_artifacts_release_tag }}" "matrix_artifacts_release_tag"
           validate_name "${{ inputs.matrix_firmware_release_tag_prefix }}" "matrix_firmware_release_tag_prefix"
+          case "${{ inputs.release_type }}" in
+            release|prerelease|draft) ;;
+            *) fail "release_type 非法: '${{ inputs.release_type }}' (可选 release|prerelease|draft)" ;;
+          esac
+          PW_KEEP="${{ inputs.passwall_keep_versions }}"
+          case "$PW_KEEP" in
+            ''|*[!0-9]*) fail "passwall_keep_versions 非数字: '${PW_KEEP}'" ;;
+            *)
+              # 下限 1 为刻意设计: 写入方自约束"有界保留" (G14 收敛的立项前提,
+              # 防资产无限累积), 0/禁用不提供。
+              if [ "$PW_KEEP" -lt 1 ] || [ "$PW_KEEP" -gt 30 ]; then
+                fail "passwall_keep_versions 超出范围 [1,30]: ${PW_KEEP}"
+              fi
+              ;;
+          esac
           case "${{ inputs.config_path }}" in
             /*|*..*) fail "config_path 非法: '${{ inputs.config_path }}' (禁止绝对路径与 ..)" ;;
           esac
@@ -489,14 +521,25 @@ jobs:
           fi
           echo "use_apk=${USE_APK}" >> $GITHUB_OUTPUT
 
+          # random 降级兜底 (刻意设计, require_signing=false 默认): 缺钥/坏钥只告警、
+          # 构建继续——试跑或无密钥仓库不应被阻断。require_signing=true 时该兜底
+          # 改为硬失败, 阻止随机密钥/未签名产物进入 Release (与 compile-firmware 同语义)。
+          random_fallback() {
+            echo "sign_mode=random" >> "$GITHUB_OUTPUT"
+            echo "fingerprint=none" >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.require_signing }}" = "true" ]; then
+              echo "::error::require_signing=true: 签名密钥缺失或无效, 拒绝继续构建"
+              exit 1
+            fi
+            exit 0
+          }
+
           if [ "$USE_APK" = "true" ]; then
             # ════════════ APK 签名 (ECDSA/RSA PEM) ════════════
             SIGN_MODE="apk"
             if [ -z "$APK_BUILD_KEY" ]; then
               echo "::warning::APK_BUILD_KEY secret 未设置 — 产物未签名, 设备 apk add 需 --allow-untrusted"
-              echo "sign_mode=random" >> $GITHUB_OUTPUT
-              echo "fingerprint=none" >> $GITHUB_OUTPUT
-              exit 0
+              random_fallback
             fi
             # 防泄漏: printf 而非 echo, chmod 600, 只输出字节数/指纹不输出内容。
             printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > private-key.pem
@@ -515,9 +558,7 @@ jobs:
               echo "::notice::密钥头部(仅 PEM header, 不含密钥): ${KEY_HEADER}"
               echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续以完成 SDK 编译"
               rm -f private-key.pem
-              echo "sign_mode=random" >> $GITHUB_OUTPUT
-              echo "fingerprint=none" >> $GITHUB_OUTPUT
-              exit 0
+              random_fallback
             fi
 
             openssl ec -in private-key.pem -pubout -out public-key.pem 2>/dev/null || \
@@ -533,9 +574,7 @@ jobs:
             # USIGN_KEY 存完整 key-build 文件内容, 由本地直接导入 (gh secret set USIGN_KEY < key-build)。
             if [ -z "$USIGN_KEY" ]; then
               echo "::warning::USIGN_KEY secret 未设置 — 构建系统将生成随机 usign 密钥, 设备 opkg install 需 --force-checksum"
-              echo "sign_mode=random" >> $GITHUB_OUTPUT
-              echo "fingerprint=none" >> $GITHUB_OUTPUT
-              exit 0
+              random_fallback
             fi
             # 防泄漏: printf 而非 echo, chmod 600, 只输出指纹不输出内容。
             printf '%s\n' "$USIGN_KEY" > key-build
@@ -552,9 +591,7 @@ jobs:
               echo "::notice::请导入本地 key-build 文件: gh secret set USIGN_KEY --repo <repo> < key-build"
               echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续"
               rm -f key-build .seckey.bin
-              echo "sign_mode=random" >> $GITHUB_OUTPUT
-              echo "fingerprint=none" >> $GITHUB_OUTPUT
-              exit 0
+              random_fallback
             fi
             # 指纹 = seckey 结构 offset 32..40 (8 字节), 与 usign -F 输出一致。
             FP=$(dd if=.seckey.bin bs=1 skip=32 count=8 2>/dev/null | od -An -tx1 | tr -d ' \n')
@@ -1974,6 +2011,21 @@ jobs:
             TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
           fi
           REPO="${{ inputs.matrix_release_repo }}"
+          # ── Release 类型: 与 compile-firmware 同一语义 (运行级, 影响本次全部 Release) ──
+          CREATE_TYPE_FLAGS=()
+          EDIT_TYPE_FLAGS=()
+          case "${{ inputs.release_type }}" in
+            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
+            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
+            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
+          esac
+          echo "🏷️ Release 类型: ${{ inputs.release_type }}"
+          # ── --target 与 compile-firmware 全量路径对齐 (R7): 钉 SDK 记录的源码
+          #    commit (sdk_source_sha = 构建该 SDK 的 matrix_repo HEAD, 与 release_repo
+          #    同源 fork 时有效); 空值回退 gh 默认分支, 不猜。
+          TARGET_FLAGS=()
+          SDK_SRC_SHA="${{ steps.resolve.outputs.sdk_source_sha }}"
+          [ -n "$SDK_SRC_SHA" ] && TARGET_FLAGS=(--target "$SDK_SRC_SHA")
 
           upload_asset_retry() {
             local tag="$1"
@@ -1996,9 +2048,19 @@ jobs:
 
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" --title "${{ inputs.matrix_target }} Build $TAG (IB 增量)" \
-              --notes-file combined-release.md
+              --notes-file combined-release.md "${TARGET_FLAGS[@]}" "${CREATE_TYPE_FLAGS[@]}"
           else
-            gh release edit "$TAG" --repo "$REPO" --notes-file combined-release.md --draft=false
+            # 防误覆盖 (R6 配套, 与 compile-firmware 同): 非正式 run 复用 tag 时
+            # 不得降级改写已转正的 Release; 资产 --clobber 覆盖是刻意设计
+            # (CI 重跑幂等, 同名即同版本替换)。
+            if [ "${{ inputs.release_type }}" != "release" ]; then
+              if [ -n "$(gh release view "$TAG" --repo "$REPO" \
+                  --json draft,prerelease --jq 'select(.draft == false and .prerelease == false) | "formal"' 2>/dev/null)" ]; then
+                echo "::error::tag ${TAG} 已存在正式 Release, 拒绝以 ${{ inputs.release_type }} 类型覆盖 (换 version/tag 重试, 或确需降级请手动处理该 Release)"
+                exit 1
+              fi
+            fi
+            gh release edit "$TAG" --repo "$REPO" --notes-file combined-release.md "${EDIT_TYPE_FLAGS[@]}"
           fi
 
           while IFS= read -r file; do
@@ -2023,6 +2085,14 @@ jobs:
           [ "${#PACKAGE_FILES[@]}" -gt 0 ] || { echo "::error::SDK 产物目录为空"; exit 1; }
           PACKAGE_REPO="${{ inputs.matrix_passwall_repo }}"
           PACKAGE_TAG="${{ inputs.matrix_passwall_tag }}"
+          # 与固件 Release 同一运行级类型 (所有 Release 一致)
+          CREATE_TYPE_FLAGS=()
+          EDIT_TYPE_FLAGS=()
+          case "${{ inputs.release_type }}" in
+            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
+            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
+            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
+          esac
           PACKAGE_COMMIT=$(jq -r '.packages_commit' build-info.json)
           PACKAGE_SHA=$(jq -r '.packages_sha' build-info.json)
           PACKAGE_FORMAT=$(jq -r '.packages_format' build-info.json)
@@ -2060,12 +2130,15 @@ jobs:
           if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
             printf '## Passwall Packages\n\n- **%s**: ⚡ SDK 增量构建 (.%s), commit [`%s`](%s/commit/%s)\n- **签名**: %s\n' \
               "$IMMWRT_TARGET" "$PACKAGE_FORMAT" "$PACKAGE_COMMIT" "$PACKAGE_REPO" "$PACKAGE_SHA" "$SIGN_TEXT" > release-notes.md
+            # 刻意 --latest=false 且不传 --target: packages 是共享多 target 的常驻 tag,
+            # 不抢仓库 Latest, 落默认分支 (与 compile-firmware Publish Passwall 一致)。
             gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
-              --notes-file release-notes.md --latest=false
+              --notes-file release-notes.md --latest=false "${CREATE_TYPE_FLAGS[@]}"
           else
             EXISTING=$(gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json body --jq '.body // ""')
             printf '%b\n' "${EXISTING}\n\n---\n### 📦 ${IMMWRT_TARGET} - SDK 增量构建 (.${PACKAGE_FORMAT})\n- **构建类型**: ⚡ 自建 SDK 独立编译 (增量编译插件)\n- **commit**: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')\n- **签名**: ${SIGN_TEXT}" > release-notes.md
-            gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md
+            gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md \
+              "${EDIT_TYPE_FLAGS[@]}"
           fi
 
           for file in "${PACKAGE_FILES[@]}"; do
@@ -2077,7 +2150,8 @@ jobs:
           # 与 compile-firmware 的 Publish Passwall packages 同款: 按资产 updated_at
           # 留最新 N 版; 公钥 (.pem/.pub) 与解析失败的文件永不清; 清理失败只告警
           # 不阻塞发布。SDK 增量路径与全量路径写同一 tag, 两边收敛逻辑一致。
-          KEEP_PKG_VERSIONS=3
+          # 保留数由 passwall_keep_versions 输入控制 (validate-inputs 已限 [1,30])。
+          KEEP_PKG_VERSIONS="${{ inputs.passwall_keep_versions }}"
           if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json assets \
             --jq '[.assets[] | select(.name | test("\\.(apk|ipk)$"))]' > /tmp/pkg_assets.json 2>/dev/null; then
             echo "::warning::软件包资产列表获取失败, 跳过版本收敛"

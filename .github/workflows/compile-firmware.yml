@@ -22,6 +22,10 @@
 #   version / version_prefix   版本号二选一: 显式 version 优先; 空 = <prefix><YYMMDD> (prefix 默认 V)
 #   matrix_release_repo        固件 Release 目标 (空 = 不发布, 产物仅 CI artifact)
 #   matrix_passwall_repo/tag   软件包 Release 目标 (空 = 不发布)
+#   release_type               Release 发布类型 (release 正式 | prerelease 预发布 | draft 草稿;
+#                              默认 release, 作用于本次构建创建/更新的全部 Release)
+#   require_signing            true = 签名密钥缺失/无效即硬失败 (默认 false = 降级 random 继续)
+#   passwall_keep_versions     Passwall 同包版本保留数 (默认 3, 范围 [1,30]; 下限 1 = 有界保留)
 #   collect_packages           软件包打包清单 (逗号分隔; 空 = 默认单包 luci-app-passwall; 缺包仅告警)
 #   upload_artifacts           固件/SDK-IB 大工件上传开关 (默认 true; 关闭省上传耗时)
 #   standard_packages_branch   标准 packages feed 分支 (空 = 回退 targets.json 编排元数据)
@@ -57,6 +61,19 @@ on:
       matrix_passwall_repo: { required: false, type: string, default: '' }
       matrix_passwall_tag:  { required: false, type: string, default: '' }
       matrix_firmware_release_tag_prefix: { required: false, type: string, default: '' }
+      # ── Release 发布类型 (运行级, 作用于本次创建/更新的全部 Release:
+      #    固件 / Passwall 软件包 / SDK-IB artifacts) ──
+      # release = 正式 (默认, 非 draft 非 prerelease)
+      # prerelease = 预发布; draft = 草稿 (发布后需人工 publish)
+      release_type:         { required: false, type: string, default: 'release' }
+      # ── 发布安全开关 ──
+      # require_signing = true 时, 签名密钥缺失/无效直接硬失败, 阻止随机密钥或
+      # 未签名产物发布到 Release; 默认 false = 既有"降级 random + 构建继续"语义
+      # (刻意设计, 见 Setup Signing Key 注释)。
+      require_signing:          { required: false, type: boolean, default: false }
+      # Passwall 包同包版本收敛保留数 (与 artifacts_keep_versions 对称的可控项;
+      # 范围 [1,30], 下限 1 = 有界保留是刻意设计, 不提供"全留"禁用)
+      passwall_keep_versions:   { required: false, type: number, default: 3 }
       matrix_artifacts_release_repo: { required: false, type: string, default: '' }
       matrix_artifacts_release_tag:  { required: false, type: string, default: '' }
       matrix_artifacts_keep_versions: { required: false, type: number, default: 7 }
@@ -169,6 +186,10 @@ jobs:
           validate_name "${{ inputs.matrix_passwall_tag }}" "matrix_passwall_tag"
           validate_name "${{ inputs.matrix_artifacts_release_tag }}" "matrix_artifacts_release_tag"
           validate_name "${{ inputs.matrix_firmware_release_tag_prefix }}" "matrix_firmware_release_tag_prefix"
+          case "${{ inputs.release_type }}" in
+            release|prerelease|draft) ;;
+            *) fail "release_type 非法: '${{ inputs.release_type }}' (可选 release|prerelease|draft)" ;;
+          esac
           case "${{ inputs.config_path }}" in
             /*|*..*) fail "config_path 非法: '${{ inputs.config_path }}' (禁止绝对路径与 ..)" ;;
           esac
@@ -185,8 +206,20 @@ jobs:
           case "$KEEP_V" in
             ''|*[!0-9]*) fail "matrix_artifacts_keep_versions 非数字: '${KEEP_V}'" ;;
             *)
+              # 下限 1 为刻意设计: 写入方自约束"有界保留" (防资产无限累积),
+              # 0/禁用 = 放弃收敛, 不提供。
               if [ "$KEEP_V" -lt 1 ] || [ "$KEEP_V" -gt 30 ]; then
                 fail "matrix_artifacts_keep_versions 超出范围 [1,30]: ${KEEP_V}"
+              fi
+              ;;
+          esac
+          PW_KEEP="${{ inputs.passwall_keep_versions }}"
+          case "$PW_KEEP" in
+            ''|*[!0-9]*) fail "passwall_keep_versions 非数字: '${PW_KEEP}'" ;;
+            *)
+              # 下限 1 同上: 有界保留是收敛的立项前提 (G14), 不提供禁用档。
+              if [ "$PW_KEEP" -lt 1 ] || [ "$PW_KEEP" -gt 30 ]; then
+                fail "passwall_keep_versions 超出范围 [1,30]: ${PW_KEEP}"
               fi
               ;;
           esac
@@ -763,14 +796,26 @@ jobs:
           set -euo pipefail
           USE_APK="${{ steps.apply_config.outputs.use_apk }}"
 
+          # random 降级兜底 (刻意设计, require_signing=false 默认): 缺钥/坏钥只告警、
+          # 构建继续——试跑或无密钥仓库不应被阻断, 产物由构建系统随机密钥签名,
+          # 设备端需 --allow-untrusted/--force-checksum。require_signing=true 时
+          # 该兜底改为硬失败, 阻止随机密钥/未签名产物进入 Release。
+          random_fallback() {
+            echo "sign_mode=random" >> "$GITHUB_OUTPUT"
+            echo "fingerprint=none" >> "$GITHUB_OUTPUT"
+            if [ "${{ inputs.require_signing }}" = "true" ]; then
+              echo "::error::require_signing=true: 签名密钥缺失或无效, 拒绝继续构建"
+              exit 1
+            fi
+            exit 0
+          }
+
           if [ "$USE_APK" = "true" ]; then
             # ════════════ APK 签名 (ECDSA/RSA PEM) ════════════
             SIGN_MODE="apk"
             if [ -z "$APK_BUILD_KEY" ]; then
               echo "::warning::APK_BUILD_KEY secret 未设置 — 构建系统将生成随机密钥, 设备 apk add 需 --allow-untrusted"
-              echo "sign_mode=random" >> $GITHUB_OUTPUT
-              echo "fingerprint=none" >> $GITHUB_OUTPUT
-              exit 0
+              random_fallback
             fi
             # 防泄漏: printf 而非 echo, chmod 600, 只输出字节数/指纹不输出内容。
             printf '%s' "$APK_BUILD_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' > openwrt/private-key.pem
@@ -790,9 +835,7 @@ jobs:
               echo "::notice::密钥头部(仅 PEM header, 不含密钥): ${KEY_HEADER}"
               echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续"
               rm -f openwrt/private-key.pem
-              echo "sign_mode=random" >> $GITHUB_OUTPUT
-              echo "fingerprint=none" >> $GITHUB_OUTPUT
-              exit 0
+              random_fallback
             fi
 
             openssl ec -in openwrt/private-key.pem -pubout -out openwrt/public-key.pem 2>/dev/null || \
@@ -808,9 +851,7 @@ jobs:
             # USIGN_KEY 存完整 key-build 文件内容, 由本地直接导入 (gh secret set USIGN_KEY < key-build)。
             if [ -z "$USIGN_KEY" ]; then
               echo "::warning::USIGN_KEY secret 未设置 — 构建系统将生成随机 usign 密钥, 设备 opkg install 需 --force-checksum"
-              echo "sign_mode=random" >> $GITHUB_OUTPUT
-              echo "fingerprint=none" >> $GITHUB_OUTPUT
-              exit 0
+              random_fallback
             fi
             # 防泄漏: printf 而非 echo, chmod 600, 只输出指纹不输出内容。
             printf '%s\n' "$USIGN_KEY" > openwrt/key-build
@@ -827,9 +868,7 @@ jobs:
               echo "::notice::请导入本地 key-build 文件: gh secret set USIGN_KEY --repo <repo> < key-build"
               echo "::notice::本次构建将跳过签名 (产物未签名), 但构建继续"
               rm -f openwrt/key-build openwrt/.seckey.bin
-              echo "sign_mode=random" >> $GITHUB_OUTPUT
-              echo "fingerprint=none" >> $GITHUB_OUTPUT
-              exit 0
+              random_fallback
             fi
             # 指纹 = seckey 结构 offset 32..40 (8 字节), 与 usign -F 输出一致。
             FP=$(dd if=openwrt/.seckey.bin bs=1 skip=32 count=8 2>/dev/null | od -An -tx1 | tr -d ' \n')
@@ -2372,6 +2411,18 @@ jobs:
           fi
           RELEASE_REPO="${{ inputs.matrix_release_repo }}"
           FIRMWARE_DIR="openwrt/release/firmware"
+          # ── Release 类型: 运行级开关作用于本次所有 Release (固件/软件包/SDK-IB) ──
+          # create 用追加 flag; edit 显式重置状态, 保证默认 release 能纠正历史
+          # draft/prerelease 状态 (否则 --draft=false 之外的状态不会被清除)。
+          RELEASE_TYPE="${{ inputs.release_type }}"
+          CREATE_TYPE_FLAGS=()
+          EDIT_TYPE_FLAGS=()
+          case "$RELEASE_TYPE" in
+            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
+            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
+            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
+          esac
+          echo "🏷️ Release 类型: ${RELEASE_TYPE}"
           [ -d "$FIRMWARE_DIR" ] && [ -n "$(find "$FIRMWARE_DIR" -maxdepth 1 -type f -print -quit)" ] || {
             echo "::error::固件目录为空，拒绝创建空 Release"
             exit 1
@@ -2398,13 +2449,29 @@ jobs:
 
           if ! gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
             echo "📦 创建 Release: ${RELEASE_TAG} (repo: ${RELEASE_REPO})"
+            # --target 钉本 run 构建的源码 commit (sha_full = matrix_repo@ref 的 HEAD,
+            # 与 release_repo 同源 fork 时有效); 刻意: 共享 tag (passwall/artifacts)
+            # 不传 --target, 落默认分支——它们不是 per-build 产物。
             gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" \
               --target "${{ steps.clone_packages.outputs.sha_full }}" \
-              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md
+              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md \
+              "${CREATE_TYPE_FLAGS[@]}"
           else
+            # ── 防误覆盖 (R6 配套): 非正式 run (prerelease/draft) 复用 tag 时,
+            #    不得把已转正的 Release 降级改写; 反向 (非正式→release) 是有意
+            #    转正, 放行。资产 --clobber 覆盖本身是刻意设计: CI 重跑幂等,
+            #    同名即同版本替换。
+            if [ "$RELEASE_TYPE" != "release" ]; then
+              if [ -n "$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" \
+                  --json draft,prerelease --jq 'select(.draft == false and .prerelease == false) | "formal"' 2>/dev/null)" ]; then
+                echo "::error::tag ${RELEASE_TAG} 已存在正式 Release, 拒绝以 ${RELEASE_TYPE} 类型覆盖 (换 version/tag 重试, 或确需降级请手动处理该 Release)"
+                exit 1
+              fi
+            fi
             echo "📝 更新已有 Release: ${RELEASE_TAG} (repo: ${RELEASE_REPO})"
             gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" \
-              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md --draft=false
+              --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md \
+              "${EDIT_TYPE_FLAGS[@]}"
           fi
 
           # ── 逐文件上传固件资产 (带重试机制应对 GitHub API/存储端 500/502/超时抖动) ──
@@ -2435,6 +2502,14 @@ jobs:
           fi
           PACKAGE_REPO="${{ inputs.matrix_passwall_repo }}"
           PACKAGE_TAG="${{ inputs.matrix_passwall_tag }}"
+          # 与固件 Release 同一运行级类型 (所有 Release 一致)
+          CREATE_TYPE_FLAGS=()
+          EDIT_TYPE_FLAGS=()
+          case "${{ inputs.release_type }}" in
+            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
+            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
+            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
+          esac
 
           upload_asset_retry() {
             local tag="$1"
@@ -2456,8 +2531,14 @@ jobs:
           }
 
           if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
+            # 刻意 --latest=false: 共享多 target 的 packages tag 不应抢占仓库 Latest;
+            # 也不传 --target (共享 tag 落默认分支, 见 Publish firmware release 注释)
             gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
-              --notes "Multi-target passwall packages" --latest=false
+              --notes "Multi-target passwall packages" --latest=false \
+              "${CREATE_TYPE_FLAGS[@]}"
+          else
+            # 已有 Release: 同步本次运行指定的类型 (默认 release 可纠正历史 draft/prerelease)
+            gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" "${EDIT_TYPE_FLAGS[@]}"
           fi
           for file in "${PACKAGE_FILES[@]}"; do
             [ -f "$file" ] || continue
@@ -2469,7 +2550,8 @@ jobs:
           # (packages-ipq807x 曾出现 luci-app-passwall 3 版共存)。按资产 updated_at
           # 排序留最新 N 版; 公钥 (.pem/.pub) 与解析失败的文件永不清; 清理失败只
           # 告警不阻塞发布 (写入方自约束, 与 artifacts keep_versions 同模式)。
-          KEEP_PKG_VERSIONS=3
+          # 保留数由 passwall_keep_versions 输入控制 (validate-inputs 已限 [1,30])。
+          KEEP_PKG_VERSIONS="${{ inputs.passwall_keep_versions }}"
           if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json assets \
             --jq '[.assets[] | select(.name | test("\\.(apk|ipk)$"))]' > /tmp/pkg_assets.json 2>/dev/null; then
             echo "::warning::软件包资产列表获取失败, 跳过版本收敛"
@@ -2644,10 +2726,24 @@ jobs:
           set -euo pipefail
           TAG="${{ inputs.matrix_artifacts_release_tag }}"
           REPO="${{ inputs.matrix_artifacts_release_repo }}"
-          # 确保 release 存在 (非 draft, 多版本共存)
-          gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
+          # 确保 release 存在; 已存在时同步本次运行指定的发布类型。
+          # 注意: draft 会让无权限的公开消费者看不到 SDK/IB, 仅在有意的隔离调试时使用。
+          # 刻意: artifacts 共享 tag 不传 --latest/--target — 多版本共存、落默认分支,
+          # 真正的版本指针由 sdk-index.json/ib-index.json 承担 (compile-packages 消费)。
+          CREATE_TYPE_FLAGS=()
+          EDIT_TYPE_FLAGS=()
+          case "${{ inputs.release_type }}" in
+            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
+            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
+            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
+          esac
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" \
-              --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false
+              --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false \
+              "${CREATE_TYPE_FLAGS[@]}"
+          else
+            gh release edit "$TAG" --repo "$REPO" "${EDIT_TYPE_FLAGS[@]}"
+          fi
 
           upload_asset_retry() {
             local tag="$1"
@@ -2756,9 +2852,21 @@ jobs:
           set -euo pipefail
           TAG="${{ inputs.matrix_artifacts_release_tag }}"
           REPO="${{ inputs.matrix_artifacts_release_repo }}"
-          gh release view "$TAG" --repo "$REPO" 2>/dev/null || \
+          # 与 SDK 同一 artifacts tag, 类型同步 (draft 对公开消费者不可见)
+          CREATE_TYPE_FLAGS=()
+          EDIT_TYPE_FLAGS=()
+          case "${{ inputs.release_type }}" in
+            prerelease) CREATE_TYPE_FLAGS=(--prerelease); EDIT_TYPE_FLAGS=(--prerelease --draft=false) ;;
+            draft)      CREATE_TYPE_FLAGS=(--draft);      EDIT_TYPE_FLAGS=(--draft) ;;
+            *)          EDIT_TYPE_FLAGS=(--draft=false --prerelease=false) ;;
+          esac
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" \
-              --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false
+              --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false \
+              "${CREATE_TYPE_FLAGS[@]}"
+          else
+            gh release edit "$TAG" --repo "$REPO" "${EDIT_TYPE_FLAGS[@]}"
+          fi
 
           upload_asset_retry() {
             local tag="$1"
