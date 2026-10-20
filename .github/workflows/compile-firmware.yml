@@ -26,6 +26,9 @@
 #                              默认 release, 作用于本次构建创建/更新的全部 Release)
 #   require_signing            true = 签名密钥缺失/无效即硬失败 (默认 false = 降级 random 继续)
 #   passwall_keep_versions     Passwall 同包版本保留数 (默认 3, 范围 [1,30]; 下限 1 = 有界保留)
+#   release_target             滚动 Release (passwall/artifacts tag) 目标分支/commit
+#                              (空 = 跟随本次构建来源提交, 仅当 commitish 在发布仓有效;
+#                              跨仓无有效值时落默认分支; 显式值无效即硬失败)
 #   collect_packages           软件包打包清单 (逗号分隔; 空 = 默认单包 luci-app-passwall; 缺包仅告警)
 #   cache_variant              cache 命名空间变体 (空 = 默认 immwrt-v2-*; 非空 = save/purge key
 #                              插 <variant>- 段隔离 ccache/hostpkg, restore 前缀仍跨变体暖启动;
@@ -81,6 +84,12 @@ on:
       # Passwall 包同包版本收敛保留数 (与 artifacts_keep_versions 对称的可控项;
       # 范围 [1,30], 下限 1 = 有界保留是刻意设计, 不提供"全留"禁用)
       passwall_keep_versions:   { required: false, type: number, default: 3 }
+      # ── 滚动 Release 目标分支/commit (R13; 2026-10-20) ──
+      # 作用于 passwall/packages-* 与 artifacts-* 常驻 tag 的 --target (create+edit)。
+      # 空 = 跟随本次构建来源提交 (与固件 Release --target 同语义, R7 延伸): 发布到
+      # feed 仓时取 feed HEAD, artifacts 发布到本仓时取 github.sha; 跨仓且无显式值
+      # 时不传 --target (落默认分支)。显式值 = 操作者意图, 仓内无效即硬失败 (fail-fast)。
+      release_target:           { required: false, type: string, default: '' }
       matrix_artifacts_release_repo: { required: false, type: string, default: '' }
       matrix_artifacts_release_tag:  { required: false, type: string, default: '' }
       matrix_artifacts_keep_versions: { required: false, type: number, default: 7 }
@@ -200,6 +209,7 @@ jobs:
           validate_name "${{ inputs.matrix_passwall_tag }}" "matrix_passwall_tag"
           validate_name "${{ inputs.matrix_artifacts_release_tag }}" "matrix_artifacts_release_tag"
           validate_name "${{ inputs.matrix_firmware_release_tag_prefix }}" "matrix_firmware_release_tag_prefix"
+          validate_name "${{ inputs.release_target }}" "release_target"
           case "${{ inputs.release_type }}" in
             release|prerelease|draft) ;;
             *) fail "release_type 非法: '${{ inputs.release_type }}' (可选 release|prerelease|draft)" ;;
@@ -2374,8 +2384,8 @@ jobs:
           if ! gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
             echo "📦 创建 Release: ${RELEASE_TAG} (repo: ${RELEASE_REPO})"
             # --target 钉本 run 构建的源码 commit (sha_full = matrix_repo@ref 的 HEAD,
-            # 与 release_repo 同源 fork 时有效, R7); 刻意: 共享 tag (passwall/artifacts)
-            # 不传 --target, 落默认分支——它们不是 per-build 产物。
+            # 与 release_repo 同源 fork 时有效, R7); 常驻 tag (passwall/artifacts) 的
+            # --target 由 release_target 解析 (R13: 默认跟随构建来源, 跨仓回退默认分支)。
             gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" \
               --target "${{ steps.clone_packages.outputs.sha_full }}" \
               --title "${IMMWRT_TARGET} Build ${RELEASE_TAG}" --notes-file release-body.md \
@@ -2421,16 +2431,34 @@ jobs:
           # 与固件 Release 同一运行级类型 (所有 Release 一致)
           resolve_release_type_flags "${{ inputs.release_type }}"
 
+          # ── 滚动 tag --target (R13): 默认跟随本次构建的 feed 来源提交; 守卫
+          #    "commitish 须在发布仓存在"——仅当发布仓就是 feed 仓时取 feed HEAD,
+          #    否则不传 (落默认分支)。显式传值 = 操作者意图, 不做存在性兜底。
+          #    edit 同步刷新: upstream-sync force-push 后旧 commitish 会悬挂。
+          RELEASE_TARGET="${{ inputs.release_target }}"
+          if [ -z "$RELEASE_TARGET" ] \
+            && [ "$(printf '%s' "$PACKAGE_REPO" | tr 'A-Z' 'a-z')" = "$(printf '%s' '${{ inputs.packages_feed_repo }}' | tr 'A-Z' 'a-z')" ]; then
+            RELEASE_TARGET="${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}"
+          fi
+          RT_FLAGS=()
+          [ -n "$RELEASE_TARGET" ] && RT_FLAGS=(--target "$RELEASE_TARGET")
+
           if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
-            # 刻意 --latest=false: 共享多 target 的 packages tag 不应抢占仓库 Latest;
-            # 也不传 --target (共享 tag 落默认分支, 见 Publish firmware release 注释)
+            # 刻意 --latest=false: 共享多 target 的 packages tag 不应抢占仓库 Latest
             gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
               --notes "Multi-target passwall packages" --latest=false \
-              "${CREATE_TYPE_FLAGS[@]}"
+              "${RT_FLAGS[@]}" "${CREATE_TYPE_FLAGS[@]}"
           else
-            # 已有 Release: 同步本次运行指定的类型 (默认 release 可纠正历史 draft/prerelease)。
-            # 常驻共享 tag 刻意不加 R8 降级守卫 (正式态是常态, 见库头注释)
-            gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" "${EDIT_TYPE_FLAGS[@]}"
+            # 已有 Release: 同步类型与目标分支 (默认 release 可纠正历史 draft/prerelease;
+            # R13 滚动 tag 每次刷新 target)。常驻共享 tag 刻意不加 R8 降级守卫
+            # (正式态是常态, 见库头注释)。
+            # ③ R12: notes 追加与 SDK 路径对称 (库内统一模板, 消除两写者不对称)
+            PKG_FEED_SHA="${{ steps.feed-rebuild.outputs.packages_sha_full || steps.clone_packages.outputs.packages_sha_full }}"
+            PKG_SIGN="$(describe_sign_mode "${{ steps.signing_key.outputs.sign_mode || 'none' }}" "${{ steps.signing_key.outputs.fingerprint || 'none' }}")"
+            BLOCK=$(pkg_release_notes_block "$IMMWRT_TARGET" "全量构建" "🔨 固件全量编译随发 (release/passwall 目录)" "${PKG_FEED_SHA:0:8}" "$PACKAGE_REPO" "$PKG_FEED_SHA" "$PKG_SIGN")
+            append_pkg_release_notes "$PACKAGE_TAG" "$PACKAGE_REPO" "$BLOCK"
+            gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md \
+              "${RT_FLAGS[@]}" "${EDIT_TYPE_FLAGS[@]}"
           fi
           for file in "${PACKAGE_FILES[@]}"; do
             [ -f "$file" ] || continue
@@ -2589,16 +2617,25 @@ jobs:
           # 发布行为收敛到 release-lib.sh (R12; 语义同 Publish firmware release 步骤)。
           # 确保 release 存在; 已存在时同步本次运行指定的发布类型。
           # 注意: draft 会让无权限的公开消费者看不到 SDK/IB, 仅在有意的隔离调试时使用。
-          # 刻意: artifacts 共享 tag 不传 --latest/--target — 多版本共存、落默认分支,
-          # 真正的版本指针由 sdk-index.json/ib-index.json 承担 (compile-packages 消费)。
+          # 版本指针由 sdk-index.json/ib-index.json 承担; --target 见 R13。
           . AutoWorkFlows/.github/scripts/release-lib.sh
           resolve_release_type_flags "${{ inputs.release_type }}"
+          # 滚动 tag --target (R13): artifacts tag 默认发布在基础设施仓——仅当发布仓
+          # 就是本 run 所在仓时取 github.sha (有效且表意: 哪版基建产出的快照);
+          # 跨仓无显式值 → 不传。显式值直接生效 (无效即硬失败)。
+          RELEASE_TARGET="${{ inputs.release_target }}"
+          if [ -z "$RELEASE_TARGET" ] \
+            && [ "$(printf '%s' "$REPO" | tr 'A-Z' 'a-z')" = "$(printf '%s' '${{ github.repository }}' | tr 'A-Z' 'a-z')" ]; then
+            RELEASE_TARGET="${{ github.sha }}"
+          fi
+          RT_FLAGS=()
+          [ -n "$RELEASE_TARGET" ] && RT_FLAGS=(--target "$RELEASE_TARGET")
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" \
               --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false \
-              "${CREATE_TYPE_FLAGS[@]}"
+              "${RT_FLAGS[@]}" "${CREATE_TYPE_FLAGS[@]}"
           else
-            gh release edit "$TAG" --repo "$REPO" "${EDIT_TYPE_FLAGS[@]}"
+            gh release edit "$TAG" --repo "$REPO" "${RT_FLAGS[@]}" "${EDIT_TYPE_FLAGS[@]}"
           fi
 
           # ── 当前 target 的 SDK 全量上传 ──
@@ -2690,15 +2727,22 @@ jobs:
           TAG="${{ inputs.matrix_artifacts_release_tag }}"
           REPO="${{ inputs.matrix_artifacts_release_repo }}"
           # 与 SDK 同一 artifacts tag, 类型同步 (draft 对公开消费者不可见)。
-          # 发布行为收敛到 release-lib.sh (R12), 刻意项见 Upload SDK to release 注释。
+          # 发布行为收敛到 release-lib.sh (R12), --target 解析同 Upload SDK 步骤 (R13)。
           . AutoWorkFlows/.github/scripts/release-lib.sh
           resolve_release_type_flags "${{ inputs.release_type }}"
+          RELEASE_TARGET="${{ inputs.release_target }}"
+          if [ -z "$RELEASE_TARGET" ] \
+            && [ "$(printf '%s' "$REPO" | tr 'A-Z' 'a-z')" = "$(printf '%s' '${{ github.repository }}' | tr 'A-Z' 'a-z')" ]; then
+            RELEASE_TARGET="${{ github.sha }}"
+          fi
+          RT_FLAGS=()
+          [ -n "$RELEASE_TARGET" ] && RT_FLAGS=(--target "$RELEASE_TARGET")
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" \
               --title "${TAG} Builds" --notes "Unified SDK and IB builds (${IMMWRT_TARGET})" --latest=false \
-              "${CREATE_TYPE_FLAGS[@]}"
+              "${RT_FLAGS[@]}" "${CREATE_TYPE_FLAGS[@]}"
           else
-            gh release edit "$TAG" --repo "$REPO" "${EDIT_TYPE_FLAGS[@]}"
+            gh release edit "$TAG" --repo "$REPO" "${RT_FLAGS[@]}" "${EDIT_TYPE_FLAGS[@]}"
           fi
 
           # ── 当前 target 的 IB 全量上传 ──

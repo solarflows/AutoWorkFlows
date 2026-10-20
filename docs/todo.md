@@ -18,7 +18,7 @@
 | ❓ | 待决：附选项，讨论不从头开始 |
 | 🚫 | 已否决：保留理由，防止重复提议 |
 
-最后核对：2026-10-19
+最后核对：2026-10-20
 
 ---
 
@@ -53,7 +53,9 @@
 | R9 | P1 | `require_signing` 发布安全开关（真风险：random 静默降级仍发布） | 🟨 | 两个 executor `Setup Signing Key` 收敛为 `random_fallback` 函数（4 分支/文件），`require_signing=true` 时缺钥/坏钥硬失败；unified dispatch 布尔 + 两 job 透传（validate-workflows.py 全过）；待真实 run 验证 | 默认 false 维持既有"告警 + 构建继续"刻意设计（试跑/无密钥仓库不阻断，注释已写明）；true = 阻止随机密钥/未签名产物进入 Release |
 | R10 | P2 | `passwall_keep_versions` input 化（接口对称补齐） | 🟨 | 两个 executor input + validate `[1,30]` + Publish 步骤引用；unified jq 默认 3 + 两 job 透传（validate-workflows.py 全过）；待真实 run 验证 | 收敛行为本身正确（G14：防无限累积），问题仅是 artifacts 有 input 而 packages 硬编码 3 的不对称；下限 1 = 有界保留是收敛的立项前提，刻意不提供 0/禁用（校验注释 + instructions 已写明） |
 | R11 | P2 | stale draft purge 与 `version_prefix` 解耦（潜伏真缺陷，unified 停用中影响≈0） | 🟨 | `firmware-build-unified.yml` `Purge stale draft releases`：`test("Build V")` → `contains("Build ")`（validate-workflows.py 全过） | 旧正则假设前缀恒 `V`，自定义 `version_prefix` 后草稿永不清理；`"Build "` 带尾空格只匹配 executor 生成的 `<target> Build <tag>` 标题，天然排除 `Builds`（artifacts）与 `Passwall Packages` |
-
+| R13 | P2 | 滚动 Release 目标分支可控（`release_target`，默认跟随构建来源提交） | 🟨 | 两 executor `release_target` input + `validate_name` 校验 + passwall/artifacts 共 6 处 create/edit 接入 `RT_FLAGS`（同仓守卫：发布仓==feed 仓取 feed HEAD、artifacts 发布仓==运行仓取 `github.sha`，跨仓无显式值不传=落默认分支；unified dispatch 透传；validate-workflows.py 全过含契约双向对齐）；待真实 run 验证 | 需求：passwall 等常驻 tag 的 Release 目标分支可控，默认跟随 release 行为（= R7 的 `--target` 语义延伸到常驻 tag）。守卫按仓库大小写不敏感比较（gh 归一 owner/repo 大小写）；显式值不做存在性兜底（无效即硬失败，fail-fast 刻意）。edit 同步刷新 target：upstream-sync force-with-lease 推送后旧 commitish 悬挂，每次发布刷新。修订 R7 的"常驻 tag 刻意不传 --target"：该行为降级为"无有效来源 commitish 时的回退" || R14 | P1 | 固件 Release 级保留数（`firmware_keep_releases`，默认关闭） | ⬜ | 2026-10-20 用户决策：默认关闭（opt-in，删除为不可逆远端操作）；待实现 | 资产层已有两道收敛（R2/R4/R10），但 per-build `<target>-V*` release 壳只增不减（日 cron 一个，含全部固件资产永久累积）；unified draft purge 已冻结且不覆盖外部 caller。实现走 release-lib：按前缀分组版本排序留最新 N（0/空=禁用），失败只告警 |
+| R15 | P2 | passwall 滚动 tag notes 写者对称化 + 签名文案入库 | 🟨 | ③ 落地：`release-lib.sh` 新增 `describe_sign_mode`/`pkg_release_notes_block`/`append_pkg_release_notes`；compile-firmware `Publish Passwall packages` edit 分支补齐追加（旧缺陷：全量路径 edit 不写 notes，厚度取决于最后走哪条路径）；compile-packages SDK/combined 两处改库调用（validate-workflows.py 全过）；待真实 run 验证 | 同 tag 两个写者同一模板 = R12 精神延伸；全量追加条目含 feed commit（追平感知链）+ 签名文案 |
+| R16 | P2 | compile-firmware 并发组键错维（假串行 + 真竞态双向错误） | ⬜ | 2026-10-20 盘查澄清：组键 = `target+passwall_repo+passwall_tag`，不含固件/artifacts 发布维度 | 假串行：不发布 passwall 的多 caller（空串组键相同）构建同 target 不同固件仓也排队；真竞态：passwall 配置不同但固件 release 目标相同的两 run 分入不同组并行，同日同版本同 tag 双写（daily cron + 手动重叠必然窗口）。修复：组键扩为远端写目标超集（+release_repo+tag_prefix+artifacts_repo/tag）；version 不可入键（自动生成时组求值阶段为空） |
 ## C. 构建正确性
 
 | ID | P | 项目 | 状态 | 证据 | 备注 |
@@ -114,7 +116,7 @@
 | D2 | P2 | 全局规则只写在 `AGENTS.md` | ✅ | 2026-09-19 实测自定义 agent 继承 AGENTS.md | 不要复制进 `.github/agents/*` 或 instructions |
 | E1 | P1 | validate 脚本重定位：只做结构/静态检查，行为验证归真实 run | ✅ | 2026-10-19 重构：删除第 4 节全部行为 fixture（Python 复刻 bash/jq 管道自证 = 运动员兼裁判；C16/G13/G15 四轮实证"本地全绿≠行为正确"），保留 2b/2c/残留/静态防退化 + 新增台账 ID 唯一性与 reusable 契约两项结构检查；重构首跑即抓到 C7–C10 双编号（E2） | 判断标准写进脚本头：平台硬约束与已实证退化模式 → 静态检查左移；行为语义 → 唯一裁判是真实 run。`--no-semantics` flag 随行为段一并删除 |
 | E2 | P2 | 台账治理：ID 全局唯一（消歧重编号）+ 🟨 老化规则 + 核对日期绑定提交 | ✅ | 本次提交：B 节 C7/C8/C9/C10 → C25–C28（原编号在证据列注记）；头则新增 ID 规则/老化条款；`最后核对` 改 2026-10-19；validate 第 5 节机器强制 | 双编号使 AGENTS.md"update matching row"与进展记录引用失去锚点——这正是本次重排的直接动因。历史进展记录中的旧编号不回改（只追加原则），语义靠上下文词区分 |
-| E3 | P2 | `firmware-build-unified.yml` 冻结政策成文（死代码不再交隐性税） | ✅ | 文件头注释新增"维护政策"段（本次提交）；C19 只记停用未定政策 | 定性：保留 = validate 回归 fixture + 调度器参考实现。恢复运行时接线仅在显式要求时做；executor 契约新增 inputs 默认透传一行（如本轮 release_type/cache_variant），不做选择性冻结以免恢复时欠账更大。最坏组合是"既交税又无人使用"，政策显化后每次横切改动可自行核算要不要动它 |
+| E3 | P2 | `firmware-build-unified.yml` 冻结政策成文（死代码不再交隐性税） | ✅ | 文件头注释新增"维护政策"段（本次提交）；C19 只记停用未定政策 | 定性：保留 = validate 回归 fixture + 调度器参考实现。恢复运行时接线仅在显式要求时做；executor 契约新增 inputs 默认透传一行（如本轮 release_type/cache_variant），不做选择性冻结以免恢复时欠账更大。最坏组合是"既交税又无人使用"，政策显化后每次横切改动可自行核算要不要动它。恢复前置项（R16 讨论补充）：`IMMWRT_BUILD_STATE` 单份全局槽位须并入变体维度再启用（文件头注释同口径） |
 
 ## F. 固件功能配置（seeds）
 

@@ -7,7 +7,9 @@
 #
 # 契约 (build-artifacts.instructions.md 同步):
 #   - release_type: release | prerelease | draft; edit 显式重置可纠正历史状态
-#   - per-build 固件 Release 的 --target 钉构建源码 commit; 共享常驻 tag 不传
+#   - per-build 固件 Release 的 --target 钉构建源码 commit (R7); 常驻 tag 的
+#     --target 由 release_target 解析 (R13), 由调用方在步骤内组装 RT_FLAGS
+#     (库不解析来源——发布仓/feed 仓比较属调用方上下文), edit 同步刷新
 #   - 非正式 run 拒绝降级改写已转正 Release (guard_no_downgrade_formal)
 #   - 资产 --clobber 覆盖 = 刻意设计 (CI 重跑幂等), 非缺陷
 #
@@ -107,4 +109,33 @@ purge_pkg_versions() {
       gh release delete-asset "$tag" "${old}.sha256" --repo "$repo" --yes 2>/dev/null || true
     fi
   done < /tmp/pkg_purge.txt
+}
+
+# 签名状态统一文案 (两 executor 多处 release notes/summary 共用, R12)。
+# 用法: describe_sign_mode <sign_mode> <fingerprint>
+describe_sign_mode() {
+  case "$1" in
+    apk)    printf '✅ APK 已签名 (公钥指纹 %s...)' "${2:0:16}" ;;
+    usign)  printf '✅ usign 已签名 (公钥指纹 %s...)' "${2:0:16}" ;;
+    random) printf '⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)' ;;
+    *)      printf '❌ 未签名' ;;
+  esac
+}
+
+# Passwall 滚动 tag 的 append 条目统一模板 (两个写者同一格式, 消除 notes
+# 写者不对称: 旧实现全量路径 edit 不追加、仅 SDK 路径追加, notes 厚度
+# 取决于最后走哪条路径)。用法: pkg_release_notes_block <target> <title_suffix>
+# <mode_desc> <commit> <repo> <sha> <sign_text>
+pkg_release_notes_block() {
+  printf '### 📦 %s - %s\n- **构建类型**: %s\n- **commit**: [`%s`](%s/commit/%s) - %s\n- **签名**: %s' \
+    "$1" "$2" "$3" "$4" "$5" "$6" \
+    "$(TZ=${TZ:-Asia/Shanghai} date +'%Y-%m-%d %H:%M')" "$7"
+}
+
+# 读现有 notes + 追加块 → release-notes.md (调用方随后 gh release edit
+# --notes-file 并叠加自身 RT/TYPE flags)。用法: append_pkg_release_notes <tag> <repo> <block>
+append_pkg_release_notes() {
+  local existing
+  existing=$(gh release view "$1" --repo "$2" --json body --jq '.body // ""' 2>/dev/null) || existing=""
+  printf '%b\n\n---\n%s\n' "${existing}" "$3" > release-notes.md
 }

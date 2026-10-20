@@ -17,6 +17,9 @@
 # 调度器参考实现。executor 契约新增 inputs 时默认同步透传一行 (轻量成本,
 # 避免恢复时欠账更大); 选择性冻结被否决。不再为其单独设计新机制;
 # 若长期不再恢复, 考虑整体归档至 .github/archive/workflows/ 并同步台账。
+# ⚠️ 恢复运行前置项 (R15 讨论 2026-10-20): IMMWRT_BUILD_STATE 为单份全局
+# 槽位, 不同发行状态 (试产/正式) 的 run 会互相覆盖 source/config SHA 基线,
+# 恢复时 state key 须并入 cache_variant/release 维度后再启用。
 # ════════════════════════════════════════════════════════════════════════
 name: ImmortalWrt Builder - Unified SDK Firmware
 
@@ -80,6 +83,11 @@ on:
         type: boolean
       cache_variant:
         description: 'cache 命名空间变体 (空 = 默认; 非空 = 隔离 ccache/hostpkg save 快照, restore 仍跨变体暖启动; 白名单 [a-z0-9-])'
+        required: false
+        default: ''
+        type: string
+      release_target:
+        description: '滚动 Release (passwall/artifacts tag) 目标分支/commit (空 = 跟随本次构建来源提交)'
         required: false
         default: ''
         type: string
@@ -1206,6 +1214,8 @@ jobs:
       passwall_keep_versions:    ${{ matrix.passwall_keep_versions }}
       # C29: 调度器预填充位 (个人使用场景 = 不同发行状态手动隔离; 空 = executor 默认档)
       cache_variant:             ${{ github.event.inputs.cache_variant }}
+      # R13: 滚动 Release 目标分支 (空 = executor 默认跟随构建来源提交)
+      release_target:            ${{ github.event.inputs.release_target }}
       clean_cache:               ${{ needs.plan.outputs.clean_cache == 'true' }}
       free_disk_space:           ${{ github.event.inputs.free_disk_space == 'true' }}
       publish_sdk_ib:             true
@@ -1269,6 +1279,8 @@ jobs:
       passwall_keep_versions:    ${{ matrix.passwall_keep_versions }}
       # C29: 调度器预填充位 (与 run-firmware 同源透传; 空 = executor 默认档)
       cache_variant:             ${{ github.event.inputs.cache_variant }}
+      # R13: 滚动 Release 目标分支 (空 = executor 默认跟随 feed 来源提交)
+      release_target:            ${{ github.event.inputs.release_target }}
       clean_cache:               ${{ needs.plan.outputs.clean_cache == 'true' }}
       skip_feed_catchup:         ${{ github.event.inputs.skip_upstream == 'true' }}
     secrets:

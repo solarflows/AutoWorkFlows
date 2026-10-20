@@ -30,6 +30,8 @@
 #                              默认 release, 作用于本次构建创建/更新的全部 Release)
 #   require_signing            true = 签名密钥缺失/无效即硬失败 (默认 false = 降级 random 继续)
 #   passwall_keep_versions     Passwall 同包版本保留数 (默认 3, 范围 [1,30]; 下限 1 = 有界保留)
+#   release_target             滚动 Release (passwall/packages-* tag) 目标分支/commit
+#                              (空 = 跟随 feed 来源提交, 跨仓无有效值时落默认分支)
 #   cache_variant              cache 命名空间变体 (空 = 默认 immwrt-v2-*; 非空 = save/purge key
 #                              插 <variant>- 段隔离 ccache/hostpkg, restore 前缀仍跨变体暖启动)
 #   ib_packages / ib_profiles  IB 组装包清单与设备 profile (空 = 回退 seed 提取)
@@ -76,6 +78,11 @@ on:
       # Passwall 包同包版本收敛保留数 (与 artifacts_keep_versions 对称的可控项;
       # 范围 [1,30], 下限 1 = 有界保留是刻意设计, 不提供"全留"禁用)
       passwall_keep_versions:    { required: false, type: number, default: 3 }
+      # ── 滚动 Release 目标分支/commit (R13; 与 compile-firmware 同语义) ──
+      # 作用于 passwall/packages-* 常驻 tag 的 --target (create+edit)。
+      # 空 = 跟随本次构建的 feed 来源提交 (仅当发布仓就是 feed 仓时有效,
+      # 否则不传落默认分支)。显式值无效即硬失败。
+      release_target:            { required: false, type: string, default: '' }
       # ── cache 命名空间变体 (C29; 2026-10-19) ──
       # 空 = key 与既往逐字节一致。非空 = ccache/hostpkg/toolchain(fallback)
       # save key 与 purge 锚在 <target>- 后插 "<variant>-" 段; restore-keys 保持
@@ -203,6 +210,7 @@ jobs:
           validate_name "${{ inputs.matrix_passwall_tag }}" "matrix_passwall_tag"
           validate_name "${{ inputs.matrix_artifacts_release_tag }}" "matrix_artifacts_release_tag"
           validate_name "${{ inputs.matrix_firmware_release_tag_prefix }}" "matrix_firmware_release_tag_prefix"
+          validate_name "${{ inputs.release_target }}" "release_target"
           case "${{ inputs.release_type }}" in
             release|prerelease|draft) ;;
             *) fail "release_type 非法: '${{ inputs.release_type }}' (可选 release|prerelease|draft)" ;;
@@ -1929,17 +1937,11 @@ jobs:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
           set -euo pipefail
+          # 发布/签名文案库 (R12): source 前置, 后续 notes 与类型 flags 共用
+          . AutoWorkFlows/.github/scripts/release-lib.sh
           SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
           SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
-          if [ "$SIGN_MODE" = "apk" ]; then
-            SIGN_LINE="- 签名: ✅ APK 已签名 (公钥指纹 ${SIGN_FP:0:16}...)"
-          elif [ "$SIGN_MODE" = "usign" ]; then
-            SIGN_LINE="- 签名: ✅ usign 已签名 (公钥指纹 ${SIGN_FP:0:16}...)"
-          elif [ "$SIGN_MODE" = "random" ]; then
-            SIGN_LINE="- 签名: ⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
-          else
-            SIGN_LINE="- 签名: ❌ 未签名"
-          fi
+          SIGN_LINE="- 签名: $(describe_sign_mode "$SIGN_MODE" "$SIGN_FP")"
           cat > combined-release.md <<EOF
           ## 📦 ${{ inputs.matrix_target }} 固件 (IB 增量构建)
 
@@ -1955,8 +1957,7 @@ jobs:
             TAG="${{ inputs.matrix_firmware_release_tag_prefix }}-${{ env.RESOLVED_VERSION }}"
           fi
           REPO="${{ inputs.matrix_release_repo }}"
-          # ── Release 类型与发布行为收敛到 release-lib.sh (R12, 与 compile-firmware 同源) ──
-          . AutoWorkFlows/.github/scripts/release-lib.sh
+          # Release 类型 flags 由库推导 (R12; 库已在本步骤顶部 source)
           resolve_release_type_flags "${{ inputs.release_type }}"
           echo "🏷️ Release 类型: ${{ inputs.release_type }}"
           # ── --target 与 compile-firmware 全量路径对齐 (R7): 钉 SDK 记录的源码
@@ -2004,30 +2005,33 @@ jobs:
           PACKAGE_COMMIT=$(jq -r '.packages_commit' build-info.json)
           PACKAGE_SHA=$(jq -r '.packages_sha' build-info.json)
           PACKAGE_FORMAT=$(jq -r '.packages_format' build-info.json)
+          # ── 滚动 tag --target (R13, 与 compile-firmware 同语义): 默认跟随本次构建
+          #    的 feed 来源提交 (PACKAGE_SHA = build-info 记录的 feed HEAD, 发布到
+          #    feed 仓时有效); 跨仓且无显式值时不传。edit 同步刷新防 force-push 悬挂。
+          RELEASE_TARGET="${{ inputs.release_target }}"
+          if [ -z "$RELEASE_TARGET" ] \
+            && [ "$(printf '%s' "$PACKAGE_REPO" | tr 'A-Z' 'a-z')" = "$(printf '%s' '${{ inputs.packages_feed_repo }}' | tr 'A-Z' 'a-z')" ]; then
+            RELEASE_TARGET="$PACKAGE_SHA"
+          fi
+          RT_FLAGS=()
+          [ -n "$RELEASE_TARGET" ] && RT_FLAGS=(--target "$RELEASE_TARGET")
           SIGN_MODE="${{ steps.signing_key.outputs.sign_mode || 'none' }}"
           SIGN_FP="${{ steps.signing_key.outputs.fingerprint || 'none' }}"
-          if [ "$SIGN_MODE" = "apk" ]; then
-            SIGN_TEXT="✅ APK 已签名 (指纹 ${SIGN_FP:0:16}...)"
-          elif [ "$SIGN_MODE" = "usign" ]; then
-            SIGN_TEXT="✅ usign 已签名 (指纹 ${SIGN_FP:0:16}...)"
-          elif [ "$SIGN_MODE" = "random" ]; then
-            SIGN_TEXT="⚠️ 随机密钥签名 (需 --allow-untrusted / --force-checksum)"
-          else
-            SIGN_TEXT="❌ 未签名"
-          fi
+          SIGN_TEXT="$(describe_sign_mode "$SIGN_MODE" "$SIGN_FP")"
 
           if ! gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" >/dev/null 2>&1; then
             printf '## Passwall Packages\n\n- **%s**: ⚡ SDK 增量构建 (.%s), commit [`%s`](%s/commit/%s)\n- **签名**: %s\n' \
               "$IMMWRT_TARGET" "$PACKAGE_FORMAT" "$PACKAGE_COMMIT" "$PACKAGE_REPO" "$PACKAGE_SHA" "$SIGN_TEXT" > release-notes.md
-            # 刻意 --latest=false 且不传 --target: packages 是共享多 target 的常驻 tag,
-            # 不抢仓库 Latest, 落默认分支 (与 compile-firmware Publish Passwall 一致)。
+            # 刻意 --latest=false: packages 是共享多 target 的常驻 tag, 不抢仓库 Latest。
+            # --target 按 R13 解析 (跟随 feed 来源或显式值; 无有效来源时落默认分支)。
             gh release create "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --title "Passwall Packages" \
-              --notes-file release-notes.md --latest=false "${CREATE_TYPE_FLAGS[@]}"
+              --notes-file release-notes.md --latest=false "${RT_FLAGS[@]}" "${CREATE_TYPE_FLAGS[@]}"
           else
-            EXISTING=$(gh release view "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --json body --jq '.body // ""')
-            printf '%b\n' "${EXISTING}\n\n---\n### 📦 ${IMMWRT_TARGET} - SDK 增量构建 (.${PACKAGE_FORMAT})\n- **构建类型**: ⚡ 自建 SDK 独立编译 (增量编译插件)\n- **commit**: [\`${PACKAGE_COMMIT}\`](${PACKAGE_REPO}/commit/${PACKAGE_SHA}) - $(TZ=$TZ date +'%Y-%m-%d %H:%M')\n- **签名**: ${SIGN_TEXT}" > release-notes.md
+            # ③ R12: notes 追加统一走库模板 (与全量路径同格式)
+            BLOCK=$(pkg_release_notes_block "$IMMWRT_TARGET" "SDK 增量构建 (.${PACKAGE_FORMAT})" "⚡ 自建 SDK 独立编译 (增量编译插件)" "$PACKAGE_COMMIT" "$PACKAGE_REPO" "$PACKAGE_SHA" "$SIGN_TEXT")
+            append_pkg_release_notes "$PACKAGE_TAG" "$PACKAGE_REPO" "$BLOCK"
             gh release edit "$PACKAGE_TAG" --repo "$PACKAGE_REPO" --notes-file release-notes.md \
-              "${EDIT_TYPE_FLAGS[@]}"
+              "${RT_FLAGS[@]}" "${EDIT_TYPE_FLAGS[@]}"
           fi
 
           for file in "${PACKAGE_FILES[@]}"; do
