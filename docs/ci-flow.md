@@ -305,7 +305,7 @@ flowchart TD
     A["prepare: 解析目标分支<br/>白名单 main/qt6/mt798x/qualcommax"] --> B["update（矩阵，每分支一 job）"]
     B --> C["签出 + 初始化环境"]
     C --> D["克隆 <target> 分支 → 清空工作树"]
-    D --> E["执行 <target>.sh 生成插件"]
+    D --> E["collect_packages.py<br/>按 packages.yaml 增量收集插件"]
     E --> F["convert_translation.sh<br/>create_acl_for_luci.sh<br/>modify.sh"]
     F --> G["生成插件来源摘要"]
     G --> H["应用 patches/<target>/*.patch"]
@@ -318,6 +318,9 @@ flowchart TD
 - 并发组：`openwrt-packages-updater-<target>`（每分支独立，互不阻塞）。
 - 推送使用 askpass + `--force-with-lease=<ref>:<expected>`，远端变化时**拒绝覆盖**。
 - `git diff --cached --check` 的 trailing whitespace 只 warning，Git 执行错误才硬失败。
+- `collect_packages.py` 的增量跳过要求 **repo + branch + commit 三要素一致**（只比 commit 会把"换成同 sha 的 fork"误判为无更新）；重拉为**替换写入**，并按条目在 lock 记 `dirs` 来源账本，用于剪掉"本轮不再产出"的目录。收集不完整（上游改名/删除）时点名条目并 **exit 1、不落盘 lock**。
+- 工作树顶层目录若既不属于任何清单条目也不属于 overlay，出 `::warning::` 报告为未追踪残留（默认不删；需清理时加 `--prune-untracked`）。
+- `collect_packages.py` 的 `mvdir` 搬运遵循「清单显式声明的来源优先于仓库附带目录」：同名目录由其他条目声明时跳过并出 `::warning::`，由 `--blacklist` / `--overwrite`（支持 `<target>/<名称>` 限定）显式裁决；无归属声明的同名覆盖照常执行但逐项打印。补丁冲突时 `apply_patch_file` 会打印 patch 原始输出。详见 [todo.md](todo.md) U15/U16 与 [openwrt-build-pitfalls.md](openwrt-build-pitfalls.md)。
 
 ### 5.2 `upstream-sync.yml`
 

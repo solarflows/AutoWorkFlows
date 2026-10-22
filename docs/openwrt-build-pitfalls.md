@@ -158,6 +158,65 @@ Hooks/Prepare/Post += ShadowsocksR/Fixup/Prepare
 
 验证证据 (run #31559354153, commit bfb4c8b) — GitHub trees API: `100644 blob shadowsocksr-libev/src/configure`; 上游 `Openwrt-Passwall/openwrt-passwall-packages` 同名文件同样 100644; feed `main`/`qt6`/`mt798x`/`qualcommax` 四分支均受影响且该包 Makefile SHA 一致 (a7c20c1), 故用全局补丁一次覆盖。
 
+## custom-feed mvdir 静默同名覆盖导致包来源被劫持 (mt798x smartdns / 0009 冲突)
+
+### Symptom
+
+`自建插件源更新 (Custom Feed Publisher)` 的 `更新 mt798x 分支` → 「应用补丁」连续失败 (run `39455665028` / `39635230253` / `39714439847`)，注解只有 `::error::补丁冲突或目标文件校验失败: 0009-smartdns-bump-48.4.patch`，原始 patch 输出被 `>/dev/null 2>&1` 丢弃。mt798x feed 分支冻结在 `fad3a3cd` (2026-10-21T03:01:38Z)，其余 target 全绿。
+
+同一轮日志里的自相矛盾是定位钥匙：收集步骤打印 `⚡ [增量跳过] smartdns: 上游无新提交 (4be700d)`（目录不该被动），但 `0007-fix-smartdns.patch` 却报 `✅ 成功应用`（正常应是 `⚡ [增量跳过]`）。二者同时成立只有一种解释——`smartdns/` 的内容被换成了另一份未打补丁的 Makefile。
+
+### Verified Root Cause
+
+1. `.github/custom-feed/packages.yaml` 中 `openwrt-passwall-packages` 条目带 `hook: mvdir openwrt-passwall-packages`；旧 `mvdir()` 对同名顶层目录是 `shutil.rmtree` 后 `shutil.move`，**静默整目录覆盖**，无冲突检测也无输出。
+2. 上游 `Openwrt-Passwall/openwrt-passwall-packages` 于 2026-10-21T13:36Z 新增自带 `smartdns` 包（`3f441304 smartdns: add package`，`049aaf47` 升至 48.4）。自此该仓库每次被增量重拉，我们的 `smartdns/` 就被覆盖。
+3. passwall 版 Makefile 为 `PKG_VERSION:=48.4` + `PKG_SOURCE_VERSION:=21c940ed…` + `PKG_SOURCE_URL:=…/tar.gz`，与 `0009` 的旧像（`1.2026.48.2` + git 源 + `PKG_MIRROR_HASH`）和新像（`Release$(PKG_VERSION)` tarball + `PKG_HASH` + `PKG_BUILD_DIR`）**都不匹配** → 正向与反向 dry-run 双双失败 → 判为真实冲突。0009 非 `temp*`，不降级，整个 job 硬失败。
+
+`⚡ [增量跳过]` 与 `✅ 成功应用` 并不矛盾：收集脚本确实没重拉 pymumu 的 smartdns，是 `mvdir` 在其之后用整仓副本把它顶掉了。
+
+### Fix
+
+`collect_packages.py`：
+
+1. `mvdir()` 增加显式黑名单与反向逃生口，hook 语法 `mvdir <目录> [--blacklist <spec>] [--overwrite <spec>]`，`spec` 支持 `<名称>` 或 `<target>/<名称>`（`packages.yaml` 里对事故点名 `--blacklist mt798x/smartdns`）。未知参数或缺值直接 `❌ … 书写错误` 退出——静默忽略一个拼错的选项，等于保护看起来加了其实没生效。
+2. 新增**跨条目同名保护**（默认生效）：`main()` 先按清单构建根目录归属表 `dir_owners`，凡同名目录由其他条目声明，则跳过覆盖并出 `::warning::`（附 `--overwrite <名称>` 逃生提示）。规则是「清单显式声明的来源优先于仓库附带目录」，与 `smartdns` 的维护意图一致；无归属声明的同名覆盖仍照常执行，但逐项 `♻️` 打印，不再静默。
+3. `custom-feed.yml` 两处 `apply_patch_file` 保留 patch 的 stdout/stderr：冲突时打印原始输出，带 `fuzz`/`offset` 应用时额外出 `::warning::`。
+
+黑名单必须按 target 限定，不能全局：`qualcommax` 清单里没有自有 `smartdns` 条目，全局黑名单会让该分支彻底丢掉 smartdns 而破坏 passwall 依赖。
+
+### Verification
+
+本地 GNU patch 2.7.6（与 runner 同版本）合成 fixture 重放，55/55 通过，回归测试已入仓库：`python .github/custom-feed/scripts/test_mvdir.py`（离线、不触网；其中 34 项覆盖本节——mvdir 黑名单/跨条目保护/直接抽取 `custom-feed.yml`「应用补丁」步骤执行的三个场景：我们的 smartdns → 增量跳过、被劫持 → 硬失败且 patch 原始输出留存、偏移应用 → `::warning::`；其余 21 项覆盖 U16 的增量与账本语义）。
+
+| `smartdns/Makefile` 内容 | 0007 | 0009 | 对应 |
+|---|---|---|---|
+| feed 分支 `fad3a3cd` 实际 blob (`ecbc5592`) | SKIPPED | SKIPPED | ✅ 成功 run |
+| pymumu master（0009 旧像） | APPLIED | APPLIED | — |
+| passwall 自带 smartdns（四个候选 sha 同结论） | APPLIED | **CONFLICT** | ❌ 失败 run |
+
+端到端：旧行为（无归属表、无黑名单）复现「被劫持 → 0009 CONFLICT」；新行为保住我们的 Makefile（字节全等）且 0007/0009 均 `⚡ [增量跳过]`，其余包照常搬运；`qualcommax` 场景自带 smartdns 照常搬入（无误伤）。`.github/scripts/validate-workflows.py` 全过（109 个 run 块 `bash -n`、step 长度、台账 ID 唯一性）。
+
+### Diagnostic Notes
+
+按 target 统计的跨条目同名冲突面（`v2ray-geodata` 不在此列——其 Makefile 由 `overlay/global/v2ray-geodata/Makefile` 在补丁之后钉版，overlay 层天然压过 mvdir）：
+
+- `main` / `qt6`：`openwrt-passwall-packages` → `smartdns`、`shadow-tls`；`my-diy` → `luci-app-sms-tool`
+- `mt798x`：`openwrt-passwall-packages` → `smartdns`
+- `qualcommax`：无
+
+同名冲突今后会以 `::warning::` 常驻 run 注解，直到被 `--blacklist` / `--overwrite` 显式裁决；出现新 warning 时不要直接消音，先确认哪一份来源才是想要的。另注意 `U6` 的前提「mt798x smartdns 版本唯一控制点 = 编辑 0009」只有在来源不被劫持时才成立。
+
+### Follow-up (2026-10-22 扩展，U16)
+
+同一轮排查继续暴露四处"换源/整仓巨变"边界，均已在 `collect_packages.py` 加固并有端到端测试（本地 git 仓库，`test_collect_incremental.py` 19 用例）：
+
+1. **收集不完整必须硬失败**：旧实现 fetch 三次失败后打印 `❌ 跳过软件包` 便 `continue`，脚本仍 exit 0、CI 全绿、feed 静默少包。现点名条目 exit 1 且不落盘 lock。
+2. **换源/换分支不得只看 commit**：增量跳过原先只比 `locked_sha == remote_sha`，而 lock 里本就存着 `repo`/`branch`。把条目换成**同一 sha 的 fork**（fork 镜像常态）会被判"无更新"跳过，换源当轮不生效。现三要素一致才跳过，且重拉改为**替换写入**（先清本条目旧根目录）——否则 rsync/copytree 只合并不删除，产出"新 Makefile + 旧 `patches/`、`src/`"的混合树。
+3. **来源账本 `dirs`**：lock 每条目登记其执行后确实存在的根目录（mvdir 的暂存目录、mv 搬空的源目录不计，否则在位判定永远失败、条目永不跳过）。据此才能区分"条目本轮不再产出"（上游删包/改名、paths 收窄）与"根本不属于任何条目"（历史残留）；他人声明的目录既不删也不覆盖。工作树里存在而账本覆盖不到的目录默认只出 `::warning::`，账本未覆盖全部条目时不判定（避免首轮把上百个合法目录误报）。
+4. **mvdir 自我覆盖护栏**：当仓库顶层目录与克隆目录同名（条目 `name` == 子项名）时，旧实现会先 `shutil.rmtree` 掉**暂存目录本身**再复制，等于当场丢包。该缺陷由端到端测试挖出（四分支现状未触发），现直接 `❌` 退出并给出改名指引。
+
+main 分支实测残留（截至 `ee1d1b91`，逐个用 `git trees` 与 lock key 交叉验证）：`kaiplus`、`luci-app-kaiplus`（冻结 2026-09-23）、`luci-app-nezha`（冻结 2026-03-05）无任何条目归属。注意 `luci-app-ikoolproxy` + `koolproxy` 是 `1wrt/luci-app-ikoolproxy` 条目 `hook: mv luci-app-ikoolproxy/koolproxy ./` 的**正常产物**（整仓落在 `luci-app-ikoolproxy/`，子目录 `koolproxy` 被搬出），不是残留——第一版核验脚本按 `mv` 只统计搬出目标而误判，教训是：**核验模型的 hook 语义必须与实现逐条对齐，否则会把正常产物报成事故**。
+
 ## Cache Strategy
 
 The supported strategies are `smart`, `clean-toolchain`, `clean-ccache`, `clean-all`, and `no-cache`. `plan` routes every non-`smart` strategy to the full-build executor; the executor then performs the selected restore/save/purge behavior. `no-cache` skips Actions Cache restore, save, statistics, and purge, but does not forcibly disable OpenWrt's in-build ccache when the seed retains `CONFIG_CCACHE=y`. ccache configuration remains guarded by the discovered build support.
