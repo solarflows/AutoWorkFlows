@@ -215,8 +215,17 @@ jobs:
 
               # 2. 正向应用（未打过补丁或包已拉取新版本）；失败时立即清理
               #    patch 产生的 .rej/.orig（reversed hunk 与冲突均会写 .rej）
-              if patch -d './' -p1 -E --forward --batch --no-backup-if-mismatch < "$f" >/dev/null 2>&1; then
+              #    patch 输出必须留存：只报"校验失败"而无原始输出时无法归因
+              #    （2026-10-22 mt798x 事故即因此只能靠反推定位，见 docs/todo.md U15）
+              local patch_output
+              if patch_output=$(patch -d './' -p1 -E --forward --batch --no-backup-if-mismatch < "$f" 2>&1); then
                 any_applied=1
+                case "$patch_output" in
+                  *fuzz*|*Fuzz*|*offset*)
+                    echo "::warning::补丁带偏移或 fuzz 应用，需人工确认落点: $patch_name"
+                    printf '%s\n' "$patch_output" | sed 's/^/      /'
+                    ;;
+                esac
               # 3. 反向检测（该文件在增量模式下被跳过，已处于打过补丁状态）
               elif patch -R -d './' -p1 -E --batch --no-backup-if-mismatch --dry-run < "$f" >/dev/null 2>&1; then
                 find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
@@ -225,6 +234,8 @@ jobs:
               else
                 find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
                 any_conflict=1
+                echo "  ↳ patch 输出（$patch_name）:"
+                printf '%s\n' "$patch_output" | sed 's/^/      /'
               fi
             done
             rm -rf "$split_dir" 2>/dev/null || true
@@ -297,14 +308,24 @@ jobs:
                 continue
               fi
 
-              if patch -d './' -p1 -E --forward --batch --no-backup-if-mismatch < "$f" >/dev/null 2>&1; then
+              # 与目标专属补丁同一套双向探测；patch 输出留存以便冲突归因
+              local patch_output
+              if patch_output=$(patch -d './' -p1 -E --forward --batch --no-backup-if-mismatch < "$f" 2>&1); then
                 any_applied=1
+                case "$patch_output" in
+                  *fuzz*|*Fuzz*|*offset*)
+                    echo "::warning::全局补丁带偏移或 fuzz 应用，需人工确认落点: $patch_name"
+                    printf '%s\n' "$patch_output" | sed 's/^/      /'
+                    ;;
+                esac
               elif patch -R -d './' -p1 -E --batch --no-backup-if-mismatch --dry-run < "$f" >/dev/null 2>&1; then
                 find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
                 any_skipped=1
               else
                 find . -type f \( -name '*.rej' -o -name '*.orig' \) -delete 2>/dev/null || true
                 any_conflict=1
+                echo "  ↳ patch 输出（$patch_name）:"
+                printf '%s\n' "$patch_output" | sed 's/^/      /'
               fi
             done
             rm -rf "$split_dir" 2>/dev/null || true
