@@ -215,7 +215,11 @@ Hooks/Prepare/Post += ShadowsocksR/Fixup/Prepare
 3. **来源账本 `dirs`**：lock 每条目登记其执行后确实存在的根目录（mvdir 的暂存目录、mv 搬空的源目录不计，否则在位判定永远失败、条目永不跳过）。据此才能区分"条目本轮不再产出"（上游删包/改名、paths 收窄）与"根本不属于任何条目"（历史残留）；他人声明的目录既不删也不覆盖。工作树里存在而账本覆盖不到的目录默认只出 `::warning::`，账本未覆盖全部条目时不判定（避免首轮把上百个合法目录误报）。
 4. **mvdir 自我覆盖护栏**：当仓库顶层目录与克隆目录同名（条目 `name` == 子项名）时，旧实现会先 `shutil.rmtree` 掉**暂存目录本身**再复制，等于当场丢包。该缺陷由端到端测试挖出（四分支现状未触发），现直接 `❌` 退出并给出改名指引。
 
-main 分支实测残留（截至 `ee1d1b91`，逐个用 `git trees` 与 lock key 交叉验证）：`kaiplus`、`luci-app-kaiplus`（冻结 2026-09-23）、`luci-app-nezha`（冻结 2026-03-05）无任何条目归属。注意 `luci-app-ikoolproxy` + `koolproxy` 是 `1wrt/luci-app-ikoolproxy` 条目 `hook: mv luci-app-ikoolproxy/koolproxy ./` 的**正常产物**（整仓落在 `luci-app-ikoolproxy/`，子目录 `koolproxy` 被搬出），不是残留——第一版核验脚本按 `mv` 只统计搬出目标而误判，教训是：**核验模型的 hook 语义必须与实现逐条对齐，否则会把正常产物报成事故**。
+main 分支残留实况（`git trees` + lock key + 条目 `paths`/`hook` 三方交叉验证）：真残留只有 `kaiplus`、`luci-app-kaiplus`（均冻结 2026-09-23），已被 push 触发的 force 全量刷新 run `39764390912` 清除（main `07296f4b`、qt6 `0bcc62be`）。而 `luci-app-ikoolproxy`+`koolproxy`、`luci-app-nezha`+`nezha-agent` **都是正常产物**：这两个条目同时带 `paths` 与 `hook: mv …`，整仓按 `paths` 落在根下，`mv` 只搬出其中一个子目录，其余内容留在原地。
+
+我先后两次把后者误报成残留，成因相同——核验脚本与人工 grep 都只取 `name`/`repo`/`hook`，漏看与之并存的 `paths`（第一版还漏了"条目执行后仍存在的暂存目录"）。教训：**判定"某目录属于谁"必须按实现的完整产物口径**（`name`、每条 `paths`、`mv`/`mvdir` 的最终落点、执行后是否仍存在），任何简化都会把合法产物报成事故；实现里 `produced` 之所以在条目执行完后按"确实存在"过滤，正是为了与这个口径一致。
+
+同一 run 另暴露一条既有隐患：`0003-fix-tailscale.patch` 报 `Hunk #1 succeeded at 32 with fuzz 1 (offset -1 lines)`——U15 保留 patch 输出后第一次可见，此前这类"绿但打偏"完全静默（台账 U17）。
 
 ## Cache Strategy
 
