@@ -645,8 +645,9 @@ def main():
               + (" …" if len(uncovered) > 5 else ""))
     else:
         actual_dirs = {d for d in os.listdir(dest_root)
-                       if os.path.isdir(os.path.join(dest_root, d))
-                       or os.path.islink(os.path.join(dest_root, d))}
+                       if not d.startswith(".")
+                       and (os.path.isdir(os.path.join(dest_root, d))
+                            or os.path.islink(os.path.join(dest_root, d)))}
         ghosts = untracked_roots(actual_dirs, tracked_dirs, True)
         removed = 0
         if ghosts and args.prune_untracked:
