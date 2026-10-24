@@ -606,7 +606,7 @@ ipq60xx / ipq807x 上 smartdns 进程存活、CPU 正常, 但 DoH 上游解析�
 
 - `.github/upstream-sync/overlay/packages/qualcommax/net/smartdns/patches/100-fix-h2-hang.patch` (已随 `solarflows/packages@qualcommax` 生效): `ctx->status < 0` 时不再延迟关闭, 并把 ENOSPC 上报为连接错误。
 - `.github/upstream-sync/overlay/packages/qualcommax/net/smartdns/patches/101-reap-stalled-http2-streams.patch` (commit bebecee): ① 延迟关闭增加 `close_defer_tick` + `HTTP2_STREAM_CLOSE_DEFER_TIMEOUT_MS` (5s), 超时即清 pending 并 `_http2_remove_stream(stream, 1)` 回收槽位; ② ENOSPC 分支置 `errno = ECONNRESET`, 命中 `case ECONNRESET` 走立即重建而非 60s prohibit。
-- mt798x 同补丁走 openwrt-packages 链路: `.github/custom-feed/overlay/mt798x/smartdns/patches/{100,101}` + `patches/mt798x/0009-smartdns-bump-48.4.patch` (该 target 的 smartdns 来自 `package/solarflows/smartdns` core 包, feeds 同名包不生效)。
+- mt798x 同补丁走 openwrt-packages 链路: `.github/custom-feed/overlay/mt798x/smartdns/patches/{100,101}` (该 target 的 smartdns 来自 `package/solarflows/smartdns` core 包, feeds 同名包不生效)。原配套的 `patches/mt798x/0009-smartdns-bump-48.4.patch` 已于 2026-10-24 退役移入 `patches-remove/` (上游 pymumu 原生 48.4, commit `21c940ed` 锚定, 补丁双向失效)。
 
 ### Verification
 

@@ -315,7 +315,7 @@ def mvdir(dest_root, dirname, target=None, blacklist=(), overwrite=(), owners=No
     """将 dirname 下所有直接子目录/文件移动到 dest_root，并删除 dirname。
 
     同名处理（旧实现是不加提示地 rmtree 覆盖，曾让 passwall 自带的 smartdns
-    覆盖 packages.yaml 声明、靠 0007/0009 补丁维护的 smartdns，导致 mt798x
+    覆盖 packages.yaml 声明、靠 0007 补丁维护的 smartdns，导致 mt798x
     feed 连续失败；详见 docs/openwrt-build-pitfalls.md）：
       - 命中黑名单：跳过搬运，保留现有目录（源副本随 dirname 一起丢弃）；
       - 该名称由清单中其他条目声明：默认保护，跳过并出 ::warning::；

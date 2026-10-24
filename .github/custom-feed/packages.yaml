@@ -362,7 +362,7 @@ packages:
   description: PassWall1&2       科学上网
   repo: https://github.com/Openwrt-Passwall/openwrt-passwall-packages
   # 2026-10-21 起该仓库新增自带 smartdns；mt798x 的 smartdns 由 pymumu 源 +
-  # 0007/0009 补丁维护（版本唯一控制点见 docs/todo.md U6），必须保持我们的来源，
+  # 0007 补丁维护（版本随上游原生 48.4，见 docs/todo.md U6），必须保持我们的来源，
   # 故显式列入黑名单。跨条目同名目录默认也受保护，此处是显式声明与兜底。
   hook: mvdir openwrt-passwall-packages --blacklist mt798x/smartdns
   targets:

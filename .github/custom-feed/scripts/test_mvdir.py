@@ -24,7 +24,9 @@ import yaml  # noqa: E402
 WORK = tempfile.mkdtemp(prefix="mvdir-test-")
 PATCH = shutil.which("patch") or r"C:\msys64\usr\bin\patch.exe"
 P7 = os.path.join(REPO, ".github", "custom-feed", "patches", "mt798x", "0007-fix-smartdns.patch")
-P9 = os.path.join(REPO, ".github", "custom-feed", "patches", "mt798x", "0009-smartdns-bump-48.4.patch")
+# 0009 已退役（2026-10-24 移入 patches-remove，仅作事故重放 fixture）：
+# 上游 pymumu/openwrt-smartdns 原生 48.4（commit 21c940ed 锚定），补丁双向失效
+P9 = os.path.join(REPO, ".github", "custom-feed", "patches-remove", "mt798x", "0009-smartdns-bump-48.4.patch")
 
 UPSTREAM = """#
 # Copyright (c) 2018-2026 Nick Peng (pymumu@gmail.com)
