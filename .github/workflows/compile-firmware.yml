@@ -514,6 +514,8 @@ jobs:
       - name: Prepare Environment
         env:
           DEBIAN_FRONTEND: noninteractive
+          # Ubuntu 22.04+ needrestart 偶发交互等待 (noninteractive 不能完全压制)
+          NEEDRESTART_MODE: a
         run: |
           set -euo pipefail
 
@@ -535,16 +537,27 @@ jobs:
             fi
           }
 
+          # apt 防挂起 (run 40539697880): 连接/等待 30s 上限 + 单项重试 3 次 + dpkg 锁最多等 60s,
+          # 把静默假死转成快速可见的失败; 外层 run_bounded 仍是最后防线
+          APT_OPTS=(
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+            -o Acquire::Retries=3
+            -o DPkg::Lock::Timeout=60
+          )
+
           run_bounded "禁用 snap 自动更新与锁定无关包" 30 bash -c '
             set -euo pipefail
             echo "🛑 停止并屏蔽 snapd 守护进程与定时刷新..."
             sudo snap set system refresh.hold="forever" 2>/dev/null || true
             sudo systemctl mask --now snapd.service snapd.socket snapd.seeded.service snapd.refresh.timer 2>/dev/null || true
+            echo "🛑 屏蔽 apt 后台自动更新, 消除 dpkg 锁竞争 (mask 失败不阻断, 退化为 DPkg::Lock::Timeout 有界等待)..."
+            sudo systemctl mask --now apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
             echo "🔒 锁定 firefox 与 snapd 包版本，防止 apt full-upgrade 触发 snap 更新..."
             sudo apt-mark hold firefox snapd 2>/dev/null || true
           '
 
-          run_bounded "更新 apt 索引" 600 sudo -E apt-get update
+          run_bounded "更新 apt 索引" 600 sudo -E apt-get "${APT_OPTS[@]}" update
 
           # ── 声明式依赖安装 (替代 build-scripts.immortalwrt.org 外部脚本, 消除 SPOF) ──
           # 包列表 = init_build_environment.sh noble 主列表 ∪ immortalwrt/docker
@@ -555,7 +568,7 @@ jobs:
           #   upx/padjffs2/po2lmo 外部二进制 (tools/upx 与 luci-base 构建期自举;
           #    padjffs2 仅 jffs2 镜像需要, 本仓库 target 均为 squashfs)
           run_bounded "安装 OpenWrt 编译依赖" 900 \
-            sudo -E apt-get -yqq --no-install-recommends install \
+            sudo -E apt-get -yq "${APT_OPTS[@]}" --no-install-recommends install \
             ack antlr3 asciidoc autoconf automake autopoint binutils bison \
             build-essential bzip2 ccache clang-18 cmake cpio curl \
             device-tree-compiler dos2unix ecj fakeroot fastjar file flex gawk \

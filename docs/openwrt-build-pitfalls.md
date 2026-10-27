@@ -740,3 +740,27 @@ toolchain 冷重编（快照被配额驱逐或 tools/toolchain 变更）后的�
 ### Verification
 
 下次 mt798x 构建：`staging_dir/toolchain-*/bin/*-gcc --version` 应显示 `toolchain-<10位hash>` 而非 git revision；toolchain 缓存 key 因 `toolchain/` tree 变化而一次性更换（预期内的一次重编）；此后同步推进 REVISION 不再影响编译器身份。`compiler_check=content` 尚未落地（编译 CI 当前禁用），落地前跨重编命中率收益不完整。
+
+## apt 依赖安装静默假死 (900s 零输出超时)
+
+### Symptom
+
+`Prepare Environment` 步骤失败：`##[error]安装 OpenWrt 编译依赖 超时 (900s)`，exit code 124。`apt-get update` 正常（~4s），随后 install 整整 900s **零输出**；超时前后磁盘已用不变（58G/41% → 58G/41%），无任何下载或安装进展。`-yqq` 双重静音导致事后无法区分「慢速下载 / 传输停滞 / 等待 dpkg 锁」。
+
+### Verified Root Cause
+
+run 40539697880（2026-10-27，ImmortalWrt-QualcommAX canary，ipq807x）：runner 级 apt 通道瞬时挂起。同日早 2 小时同 workflow 成功（run 40519779547），排除 workflow 回归；10-21 失败 run 39550774746 为无关的包编译失败（golang-bootstrap/libnftnl + fakeroot 404）。具体卡点（网络停滞 vs dpkg 锁竞争）因 `-yqq` 无法从日志判定——本条目的核心教训：**静音参数剥夺了诊断证据**。
+
+### Fix
+
+`compile-firmware.yml` `Prepare Environment`（2026-10-28）：
+
+- apt 命令统一注入 `Acquire::http/https::Timeout=30`、`Acquire::Retries=3`、`DPkg::Lock::Timeout=60`（update 与 install 都注入），把每种静默挂起模式转成快速可见的失败
+- `-yqq` → `-yq`：保留 `Get:xx` 下载行与锁告警，假死时可直接看到卡死的包
+- snapd mask 块顺带 mask `apt-daily*` / `unattended-upgrades`（预防锁竞争；mask 失败不阻断，退化为锁超时兜底）
+- step env 增加 `NEEDRESTART_MODE=a`（Ubuntu 22.04+ needrestart 偶发交互等待）
+- 外层 `run_bounded` 900s 保留：`Acquire::http::Timeout` 是否覆盖传输中途停滞未验证（推断仅限连接/等待阶段），外层是最后防线
+
+### Verification
+
+下次构建观察 `Prepare Environment`：正常应 <2 分钟且日志可见 `Get:` 行；若再挂起，日志应显示具体超时原因（连接超时 / 锁等待持有者）而非零输出。
