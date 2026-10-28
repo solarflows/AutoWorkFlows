@@ -387,6 +387,12 @@ def check_caller_contract(files: list[Path], rep: Report) -> None:
 
 
 def main() -> int:
+    # Windows 中文区域默认代码页为 GBK, 打印含 emoji/中文的步骤名会 UnicodeEncodeError
+    # 崩溃 (校验结果被吞)。统一重配置为 UTF-8 + replace, 不改变 Linux CI 行为。
+    for stream in (sys.stdout, sys.stderr):
+        if stream.encoding and stream.encoding.lower() not in ("utf-8", "utf8"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("workflows", nargs="*", help="workflow 文件名 (默认全部 7 个活跃 workflow)")
     args = ap.parse_args()
