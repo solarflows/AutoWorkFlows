@@ -637,6 +637,15 @@ packages:
   repo: https://github.com/eamonxg/luci-app-aurora-config
   targets:
   - qualcommax
+- name: zapret2
+  description: zapret2           DPI 绕过核心与 LuCI 控制面板
+  repo: https://github.com/damocjwj/openwrt-zapret2
+  branch: main
+  paths:
+  - zapret2
+  - luci-app-zapret2
+  targets:
+  - qualcommax
 - name: my-diy
   description: my-diy
   repo: https://github.com/hyy-666/my-diy
