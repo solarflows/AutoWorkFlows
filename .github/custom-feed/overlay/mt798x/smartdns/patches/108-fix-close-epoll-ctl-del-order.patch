@@ -1,17 +1,13 @@
-From fe492e089c597e21a061385d4521c9939635d18e Mon Sep 17 00:00:00 2001
 From: PikuZheng <cba321123@gmail.com>
 Date: Sat, 14 Nov 2026 22:08:36 +0800
-Subject: [PATCH 108/111] fix close / EPOLL_CTL_DEL order
-MIME-Version: 1.0
-Content-Type: text/plain; charset=utf-8
-Content-Transfer-Encoding: 8bit
+Subject: [PATCH] fix(client): epoll DEL before close to prevent deleting recycled fd
+Origin: https://github.com/PikuZheng/smartdns/commit/44610c2c61490e9317ad79119351f94068924937
+Upstream-Status: Backported from downstream PikuZheng/canary
 
-原代码先 close() 再用同一个 fd 号做 EPOLL_CTL_DEL，留下 fd 号复用窗口；新代码保存局部副本、先从 epoll 摘除再关闭，并排除误删 client.epoll_fd / client.fd_wakeup。
-close_fd 声明在 src/dns_client/client_socket.c:150。HTTPS+proxy 路径里 proxy_conn_free() 关闭的正是 server_info->fd，现在 DEL 一定发生在其之前，不会再误删复用该号码后新注册的 fd。
+Closing fd before EPOLL_CTL_DEL leaves a race window where a concurrent connection
+recycles the same fd number, which is then erroneously deleted from epoll by the
+subsequent DEL call. Preserve local close_fd and DEL from epoll first.
 ---
- src/dns_client/client_socket.c | 14 ++++++++------
- 1 file changed, 8 insertions(+), 6 deletions(-)
-
 diff --git a/src/dns_client/client_socket.c b/src/dns_client/client_socket.c
 index 69004b85..e5e176b7 100644
 --- a/src/dns_client/client_socket.c

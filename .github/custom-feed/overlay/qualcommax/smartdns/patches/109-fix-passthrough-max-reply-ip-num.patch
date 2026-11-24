@@ -1,29 +1,14 @@
-From f25760d25e941c79318387e43ca35f4bdb6ab9cc Mon Sep 17 00:00:00 2001
 From: Dv2Corn <320380254+Dv2Corn@users.noreply.github.com>
 Date: Wed, 11 Nov 2026 03:05:24 +0000
-Subject: [PATCH 109/111] fix(server): apply max-reply-ip-num to passthrough
- replies
+Subject: [PATCH] fix(server): apply max-reply-ip-num to passthrough replies
+Origin: https://github.com/pymumu/smartdns/pull/2503
+Upstream-Status: Submitted upstream (PR #2503 / Commit 49a6ebd9)
 
-max-reply-ip-num is only enforced in _dns_rrs_add_all_best_ip(), which
-runs when smartdns builds the reply itself. Replies that forward the
-upstream packet go through _dns_server_reply_passthrough() and returned
-every A/AAAA record. This is the immediate reply in fastest-response
-mode, with or without cache, and the raw packet it stored in the cache
-was later served from there too.
-
-Trim extra A/AAAA records of the query type in
-_dns_server_reply_passthrough(), on a copy, so the full upstream answer
-is still speed-checked in fastest-response mode. Pending requests,
-cache, ipset/nftset and the result callback get the trimmed answer, as
-in the normal reply path. Answers to DNSSEC (DO) queries are left
-untouched, so signatures stay valid.
-
-Fixes #2469
+max-reply-ip-num was only enforced when smartdns synthesized answers.
+Passthrough replies in fastest-response mode returned every A/AAAA record,
+flooding downstream caches and nftset with uncontrolled IP lists.
+Trim extra records on passthrough while preserving signed DNSSEC RRsets.
 ---
- src/dns_server/context.c            | 66 +++++++++++++++++++++++++++++
- test/cases/test-fastest-response.cc | 44 +++++++++++++++++++
- 2 files changed, 110 insertions(+)
-
 diff --git a/src/dns_server/context.c b/src/dns_server/context.c
 index 1f086f26..73843191 100644
 --- a/src/dns_server/context.c

@@ -1,3 +1,13 @@
+From: SolarFlows Team <dev@solarflows.com>
+Date: Wed, 16 Sep 2026 09:00:00 +0800
+Subject: [PATCH] fix(openwrt): prevent restart_crond infinite loop during auto-update
+Origin: OpenWrt package integration fix
+Upstream-Status: Inappropriate [OpenWrt-specific init.d]
+
+When updating rule files via hot-reload, restart_crond can trigger an
+infinite restart loop. Short-circuit restart_crond if SMARTDNS_UPDATING_FILES
+is set, and use grep -F to avoid regex escaping issues with wildcard cron schedules.
+---
 diff --git a/package/openwrt/files/etc/init.d/smartdns b/package/openwrt/files/etc/init.d/smartdns
 index 83c53663..1876c636 100644
 --- a/package/openwrt/files/etc/init.d/smartdns

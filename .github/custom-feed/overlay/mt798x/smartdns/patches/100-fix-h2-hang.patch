@@ -1,3 +1,16 @@
+From: SolarFlows Team <dev@solarflows.com>
+Date: Tue, 25 Aug 2026 12:00:00 +0800
+Subject: [PATCH] fix(http2): reset connection on stream quota exhaustion (ENOSPC)
+Origin: Production incident remedy / local hardening
+Upstream-Status: Pending (proprietary anti-hang hardening)
+
+ENOSPC here means the peer's MAX_CONCURRENT_STREAMS quota is exhausted.
+Healthy connections free slots within milliseconds, so a saturated state
+implies leaked streams on a wedged connection. Treat it as a connection error
+so the context gets torn down and rebuilt, instead of retrying against a
+zombie connection forever (DNS hang while process looks alive).
+Also removes pending streams immediately if connection is dead (status < 0).
+---
 diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
 index 6c510055..f434d042 100644
 --- a/src/dns_client/client_http2.c

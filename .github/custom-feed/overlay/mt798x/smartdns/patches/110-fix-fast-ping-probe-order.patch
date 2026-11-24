@@ -1,14 +1,13 @@
-From 304b8c06a22cce1d1794be69c0a88552de03fdf2 Mon Sep 17 00:00:00 2001
 From: Polaris <15033876+polaris-arch@users.noreply.github.com>
 Date: Sat, 7 Nov 2026 19:18:46 +0800
-Subject: [PATCH 110/111] fix(ping): publish probes before sending their first
- packet
+Subject: [PATCH] fix(ping): publish probes before sending their first packet
+Origin: https://github.com/pymumu/smartdns/pull/2488
+Upstream-Status: Submitted upstream (PR #2488 / Commit ee5df3c1)
 
+In sub-millisecond networks or loopback environments, a ping response can
+arrive before the transport returns and before the probe is registered in the map.
+Publish the probe into addrmap under map_lock before calling _fast_ping_sendping.
 ---
- src/fast_ping/fast_ping.c |  52 +++++++--
- test/cases/test-ping.cc   | 236 +++++++++++++++++++++++++++++++++++---
- 2 files changed, 261 insertions(+), 27 deletions(-)
-
 diff --git a/src/fast_ping/fast_ping.c b/src/fast_ping/fast_ping.c
 index acd44450..0bbe03ae 100644
 --- a/src/fast_ping/fast_ping.c

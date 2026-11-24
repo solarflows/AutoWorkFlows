@@ -1,3 +1,14 @@
+From: SolarFlows Team <dev@solarflows.com>
+Date: Tue, 25 Aug 2026 13:00:00 +0800
+Subject: [PATCH] fix(http2): do not prohibit upstream on transient 429/502/503/504 status
+Origin: Production incident remedy / local hardening
+Upstream-Status: Pending (proprietary anti-avalanche hardening)
+
+HTTP 429, 502, 503, and 504 are transient backpressure or CDN edge errors;
+they do not mean the server is dead. Prohibiting it for 60 seconds shuts down
+the shared connection and cascades across all upstreams to freeze DNS.
+Fail just this query and let caller retry while other servers answer.
+---
 diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
 index d409d8e1..82847448 100644
 --- a/src/dns_client/client_http2.c

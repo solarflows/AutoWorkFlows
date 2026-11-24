@@ -1,3 +1,14 @@
+From: SolarFlows Team <dev@solarflows.com>
+Date: Tue, 25 Aug 2026 12:30:00 +0800
+Subject: [PATCH] fix(http2): reap stalled deferred streams after bounded grace period
+Origin: Production incident remedy / local hardening
+Upstream-Status: Pending (proprietary anti-stall hardening)
+
+A deferred close can stall forever when the send window never opens again
+(peer stopped sending WINDOW_UPDATE, or window dump). Give the flush a bounded
+grace period (5000ms), then drop the stream so the concurrency slot is reclaimed.
+Also reports saturated connection as ECONNRESET to tear down and reconnect immediately.
+---
 diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
 index f434d042..d409d8e1 100644
 --- a/src/dns_client/client_http2.c

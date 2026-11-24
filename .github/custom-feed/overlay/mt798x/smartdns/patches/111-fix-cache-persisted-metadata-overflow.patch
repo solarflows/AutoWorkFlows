@@ -1,15 +1,13 @@
-From e80eb387ac1bccbe86b7ea1bbe8a3c66ce8af442 Mon Sep 17 00:00:00 2001
 From: Polaris <15033876+polaris-arch@users.noreply.github.com>
 Date: Sat, 7 Nov 2026 21:21:54 +0800
-Subject: [PATCH 111/111] fix(cache): validate persisted metadata before
- lifetime arithmetic
+Subject: [PATCH] fix(cache): validate persisted metadata before lifetime arithmetic
+Origin: https://github.com/pymumu/smartdns/pull/2495
+Upstream-Status: Submitted upstream (PR #2495 / Commit 67deb379)
 
-Reject negative persisted lifetimes, timestamps and invalid hit counters before callback use. Saturate elapsed age before narrowing, clamp future insertion times and widen TTL/prefetch arithmetic to avoid startup overflow on damaged cache files. Keep the persisted format unchanged and exercise eight deterministic metadata boundary cases through real server restarts.
+Reject negative persisted lifetimes, timestamps, and invalid hit counters
+before callback use. Saturate elapsed age before narrowing and widen TTL
+arithmetic to 64-bit to avoid startup arithmetic overflow on damaged cache files.
 ---
- src/dns_cache.c          | 20 ++++++++++++----
- test/cases/test-cache.cc | 50 ++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 66 insertions(+), 4 deletions(-)
-
 diff --git a/src/dns_cache.c b/src/dns_cache.c
 index 493d8288..74738d74 100644
 --- a/src/dns_cache.c

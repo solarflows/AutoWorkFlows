@@ -1,19 +1,13 @@
-From fe3ca5a51a2e663c94b619cf7bef1271fa58a769 Mon Sep 17 00:00:00 2001
 From: PikuZheng <cba321123@gmail.com>
 Date: Sat, 14 Nov 2026 18:43:28 +0800
-Subject: [PATCH 107/111] =?utf-8?q?=E4=BF=AE=E6=AD=A3=20tls-client/https-c?=
- =?utf-8?q?lient/tcp-client/http-client=EF=BC=88http/1.1=EF=BC=89=E8=BF=9E?=
- =?utf-8?q?=E6=8E=A5=E8=B6=85=E6=97=B6=E5=85=B3=E9=97=AD=E5=90=8E=E8=B5=84?=
- =?utf-8?q?=E6=BA=90=E4=B8=8D=E9=87=8A=E6=94=BE=E9=97=AE=E9=A2=98?=
-MIME-Version: 1.0
-Content-Type: text/plain; charset=utf-8
-Content-Transfer-Encoding: 8bit
+Subject: [PATCH] fix(server): touch connection on EPOLLIN to prevent 32KB buffer leak on timeout
+Origin: https://github.com/PikuZheng/smartdns/commit/6e99ff706f246dc1af3fec34955db49139ce714b
+Upstream-Status: Backported from downstream PikuZheng/canary
 
-_dns_server_process 事件分发层对所有 conn 都少了一次 touch，进而导致每个连接关闭后产生32KB缓冲区的残留，表现为内存使用一直缓慢但不明显的增加。
+_dns_server_process missed touching conn on event dispatch, which caused
+32KB buffer residue on each connection closed by timeout. Over days of operation,
+this accumulated as a slow but fatal memory leak on embedded routers.
 ---
- src/dns_server/dns_server.c | 4 +++-
- 1 file changed, 3 insertions(+), 1 deletion(-)
-
 diff --git a/src/dns_server/dns_server.c b/src/dns_server/dns_server.c
 index 5378bdee..b5f5ea70 100644
 --- a/src/dns_server/dns_server.c

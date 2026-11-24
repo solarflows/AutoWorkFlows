@@ -1,3 +1,13 @@
+From: SwrodKing <SwrodKing@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 01:43:46 +0800
+Subject: [PATCH] fix(conf): fix bootstrap DNS resolution and add resolv boundary check
+Origin: https://github.com/pymumu/smartdns/pull/2460
+Upstream-Status: Submitted upstream (PR #2460, rebased on 48.5)
+
+Fix bootstrap DNS rule updates when no regular DNS servers or only domain-name
+upstreams are configured. Add out-of-bounds protection for resolv loading and
+properly reset bootstrap_num during reload exit.
+---
 diff --git a/src/dns_conf/bootstrap_dns.c b/src/dns_conf/bootstrap_dns.c
 index f9507db9..db461ece 100644
 --- a/src/dns_conf/bootstrap_dns.c
