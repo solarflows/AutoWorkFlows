@@ -1,27 +1,13 @@
-From: Husky <hyiy666@gmail.com>
-Subject: [PATCH] lang/python/python-pyproject-hooks: add host-download target alias
-
-[背景与机制缺陷]
-OpenWrt 构建体系中，声明了 PKG_HOST_ONLY:=1 的软件包在依赖解析阶段（scripts/metadata.pl）
-会被标记为 buildtypes=host。在子目录递归调度（include/subdir.mk）时，构建引擎派发的
-目标是 host-download。
-然而，该包通过 pypi.mk 和 package.mk 仅注册了常规的 download 目标，根本未定义 host-download，
-导致顶层调度时输出 "Nothing to be done for 'host-download'" 并静默跳过源码拉取。
-在后续多核并行编译（-j$(nproc)）进入 Host/Prepare 阶段时，因 dl/ 目录下尚无源码包，
-直接解压导致：libdeflate-gzip: Can't open ... pyproject_hooks-1.3.3.tar.gz: No such file or directory。
-
-[解决方案与设计考量]
-显式为该包补齐 host-download: download 目标别名映射：
-1. 当构建引擎派发 host-download 时，自动导向原生 download 目标，通过 download.pl 从 PyPI 拉取源码至 dl/；
-2. 属于纯粹的局部自愈机制，仅在当前固件真正需要编译该 host 工具时按需抓取（约 21KB），绝不触发 CHECK_ALL=1 带来的全库扫描与 Actions 磁盘撑爆隐患；
-3. 作为 AutoWorkFlows Layer 1 (qualcommax packages) 多层补丁治理体系落地，零污染通用 CI 模板。
-
-Signed-off-by: Husky <hyiy666@gmail.com>
+# ── 纯 Host 依赖包下载自愈映射 ──
+# 解决 OpenWrt 中 PKG_HOST_ONLY:=1 导致 buildtypes=host 时，subdir.mk 派发的
+# host-download 目标在包内未定义而静默跳过源码下载的问题。
+# 映射至原生 download 规则，确保在 Host/Prepare 解压前源码已就绪于 dl/ 目录。
 
 diff --git a/lang/python/python-pyproject-hooks/Makefile b/lang/python/python-pyproject-hooks/Makefile
+index bc9c8ca..f409ea2 100644
 --- a/lang/python/python-pyproject-hooks/Makefile
 +++ b/lang/python/python-pyproject-hooks/Makefile
-@@ -53,3 +53,10 @@ $(eval $(call Py3Package,python3-pyproject-hooks))
+@@ -53,3 +53,9 @@ $(eval $(call Py3Package,python3-pyproject-hooks))
  $(eval $(call BuildPackage,python3-pyproject-hooks))
  $(eval $(call BuildPackage,python3-pyproject-hooks-src))
  $(eval $(call HostBuild))
