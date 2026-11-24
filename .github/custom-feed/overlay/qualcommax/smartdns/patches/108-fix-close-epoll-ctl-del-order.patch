@@ -1,0 +1,52 @@
+From fe492e089c597e21a061385d4521c9939635d18e Mon Sep 17 00:00:00 2001
+From: PikuZheng <cba321123@gmail.com>
+Date: Sat, 14 Nov 2026 22:08:36 +0800
+Subject: [PATCH 108/111] fix close / EPOLL_CTL_DEL order
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+原代码先 close() 再用同一个 fd 号做 EPOLL_CTL_DEL，留下 fd 号复用窗口；新代码保存局部副本、先从 epoll 摘除再关闭，并排除误删 client.epoll_fd / client.fd_wakeup。
+close_fd 声明在 src/dns_client/client_socket.c:150。HTTPS+proxy 路径里 proxy_conn_free() 关闭的正是 server_info->fd，现在 DEL 一定发生在其之前，不会再误删复用该号码后新注册的 fd。
+---
+ src/dns_client/client_socket.c | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/src/dns_client/client_socket.c b/src/dns_client/client_socket.c
+index 69004b85..e5e176b7 100644
+--- a/src/dns_client/client_socket.c
++++ b/src/dns_client/client_socket.c
+@@ -146,6 +146,7 @@ void _dns_client_close_socket_ext(struct dns_server_info *server_info, int no_de
+ 	dns_server_status server_status = DNS_SERVER_STATUS_DISCONNECTED;
+ 	struct http2_ctx *closed_http2_ctx = NULL;
+ 	struct http2_ctx *http2_ctx_to_put = NULL;
++	int close_fd = -1;
+ 
+ 	pthread_mutex_lock(&server_info->lock);
+ 	if (server_info->process_depth > 0) {
+@@ -248,15 +249,16 @@ again:
+ 	}
+ #endif
+ 
++	close_fd = server_info->fd;
++	if (close_fd > 0 && client.epoll_fd > 0 && close_fd != client.epoll_fd && close_fd != client.fd_wakeup) {
++		epoll_ctl(client.epoll_fd, EPOLL_CTL_DEL, close_fd, NULL);
++	}
++
+ 	if (server_info->proxy) {
+ 		proxy_conn_free(server_info->proxy);
+ 		server_info->proxy = NULL;
+-	} else if (server_info->fd > 0) {
+-		close(server_info->fd);
+-	}
+-
+-	if (server_info->fd > 0) {
+-		epoll_ctl(client.epoll_fd, EPOLL_CTL_DEL, server_info->fd, NULL);
++	} else if (close_fd > 0) {
++		close(close_fd);
+ 	}
+ 
+ 	server_info->fd = -1;
+-- 
+2.54.0.windows.1
+
