@@ -1,5 +1,5 @@
 diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
-index f6f121c..2d60d64 100644
+index f434d042..d409d8e1 100644
 --- a/src/dns_client/client_http2.c
 +++ b/src/dns_client/client_http2.c
 @@ -168,6 +168,12 @@ static int _dns_client_send_http2_stream(struct dns_server_info *server_info, st
@@ -16,7 +16,7 @@ index f6f121c..2d60d64 100644
  			return DNS_CLIENT_HTTP2_STREAM_SEND_CONN_ERROR;
  		}
 diff --git a/src/http_parse/http2.c b/src/http_parse/http2.c
-index a005547..5f19735 100644
+index 6278ddf6..80071618 100644
 --- a/src/http_parse/http2.c
 +++ b/src/http_parse/http2.c
 @@ -102,6 +102,10 @@ const char *http2_error_to_string(int ret)
@@ -38,7 +38,7 @@ index a005547..5f19735 100644
  	void *ex_data;
  	struct hlist_node hash_node;
  	struct list_head node;
-@@ -1117,11 +1122,39 @@ static void _http2_ctx_flush_pending_send_bodies(struct http2_ctx *ctx)
+@@ -1118,11 +1123,39 @@ static void _http2_ctx_flush_pending_send_bodies(struct http2_ctx *ctx)
  
  	list_for_each_entry_safe(stream, tmp, &ctx->streams, node)
  	{
@@ -78,7 +78,7 @@ index a005547..5f19735 100644
  			continue;
  		}
  
-@@ -2303,6 +2336,9 @@ void http2_stream_close(struct http2_stream *stream)
+@@ -2308,6 +2341,9 @@ void http2_stream_close(struct http2_stream *stream)
  		if (_http2_stream_has_pending_send(stream) && ctx->status >= 0) {
  			stream->close_after_send = 1;
  			stream->ex_data = NULL;

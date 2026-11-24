@@ -1,5 +1,5 @@
 diff --git a/src/dns_client/client_http2.c b/src/dns_client/client_http2.c
-index 3290cbb..f6f121c 100644
+index 6c510055..f434d042 100644
 --- a/src/dns_client/client_http2.c
 +++ b/src/dns_client/client_http2.c
 @@ -156,7 +156,22 @@ static int _dns_client_send_http2_stream(struct dns_server_info *server_info, st
@@ -27,10 +27,10 @@ index 3290cbb..f6f121c 100644
  		return ret;
  	}
 diff --git a/src/http_parse/http2.c b/src/http_parse/http2.c
-index 248eb63..a005547 100644
+index af327f26..6278ddf6 100644
 --- a/src/http_parse/http2.c
 +++ b/src/http_parse/http2.c
-@@ -2296,7 +2296,11 @@ void http2_stream_close(struct http2_stream *stream)
+@@ -2301,7 +2301,11 @@ void http2_stream_close(struct http2_stream *stream)
  	struct http2_ctx *ctx = stream->ctx;
  	if (ctx) {
  		pthread_mutex_lock(&ctx->mutex);

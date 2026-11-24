@@ -265,8 +265,8 @@ write(os.path.join(WORK, "q", "bundle", "smartdns", "Makefile"), PASSWALL)
 st, out = run_mvdir(dest_root=os.path.join(WORK, "q"), dirname="bundle", target="qualcommax",
                     blacklist=cp.parse_mvdir_hook(pw_hook)[1], owners={},
                     self_name="openwrt-passwall-packages")
-check("qualcommax: 自带 smartdns 照常搬入", read(os.path.join(WORK, "q", "smartdns", "Makefile")) == PASSWALL
-      and st["blacklisted"] == 0)
+check("qualcommax: 自带 smartdns 命中黑名单跳过", not os.path.exists(os.path.join(WORK, "q", "smartdns"))
+      and st["blacklisted"] == 1)
 
 # ---------- 5. 直接执行 workflow 中真实的「应用补丁」脚本 ----------
 BASH = next((p for p in (r"C:\msys64\usr\bin\bash.exe", r"C:\Program Files\Git\usr\bin\bash.exe")
@@ -382,6 +382,9 @@ check("static: hook 条目返回 None", cp.entry_static_roots({"name": "x", "hoo
 ov_dirs = cp.overlay_root_names(os.path.join(REPO, ".github", "custom-feed", "overlay"), "mt798x")
 check("overlay 白名单覆盖 global 与 target 顶层",
       {"v2ray-geodata", "smartdns", "shadowsocks-rust"} <= ov_dirs, str(sorted(ov_dirs)))
+ov_dirs_q = cp.overlay_root_names(os.path.join(REPO, ".github", "custom-feed", "overlay"), "qualcommax")
+check("overlay 白名单覆盖 qualcommax 顶层",
+      {"v2ray-geodata", "smartdns"} <= ov_dirs_q, str(sorted(ov_dirs_q)))
 
 fresh()
 write(os.path.join(WORK, "root", "smartdns", "Makefile"), "OURS\n")
