@@ -1,0 +1,61 @@
+From: Husky <hyiy666@gmail.com>
+Subject: [PATCH] include/host-build.mk: always register Download rule when PKG_SOURCE_URL is set
+
+[背景与根因]
+OpenWrt 原版 HostBuild 宏中存在基于 CONFIG_AUTOREMOVE 与 $(HOST_STAMP_BUILT)
+跳过 $(call Download,default) 的判断逻辑。在 GitHub Actions CI 场景下，
+hostpkg 缓存会恢复上次编译遗留的 .built 标记，但 dl/ 目录并未随缓存持久化。
+当上游升级软件包导致 PKG_FILES_MD5 变化时，Make 判定需要重建新哈希的
+.prepared<new_md5> 并执行 Host/Prepare 解包；然而因缓存中存在旧 .built，
+Download,default 被跳过导致既无下载规则又无本地压缩包，直接报错退出
+（如 python-pyproject-hooks、python-build 等 PKG_HOST_ONLY:=1 包）。
+
+[解决方案]
+保留原版 HostBuild 定义并加以注释无效化，在下方提供去除了该跳过门禁的
+HostBuild 定义并补齐完整注释：
+- 对缓存完全命中的包：.prepared/.configured/.built 均有效，Make 零开销跳过；
+- 对确实需要重建且 dl/ 缺失源码的包：Make 始终保有合法下载规则可按需补拉；
+- 不改变 $(HOST_STAMP_PREPARED) 依赖格式，100% 兼容 Go/Rust 等自定义下载包。
+
+Signed-off-by: Husky <hyiy666@gmail.com>
+
+diff --git a/include/host-build.mk b/include/host-build.mk
+index a0419d8..2439e61 100644
+--- a/include/host-build.mk
++++ b/include/host-build.mk
+@@ -256,13 +256,32 @@ ifndef DUMP
+   endef
+ endif
+ 
++# ── CI 缓存与 CONFIG_AUTOREMOVE=y 下的 Host 下载规则保留修正 ──
++# [上游原逻辑保留 (已注释无效化)]
++# 原逻辑在 $(if $(and $(CONFIG_AUTOREMOVE), $(wildcard $(HOST_STAMP_INSTALLED), $(wildcard $(HOST_STAMP_BUILT)))),,...)
++# 试图跳过已构建 Host 包的 Download 注册。但在 CI 恢复 hostpkg 缓存 (.built) 且
++# dl/ 未缓存的环境中，一旦上游包升级导致 PKG_FILES_MD5 变更，Make 需重建
++# .prepared<new_md5> 并重新解包，却因 Download,default 被跳过而报 No such file or directory。
++# 注释掉该跳过判断后，Make 始终注册下载配方：缓存命中时 0 开销跳过，仅在重建且缺包时按需拉取。
++#
++# define HostBuild
++#   $(HostBuild/Core)
++#   $(if $(USE_HOST_GIT_SRC_CHECKOUT)$(USE_HOST_GIT_TREE),,
++# 	$(if $(if $(PKG_HOST_ONLY),,$(if $(and $(filter host-%,$(MAKECMDGOALS)),$(PKG_SKIP_DOWNLOAD)),,$(STAMP_PREPARED))),,
++# 		$(if $(and $(CONFIG_AUTOREMOVE), $(wildcard $(HOST_STAMP_INSTALLED), $(wildcard $(HOST_STAMP_BUILT)))),,
++# 			$(if $(strip $(PKG_SOURCE_URL)),$(call Download,default))
++# 		)
++# 	)
++#   )
++# endef
++
+ define HostBuild
+   $(HostBuild/Core)
+   $(if $(USE_HOST_GIT_SRC_CHECKOUT)$(USE_HOST_GIT_TREE),,
+ 	$(if $(if $(PKG_HOST_ONLY),,$(if $(and $(filter host-%,$(MAKECMDGOALS)),$(PKG_SKIP_DOWNLOAD)),,$(STAMP_PREPARED))),,
+-		$(if $(and $(CONFIG_AUTOREMOVE), $(wildcard $(HOST_STAMP_INSTALLED), $(wildcard $(HOST_STAMP_BUILT)))),,
+-			$(if $(strip $(PKG_SOURCE_URL)),$(call Download,default))
+-		)
++		$(if $(strip $(PKG_SOURCE_URL)),$(call Download,default))
+ 	)
+   )
+ endef
++
++# (备注: 保持原 $(HOST_STAMP_PREPARED) 依赖结构不变，仅解除下载规则注册门禁，确保 Go/Rust 等原生兼容)
