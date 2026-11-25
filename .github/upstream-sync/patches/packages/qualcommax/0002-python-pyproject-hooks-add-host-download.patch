@@ -1,19 +1,32 @@
-# ── 纯 Host 依赖包下载自愈映射 ──
-# 解决 OpenWrt 中 PKG_HOST_ONLY:=1 导致 buildtypes=host 时，subdir.mk 派发的
-# host-download 目标在包内未定义而静默跳过源码下载的问题。
-# 映射至原生 download 规则，确保在 Host/Prepare 解压前源码已就绪于 dl/ 目录。
+# ── CONFIG_AUTOREMOVE=y + hostpkg 缓存命中时的源码下载自愈 ──
+# [背景与根因]
+# OpenWrt 的 include/host-build.mk 第 264 行在定义 HostBuild 下载规则前存在门禁:
+#   $(if $(and $(CONFIG_AUTOREMOVE), $(wildcard $(HOST_STAMP_INSTALLED), $(wildcard $(HOST_STAMP_BUILT)))),,\
+#       $(if $(strip $(PKG_SOURCE_URL)),$(call Download,default)))
+# 当 CI 开启 CONFIG_AUTOREMOVE=y 并从 hostpkg 缓存恢复出 $(HOST_STAMP_BUILT) (.built) 文件，
+# 同时上游包升级导致 PKG_FILES_MD5 变更需要重建新哈希的 .prepared<new_md5> 时，
+# 第 264 行会命中缓存中的 .built 从而跳过 $(call Download,default)，导致 $(DL_DIR)/$(PKG_SOURCE)
+# 的下载配方完全未注册；随后重解压时因 dl/ 无源码包直接报 No such file or directory。
+#
+# [解决方案]
+# 在 $(eval $(call HostBuild)) 之后按精确互补条件补齐 Download 注册:
+# 仅当 CONFIG_AUTOREMOVE 与 $(HOST_STAMP_BUILT) 同时命中（即 HostBuild 跳过下载）时，
+# 补调 $(eval $(call Download,default))，一次性恢复 $(HOST_STAMP_PREPARED) 前置依赖与
+# download.pl 下载配方，零 warning、零全局污染。
 
 diff --git a/lang/python/python-pyproject-hooks/Makefile b/lang/python/python-pyproject-hooks/Makefile
-index bc9c8ca..f409ea2 100644
 --- a/lang/python/python-pyproject-hooks/Makefile
 +++ b/lang/python/python-pyproject-hooks/Makefile
-@@ -53,3 +53,9 @@ $(eval $(call Py3Package,python3-pyproject-hooks))
+@@ -53,3 +53,12 @@ $(eval $(call Py3Package,python3-pyproject-hooks))
  $(eval $(call BuildPackage,python3-pyproject-hooks))
  $(eval $(call BuildPackage,python3-pyproject-hooks-src))
  $(eval $(call HostBuild))
 +
-+# ── 纯 Host 依赖包下载自愈映射 ──
-+# 解决 OpenWrt 中 PKG_HOST_ONLY:=1 导致 buildtypes=host 时，subdir.mk 派发的
-+# host-download 目标在包内未定义而静默跳过源码下载的问题。
-+# 映射至原生 download 规则，确保在 Host/Prepare 解压前源码已就绪于 dl/ 目录。
-+host-download: download
++# ── CONFIG_AUTOREMOVE=y + hostpkg 缓存命中时的源码下载自愈 ──
++# 解决 include/host-build.mk 第 264 行在 CONFIG_AUTOREMOVE=y 且缓存中存在
++# $(HOST_STAMP_BUILT) (.built) 时跳过 $(call Download,default)，导致重建
++# .prepared<new_md5> 解压时因缺失源码包报 No such file or directory 的问题。
++ifneq ($(and $(CONFIG_AUTOREMOVE),$(wildcard $(HOST_STAMP_BUILT))),)
++  $(eval $(call Download,default))
++endif
++
